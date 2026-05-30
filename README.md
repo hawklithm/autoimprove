@@ -55,20 +55,35 @@ pip install -e .
 cp -r src/skills/* ~/.claude/skills/
 ```
 
-### Configure MCP Server
+### Configure MCP Server (自动启动)
 
-Add to your Claude Code MCP configuration:
+MCP Server 会在 Claude Code 启动时自动运行。
+
+**方法 1: 使用配置文件**
+
+编辑 `~/.claude/config.json`：
 
 ```json
 {
   "mcpServers": {
     "autoimprove-core": {
-      "command": "python",
-      "args": ["/path/to/autoimprove/src/mcp-server/server.py"]
+      "command": "python3",
+      "args": [
+        "/Users/adazhao/workspace/autoimprove/src/mcp-server/server.py"
+      ],
+      "env": {
+        "PYTHONPATH": "/Users/adazhao/workspace/autoimprove/src/mcp-server"
+      }
     }
   }
 }
 ```
+
+**方法 2: 使用 Desktop App**
+
+Settings → MCP Servers → Add Server
+
+详细配置说明见 [MCP 自动启动文档](docs/MCP_AUTO_START.md)
 
 ## Quick Start
 
