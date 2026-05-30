@@ -55,25 +55,25 @@ pip install -e .
 cp -r src/skills/* ~/.claude/skills/
 ```
 
-### Quick Setup (推荐)
+### Quick Setup (Recommended)
 
-运行自动初始化脚本：
+Run the automatic setup script:
 
 ```bash
 ./setup.sh
 ```
 
-这会自动完成：
-- 安装 MCP Server 依赖
-- 配置 Claude Code
-- 创建 Skills 符号链接
-- 初始化存储目录
+This will automatically:
+- Install MCP Server dependencies
+- Configure Claude Code
+- Create symbolic links for Skills
+- Initialize storage directory
 
 ### Manual Setup
 
-**方法 1: 使用配置文件**
+**Method 1: Using Config File**
 
-编辑 `~/.claude/config.json`（**替换 `<PROJECT_ROOT>` 为实际路径**）：
+Edit `~/.claude/config.json` (**replace `<PROJECT_ROOT>` with actual path**):
 
 ```json
 {
@@ -91,11 +91,11 @@ cp -r src/skills/* ~/.claude/skills/
 }
 ```
 
-**方法 2: 使用 Desktop App**
+**Method 2: Using Desktop App**
 
 Settings → MCP Servers → Add Server
 
-详细配置说明见 [MCP 自动启动文档](docs/MCP_AUTO_START.md)
+See [MCP Auto-Start Documentation](docs/MCP_AUTO_START.md) for detailed configuration instructions.
 
 ## Quick Start
 
