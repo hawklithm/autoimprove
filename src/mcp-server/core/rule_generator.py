@@ -68,7 +68,7 @@ class RuleGenerator:
                 "priority": priority,
                 "confidence": pattern.confidence,
                 "source": "learned",
-                "pattern_occurrencn(pattern.occurrences),
+                "pattern_occurrences": len(pattern.occurrences),
                 "first_seen": pattern.first_seen,
                 "last_seen": pattern.last_seen,
                 "keywords": pattern.keywords

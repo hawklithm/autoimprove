@@ -1,0 +1,4 @@
+core
+resources
+storage
+tools

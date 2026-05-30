@@ -100,7 +100,7 @@ class TestRuleMatcher:
         matches_no_kw = matcher.match_rules(scene)
 
         # With matching keywords
-     matches_with_kw = matcher.match_rules(scene, keywords=["useMemo", "optimize"])
+        matches_with_kw = matcher.match_rules(scene, keywords=["useMemo", "optimize"])
 
         # Find rule-003 in both
         match_no_kw = next((m for m in matches_no_kw if m.rule.id == "rule-003"), None)

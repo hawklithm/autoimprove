@@ -84,7 +84,8 @@ class RuleIndexManager:
         """
         index = self.load_index()
 
-        # Check if rule ID already exis     if any(r.id == entry.id for r in index.rules):
+        # Check if rule ID already exists
+        if any(r.id == entry.id for r in index.rules):
             raise ValueError(f"Rule with ID {entry.id} already exists")
 
         index.rules.append(entry)

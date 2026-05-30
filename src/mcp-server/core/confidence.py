@@ -105,7 +105,8 @@ class ConfidenceCalculator:
         """Calculate base confidence from weighted components."""
         frequency_score = self._calculate_frequency_score(pattern)
         time_span_score = self._calculate_time_span_score(pattern)
-        behavior_score = self._calculate_behavior_score(patter     validation_score = self._calculate_validation_score(pattern)
+        behavior_score = self._calculate_behavior_score(pattern)
+        validation_score = self._calculate_validation_score(pattern)
 
         confidence = (
             frequency_score * self.weights['frequency'] +
@@ -141,7 +142,7 @@ class ConfidenceCalculator:
             Score between 0.0 and 1.0 (normalized to 90 days)
         """
         try:
-            firsme.fromisoformat(pattern.first_seen.replace('Z', '+00:00'))
+            first = datetime.fromisoformat(pattern.first_seen.replace('Z', '+00:00'))
             last = datetime.fromisoformat(pattern.last_seen.replace('Z', '+00:00'))
             days = (last - first).days
             return min(days / 90, 1.0)
@@ -164,7 +165,7 @@ class ConfidenceCalculator:
         # For preferences, accept is valid
         if pattern.type == PatternType.PREFERENCE:
             valid_actions = sum(
-                1 for o  pattern.occurrences
+                1 for o in pattern.occurrences
                 if o.user_action in ['explicit_correction', 'accept']
             )
         else:

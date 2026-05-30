@@ -333,7 +333,7 @@ class TestStorageMigrationManager:
         config_path.parent.mkdir(parents=True, exist_ok=True)
 
         with open(config_path, 'w') as f:
-            json.ion": "1.0"}, f)
+            json.dump({"version": "1.0"}, f)
 
         manager = StorageMigrationManager(temp_storage)
         assert manager.get_current_version() == "1.0"

@@ -109,7 +109,7 @@ class JSONLParser:
             role = data['role']
             content = data.get('content', '')
 
-    Handle content that might be a list or dict
+            # Handle content that might be a list or dict
             if isinstance(content, list):
                 # Extract text from content blocks
                 text_parts = []
@@ -136,7 +136,8 @@ class JSONLParser:
         # Check if it's a tool call
         elif data.get('type') == 'tool_use':
             tool_name = data.get('name', '')
-            tool_input = data.get('input',        if tool_name:
+            tool_input = data.get('input', {})
+            if tool_name:
                 tool_calls.append(ToolCall(
                     tool_name=tool_name,
                     input=tool_input,

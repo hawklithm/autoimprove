@@ -132,7 +132,7 @@ class StorageMigrationManager:
         backup_path = backup_root / backup_name
 
         # Copy entire storage directory
-        shutil.copytree(self.storage_root, backup_path, dirs_exist_
+        shutil.copytree(self.storage_root, backup_path, dirs_exist_ok=True)
         return backup_path
 
     def migrate(self, create_backup: bool = True) -> Dict[str, Any]:
@@ -155,7 +155,7 @@ class StorageMigrationManager:
 
         if current_version == CURRENT_VERSION:
             return {
-             s": "success",
+                "status": "success",
                 "message": "Already at current version",
                 "version": CURRENT_VERSION
             }
