@@ -1,0 +1,27 @@
+[project]
+name = "autoimprove-mcp-server"
+version = "0.1.0"
+description = "AutoImprove MCP Server - Learn coding patterns from Claude Code sessions"
+authors = [
+    {name = "AutoImprove Team"}
+]
+requires-python = ">=3.10"
+dependencies = [
+    "fastmcp>=0.1.0",
+    "pydantic>=2.0.0",
+    "python-frontmatter>=1.0.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0.0",
+    "pytest-asyncio>=0.21.0",
+]
+
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"

@@ -1,0 +1,7 @@
+{
+  "name": "autoimprove-summarize",
+  "version": "0.1.0",
+  "description": "Analyze session and generate rules from patterns",
+  "entry": "skill.py",
+  "author": "AutoImprove Team"
+}

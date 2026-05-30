@@ -1,0 +1,7 @@
+{
+  "name": "autoimprove-rules",
+  "version": "0.1.0",
+  "description": "Review and activate generated rules",
+  "entry": "skill.py",
+  "author": "AutoImprove Team"
+}
