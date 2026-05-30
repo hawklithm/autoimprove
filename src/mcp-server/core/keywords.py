@@ -67,7 +67,7 @@ class KeywordDetector:
                 found_keywords.add(keyword)
 
         # Check user input in occurrences
-        for occurrence in patterncurrences:
+        for occurrence in pattern.occurrences:
             if occurrence.user_input:
                 input_lower = occurrence.user_input.lower()
                 for keyword in keywords:

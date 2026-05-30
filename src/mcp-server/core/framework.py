@@ -96,7 +96,7 @@ class FrameworkRuleDetector:
         detected_frameworks = []
         description_lower = pattern.description.lower()
 
-        for framwords in self.framework_rules.items():
+        for framework, keywords in self.framework_rules.items():
             # Check description
             if any(kw.lower() in description_lower for kw in keywords):
                 if framework not in detected_frameworks:
