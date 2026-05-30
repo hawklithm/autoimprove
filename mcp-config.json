@@ -3,11 +3,12 @@
     "autoimprove-core": {
       "command": "python3",
       "args": [
-        "/Users/adazhao/workspace/autoimprove/src/mcp-server/server.py"
+        "${AUTOIMPROVE_ROOT}/src/mcp-server/server.py"
       ],
       "env": {
-        "PYTHONPATH": "/Users/adazhao/workspace/autoimprove/src/mcp-server"
+        "PYTHONPATH": "${AUTOIMPROVE_ROOT}/src/mcp-server"
       }
     }
   }
 }
+

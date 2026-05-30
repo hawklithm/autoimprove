@@ -4,6 +4,28 @@
 
 Claude Code 会在需要时自动启动和管理 MCP Server。你只需要配置一次，之后 MCP Server 会在 Claude Code 启动时自动运行。
 
+## 前置准备
+
+### 1. 获取项目路径
+
+```bash
+# 进入项目目录
+cd /path/to/autoimprove
+
+# 获取绝对路径
+pwd
+# 输出示例: /home/user/projects/autoimprove
+```
+
+记下这个路径，后续配置中将用 `<PROJECT_ROOT>` 表示。
+
+### 2. 安装依赖
+
+```bash
+cd <PROJECT_ROOT>/src/mcp-server
+pip install -e .
+```
+
 ## 配置步骤
 
 ### 方法 1: 使用 Claude Code CLI
@@ -15,7 +37,7 @@ Claude Code 会在需要时自动启动和管理 MCP Server。你只需要配置
 code ~/.claude/config.json
 ```
 
-添加 MCP Server 配置：
+添加 MCP Server 配置（**替换 `<PROJECT_ROOT>` 为实际路径**）：
 
 ```json
 {
@@ -23,10 +45,28 @@ code ~/.claude/config.json
     "autoimprove-core": {
       "command": "python3",
       "args": [
-        "/Users/adazhao/workspace/autoimprove/src/mcp-server/server.py"
+        "<PROJECT_ROOT>/src/mcp-server/server.py"
       ],
       "env": {
-        "PYTHONPATH": "/Users/adazhao/workspace/autoimprove/src/mcp-server"
+        "PYTHONPATH": "<PROJECT_ROOT>/src/mcp-server"
+      }
+    }
+  }
+}
+```
+
+**示例**（假设项目在 `/home/user/projects/autoimprove`）：
+
+```json
+{
+  "mcpServers": {
+    "autoimprove-core": {
+      "command": "python3",
+      "args": [
+        "/home/user/projects/autoimprove/src/mcp-server/server.py"
+      ],
+      "env": {
+        "PYTHONPATH": "/home/user/projects/autoimprove/src/mcp-server"
       }
     }
   }
@@ -40,12 +80,12 @@ code ~/.claude/config.json
 1. 打开 **Settings** (设置)
 2. 找到 **MCP Servers** 部分
 3. 点击 **Add Server**
-4. 填写：
+4. 填写（**替换 `<PROJECT_ROOT>` 为实际路径**）：
    - **Name**: `autoimprove-core`
    - **Command**: `python3`
-   - **Args**: `/Users/adazhao/workspace/autoimprove/src/mcp-server/server.py`
+   - **Args**: `<PROJECT_ROOT>/src/mcp-server/server.py`
    - **Environment Variables** (可选):
-     - `PYTHONPATH`: `/Users/adazhao/workspace/autoimprove/src/mcp-server`
+     - `PYTHONPATH`: `<PROJECT_ROOT>/src/mcp-server`
 
 ### 方法 3: 使用 claude.ai/code (Web)
 
@@ -100,15 +140,15 @@ Claude 会自动调用 `analyze_session` 和 `generate_rules` tools。
 
 ## 使用虚拟环境（推荐）
 
-如果你使用 Python 虚拟环境，配置应该指向虚拟环境的 Python：
+如果你使用 Python 虚拟环境，配置应该指向虚拟环境的 Python（**替换 `<PROJECT_ROOT>` 为实际路径**）：
 
 ```json
 {
   "mcpServers": {
     "autoimprove-core": {
-      "command": "/Users/adazhao/workspace/autoimprove/venv/bin/python",
+      "command": "<PROJECT_ROOT>/venv/bin/python",
       "args": [
-        "/Users/adazhao/workspace/autoimprove/src/mcp-server/server.py"
+        "<PROJECT_ROOT>/src/mcp-server/server.py"
       ]
     }
   }
@@ -118,7 +158,7 @@ Claude 会自动调用 `analyze_session` 和 `generate_rules` tools。
 创建虚拟环境：
 
 ```bash
-cd /Users/adazhao/workspace/autoimprove
+cd <PROJECT_ROOT>
 python3 -m venv venv
 source venv/bin/activate
 pip install -e src/mcp-server
@@ -188,9 +228,9 @@ pip install -e src/mcp-server
   "mcpServers": {
     "autoimprove-core": {
       "command": "python3",
-      "args": ["/path/to/server.py"],
+      "args": ["<PROJECT_ROOT>/src/mcp-server/server.py"],
       "env": {
-        "PYTHONPATH": "/path/to/src/mcp-server",
+        "PYTHONPATH": "<PROJECT_ROOT>/src/mcp-server",
         "LOG_LEVEL": "DEBUG",
         "AUTOIMPROVE_STORAGE": "/custom/path"
       }
@@ -206,7 +246,57 @@ pip install -e src/mcp-server
   "mcpServers": {
     "autoimprove-core": {
       "command": "python3",
-      "args": ["/path/to/autoimprove/server.py"]
+      "args": ["<PROJECT_ROOT>/autoimprove/src/mcp-server/server.py"]
+    },
+    "other-server": {
+      "command": "node",
+      "args": ["<OTHER_PROJECT_ROOT>/other/server.js"]
+    }
+  }
+}
+```
+
+## 更新配置
+
+修改配置后，需要重启 Claude Code：
+
+```bash
+# CLI
+claude restart
+
+# Desktop App
+重启应用
+
+# Web
+刷新页面
+```
+
+## 示例：完整配置文件
+
+`~/.claude/config.json` (替换 `<PROJECT_ROOT>` 为实际路径):
+
+```json
+{
+  "mcpServers": {
+    "autoimprove-core": {
+      "command": "python3",
+      "args": [
+        "<PROJECT_ROOT>/src/mcp-server/server.py"
+      ],
+      "env": {
+        "PYTHONPATH": "<PROJECT_ROOT>/src/mcp-server",
+        "LOG_LEVEL": "INFO"
+      }
+    }
+  },
+  "skills": {
+    "enabled": true,
+    "paths": [
+      "<PROJECT_ROOT>/src/skills"
+    ]
+  }
+}
+```
     },
     "other-server": {
       "command": "node",
@@ -233,7 +323,7 @@ claude rart
 
 ## 示例：完整配置文件
 
-`~/.claude/config.json`:
+`~/.claude/config.json` (替换 `<PROJECT_ROOT>` 为实际路径):
 
 ```json
 {
@@ -241,10 +331,10 @@ claude rart
     "autoimprove-core": {
       "command": "python3",
       "args": [
-        "/Users/adazhao/workspace/autoimprove/src/mcp-server/server.py"
+        "<PROJECT_ROOT>/src/mcp-server/server.py"
       ],
       "env": {
-        "PYTHONPATH": "/Users/adazhao/workspace/autoimprove/src/mcp-server",
+        "PYTHONPATH": "<PROJECT_ROOT>/src/mcp-server",
         "LOG_LEVEL": "INFO"
       }
     }
@@ -252,7 +342,7 @@ claude rart
   "skills": {
     "enabled": true,
     "paths": [
-      "/Users/adazhao/workspace/autoimprove/src/skills"
+      "<PROJECT_ROOT>/src/skills"
     ]
   }
 }
