@@ -39,10 +39,47 @@ AutoImprove analyzes your Claude Code sessions to detect patterns in corrections
 
 ### Prerequisites
 
-- **Node.js 18+**
-- Claude Code (CLI, Desktop, or Web)
+- **Node.js 18+** - Required for building and running the MCP server
+- **Claude Code** - CLI, Desktop, or Web version
 
-### Install MCP Server
+### Quick Setup (Recommended)
+
+Run the automated setup script from the project root:
+
+```bash
+./setup.sh
+```
+
+This will automatically:
+1. ✅ Install and build MCP Server (TypeScript)
+2. ✅ Build Skills (TypeScript)
+3. ✅ Configure Claude Code MCP Server (user-level, **available in all projects**)
+4. ✅ Install Skills to `~/.claude/skills/`
+5. ✅ Initialize storage directory at `~/.autoimprove/`
+
+**Configuration Scope**: The setup script configures `autoimprove-core` as a **user-level MCP server**, making it accessible from any project directory. You only need to run setup once.
+
+### Verify Installation
+
+After setup completes:
+
+```bash
+# Check MCP server status (works from any directory)
+claude mcp list
+
+# Expected output:
+# autoimprove-core: node .../dist/index.js - ✓ Connected
+
+# Check system health
+claude
+# Then type: /autoimprove-status
+```
+
+### Manual Setup
+
+If you prefer manual installation or need to customize the setup:
+
+**Step 1: Build MCP Server**
 
 ```bash
 cd src/mcp-server-ts
@@ -50,99 +87,92 @@ npm install
 npm run build
 ```
 
-### Install Skills
+**Step 2: Build Skills**
+
+```bash
+cd src/skills-ts
+npm install
+npm run build
+```
+
+**Step 3: Configure MCP Server**
+
+Using Claude Code CLI (recommended - works globally):
+
+```bash
+claude mcp add autoimprove-core -s user -- node /path/to/autoimprove/src/mcp-server-ts/dist/index.js
+```
+
+**Note**: Use `-s user` to make the server available in all projects, or `-s local` for project-specific configuration.
+
+**Step 4: Install Skills**
 
 ```bash
 # Copy skills to Claude Code skills directory
-cp -r src/skills/* ~/.claude/skills/
+mkdir -p ~/.claude/skills
+cp -r src/skills-ts/src/autoimprove-* ~/.claude/skills/
 ```
-
-### Quick Setup (Recommended)
-
-Run the automatic setup script:
-
-```bash
-./setup.sh
-```
-
-This will automatically:
-- Install MCP Server dependencies
-- Configure Claude Code
-- Initialize storage directory
-
-### Manual Setup
-
-**Using Config File**
-
-Edit `~/.claude/config.json` (**replace `<PROJECT_ROOT>` with actual path**):
-
-```json
-{
-  "mcpServers": {
-    "autoimprove-core": {
-      "command": "node",
-      "args": [
-        "<PROJECT_ROOT>/src/mcp-server-ts/dist/index.js"
-      ]
-    }
-  }
-}
-```
-
-Or use `tsx` for development (no build needed):
-
-```json
-{
-  "mcpServers": {
-    "autoimprove-core": {
-      "command": "npx",
-      "args": [
-        "-y",
-        "tsx",
-        "<PROJECT_ROOT>/src/mcp-server-ts/src/index.ts"
-      ]
-    }
-  }
-}
-```
-
-**Method 2: Using Desktop App**
-
-Settings → MCP Servers → Add Server
-
-See [MCP Auto-Start Documentation](docs/MCP_AUTO_START.md) for detailed configuration instructions.
 
 ## Quick Start
 
 ### 1. Verify Installation
 
-Check that the MCP Server is running:
+Check that the MCP Server is running (works from any project directory):
 
 ```bash
-# The server will be automatically started by Claude Code
-# Check ~/.claude/config.json to verify configuration
+# Check MCP server status
+claude mcp list
+
+# Expected output:
+# codegraph: codegraph serve --mcp - ✓ Connected
+# autoimprove-core: node .../dist/index.js - ✓ Connected
+
+# Get detailed server info
+claude mcp get autoimprove-core
+
+# Expected output:
+# Scope: User config (available in all your projects)
+# Status: ✓ Connected
 ```
 
-### 2. Use MCP Tools
+### 2. Use Skills
+
+Available skills (work in any project):
+
+```bash
+# Launch Claude Code and use these commands:
+
+/autoimprove-status      # Check system health and statistics
+/autoimprove-summarize   # Analyze session patterns
+/autoimprove-rules       # Manage knowledge rules
+/autoimprove-lessons     # View learned lessons
+```
+
+### 3. Use MCP Tools
 
 You can call the MCP tools directly through Claude Code's MCP integration:
 
 **Analyze a session:**
 ```
-Call the analyze_session tool with the session file path
+Ask Claude to call the analyze_session tool with a session file path
 ```
 
 **Generate rules:**
 ```
-Call the generate_rules tool with detected patterns
+Ask Claude to call the generate_rules tool with detected patterns
 ```
 
 **Search knowledge:**
 ```
-Call the search_knowledge tool to find relevant rules
+Ask Claude to call the search_knowledge tool to find relevant rules
 ```
 
-### 3. Access Resources
+**List available scenes:**
+```
+Ask Claude to call the list_scenes tool to see all known tech/functional scenes
+```
+
+### 4. Access Resources
 
 **Get rule content:**
 ```
@@ -154,7 +184,7 @@ Access knowledge://rules/rule-001
 Access knowledge://lessons/react-auth
 ```
 
-See rules applicable to your current scene.
+See rules applicable to your current coding context.
 
 ## Architecture
 
@@ -259,27 +289,106 @@ python skill.py
 
 ## Troubleshooting
 
-### Storage not initialized
+### MCP Server Not Found
 
-Run `/autoimprove-status` to initialize.
+If `claude mcp list` doesn't show `autoimprove-core`:
 
-### No patterns detected
+```bash
+# Re-run the setup script
+./setup.sh
+
+# Or manually add the server
+claude mcp add autoimprove-core -s user -- node /path/to/autoimprove/src/mcp-server-ts/dist/index.js
+```
+
+### Server Status Shows Disconnected
+
+```bash
+# Check server details
+claude mcp get autoimprove-core
+
+# Remove and re-add the server
+claude mcp remove autoimprove-core -s user
+claude mcp add autoimprove-core -s user -- node /path/to/autoimprove/src/mcp-server-ts/dist/index.js
+```
+
+### Skills Not Working
+
+Skills require the MCP server to be running. Check:
+
+1. MCP server is connected: `claude mcp list`
+2. Skills are installed: `ls ~/.claude/skills/autoimprove-*`
+3. Storage is initialized: `ls ~/.autoimprove/`
+
+If skills are missing, reinstall:
+
+```bash
+./setup.sh  # Reinstalls everything including skills
+```
+
+### Storage Not Initialized
+
+Run `/autoimprove-status` to initialize storage automatically, or manually:
+
+```bash
+mkdir -p ~/.autoimprove/{rules/content,sessions,cache,logs}
+echo '{"version":"1.0","rules":[]}' > ~/.autoimprove/rules/index.json
+```
+
+### No Patterns Detected
 
 - Ensure you made corrections during the session
-- Check that session file exists
+- Check that session file exists in `~/.claude/sessions/`
 - Try with more explicit corrections
+- Verify patterns meet confidence thresholds in `~/.autoimprove/config.json`
 
-### Rules not matching
+### Rules Not Matching
 
 - Check scene detection with `/autoimprove-status`
-- Verify rule scenes match your current work
-- Adjust confidence thresholds in config
+- Verify rule scenes match your current work (tech stack, functional domain)
+- Adjust confidence thresholds in `~/.autoimprove/config.json`
+- Use `search_knowledge` tool to test rule matching
 
-### MCP Server not responding
+### Build Errors
 
-- Check MCP configuration
-- Verify server is running
-- Check logs at `~/.autoimprove/logs/`
+```bash
+# Clean and rebuild MCP server
+cd src/mcp-server-ts
+rm -rf dist node_modules
+npm install
+npm run build
+
+# Clean and rebuild skills
+cd src/skills-ts
+rm -rf dist node_modules
+npm install
+npm run build
+```
+
+### Check Logs
+
+```bash
+# View MCP server logs (if available)
+ls ~/.autoimprove/logs/
+
+# Check Claude Code logs
+ls ~/.claude/logs/
+```
+
+### Configuration Scope Issues
+
+If the server works in one project but not others:
+
+```bash
+# Check current scope
+claude mcp get autoimprove-core
+
+# Should show: "Scope: User config (available in all your projects)"
+# If it shows "Local config", remove and re-add with -s user:
+
+claude mcp remove autoimprove-core -s local
+claude mcp add autoimprove-core -s user -- node /path/to/dist/index.js
+```
 
 ## License
 

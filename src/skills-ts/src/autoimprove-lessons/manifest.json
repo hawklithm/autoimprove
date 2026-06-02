@@ -1,0 +1,7 @@
+{
+  "name": "autoimprove-lessons",
+  "version": "0.1.0",
+  "description": "View rules applicable to current scene",
+  "entry": "../../dist/autoimprove-lessons/skill.js",
+  "author": "AutoImprove Team"
+}

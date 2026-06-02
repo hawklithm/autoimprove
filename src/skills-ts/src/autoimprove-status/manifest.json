@@ -1,0 +1,7 @@
+{
+  "name": "autoimprove-status",
+  "version": "0.1.0",
+  "description": "Show AutoImprove system status and statistics",
+  "entry": "../../dist/autoimprove-status/skill.js",
+  "author": "AutoImprove Team"
+}

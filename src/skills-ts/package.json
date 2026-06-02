@@ -1,0 +1,17 @@
+{
+  "name": "autoimprove-skills",
+  "version": "0.1.0",
+  "description": "TypeScript Skills for AutoImprove",
+  "type": "module",
+  "scripts": {
+    "build": "tsc",
+    "build:watch": "tsc --watch"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.0.4"
+  },
+  "devDependencies": {
+    "@types/node": "^22.19.19",
+    "typescript": "^5.7.2"
+  }
+}

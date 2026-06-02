@@ -1,0 +1,7 @@
+{
+  "name": "autoimprove-rules",
+  "version": "0.1.0",
+  "description": "Review and manage generated rules",
+  "entry": "../../dist/autoimprove-rules/skill.js",
+  "author": "AutoImprove Team"
+}
