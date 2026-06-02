@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # AutoImprove Setup Script (TypeScript)
-# Automatically configures MCP Server and Skills for Claude Code
+# Automatically configures MCP Server for Claude Code
 
 set -e
 
@@ -94,29 +94,7 @@ EOF
 fi
 
 echo ""
-echo "Step 3: Installing Skills..."
-echo "-----------------------------------"
-
-SKILLS_DIR="$CLAUDE_DIR/skills"
-mkdir -p "$SKILLS_DIR"
-
-# Create symbolic links for each skill
-for skill_dir in "$SCRIPT_DIR/src/skills"/*; do
-  if [ -d "$skill_dir" ]; then
-    skill_name=$(basename "$skill_dir")
-    target="$SKILLS_DIR/$skill_name"
-
-    if [ -L "$target" ] || [ -e "$target" ]; then
-      echo "⚠ Skill $skill_name already exists, skipping"
-    else
-      ln -s "$skill_dir" "$target"
-      echo "✓ Installed skill: $skill_name"
-    fi
-  fi
-done
-
-echo ""
-echo "Step 4: Initializing storage..."
+echo "Step 3: Initializing storage..."
 echo "-----------------------------------"
 
 mkdir -p "$AUTOIMPROVE_DIR"
@@ -166,8 +144,15 @@ echo "==================================="
 echo ""
 echo "Next steps:"
 echo "  1. Restart Claude Code"
-echo "  2. Run: /autoimprove-status"
-echo "  3. Start coding and let AutoImprove learn from your patterns"
+echo "  2. The MCP Server will start automatically"
+echo "  3. Use MCP tools to analyze sessions and manage rules"
+echo ""
+echo "Available MCP Tools:"
+echo "  • analyze_session - Analyze coding patterns"
+echo "  • generate_rules - Generate rules from patterns"
+echo "  • search_knowledge - Search for rules"
+echo "  • update_rules - Update existing rules"
+echo "  • list_scenes - List known scenes"
 echo ""
 echo "Documentation: $SCRIPT_DIR/README.md"
 echo ""

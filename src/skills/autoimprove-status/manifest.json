@@ -1,7 +1,0 @@
-{
-  "name": "autoimprove-status",
-  "version": "0.1.0",
-  "description": "Show AutoImprove system status and statistics",
-  "entry": "skill.py",
-  "author": "AutoImprove Team"
-}

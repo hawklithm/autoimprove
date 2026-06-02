@@ -26,13 +26,14 @@ AutoImprove analyzes your Claude Code sessions to detect patterns in corrections
   - Functional domain (auth, api, etc.)
   - Business domain (e-commerce, finance, etc.)
 
-- **MCP Server**: FastMCP-based server with 5 tools and 2 resources (TypeScript)
-
-- **Skills**: 4 interactive skills for Claude Code
-  - `/autoimprove-status` - System status
-  - `/autoimprove-summarize` - Analyze session
-  - `/autoimprove-rules` - Review rules
-  - `/autoimprove-lessons` - View applicable rules
+- **MCP Server**: MCP-based server with 5 tools and 2 resources (TypeScript)
+  - `analyze_session` - Analyze session patterns
+  - `generate_rules` - Generate rules from patterns
+  - `search_knowledge` - Search rules
+  - `update_rules` - Update existing rules
+  - `list_scenes` - List known scenes
+  - `knowledge://rules/{id}` - Get rule content
+  - `knowledge://lessons/{scene}` - Get lessons for scene
 
 ## Installation
 
@@ -67,7 +68,6 @@ Run the automatic setup script:
 This will automatically:
 - Install MCP Server dependencies
 - Configure Claude Code
-- Create symbolic links for Skills
 - Initialize storage directory
 
 ### Manual Setup
@@ -114,39 +114,44 @@ See [MCP Auto-Start Documentation](docs/MCP_AUTO_START.md) for detailed configur
 
 ## Quick Start
 
-### 1. Initialize
+### 1. Verify Installation
+
+Check that the MCP Server is running:
 
 ```bash
-# Run in Claude Code
-/autoimprove-status
+# The server will be automatically started by Claude Code
+# Check ~/.claude/config.json to verify configuration
 ```
 
-This initializes storage at `~/.autoimprove/`.
+### 2. Use MCP Tools
 
-### 2. Complete a Coding Session
+You can call the MCP tools directly through Claude Code's MCP integration:
 
-Work with Claude Code as usual. Make corrections, express preferences, fix bugs.
-
-### 3. Analyze Session
-
-```bash
-/autoimprove-summarize
+**Analyze a session:**
+```
+Call the analyze_session tool with the session file path
 ```
 
-This analyzes the session and generates rules.
-
-### 4. Review Rules
-
-```bash
-/autoimprove-rules
+**Generate rules:**
+```
+Call the generate_rules tool with detected patterns
 ```
 
-Review and activate generated rules.
+**Search knowledge:**
+```
+Call the search_knowledge tool to find relevant rules
+```
 
-### 5. View Lessons
+### 3. Access Resources
 
-```bash
-/autoimprove-lessons
+**Get rule content:**
+```
+Access knowledge://rules/rule-001
+```
+
+**Get lessons for a scene:**
+```
+Access knowledge://lessons/react-auth
 ```
 
 See rules applicable to your current scene.

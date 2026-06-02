@@ -1,7 +1,0 @@
-{
-  "name": "autoimprove-lessons",
-  "version": "0.1.0",
-  "description": "View applicable rules for current scene",
-  "entry": "skill.py",
-  "author": "AutoImprove Team"
-}
