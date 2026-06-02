@@ -73,7 +73,8 @@ def call_mcp_tool(tool_name: str, params: dict):
     # For now, return mock data
     if tool_name == "health_check":
         from storage import get_storage_info
-        retur     "success": True,
+        return {
+            "success": True,
             "status": "healthy",
             "storage": get_storage_info()
         }

@@ -66,7 +66,7 @@ def run():
                 print(f"   ... and {len(plist) - 3} more")
             print()
 
-    enerate rules
+        # Generate rules
         print("🎯 Generating rules...\n")
 
         # Detect scene
