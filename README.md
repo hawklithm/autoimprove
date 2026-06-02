@@ -26,7 +26,7 @@ AutoImprove analyzes your Claude Code sessions to detect patterns in corrections
   - Functional domain (auth, api, etc.)
   - Business domain (e-commerce, finance, etc.)
 
-- **MCP Server**: FastMCP-based server with 5 tools and 2 resources
+- **MCP Server**: FastMCP-based server with 5 tools and 2 resources (TypeScript)
 
 - **Skills**: 4 interactive skills for Claude Code
   - `/autoimprove-status` - System status
@@ -38,14 +38,15 @@ AutoImprove analyzes your Claude Code sessions to detect patterns in corrections
 
 ### Prerequisites
 
-- Python 3.10+
+- **Node.js 18+**
 - Claude Code (CLI, Desktop, or Web)
 
 ### Install MCP Server
 
 ```bash
-cd src/mcp-server
-pip install -e .
+cd src/mcp-server-ts
+npm install
+npm run build
 ```
 
 ### Install Skills
@@ -71,7 +72,7 @@ This will automatically:
 
 ### Manual Setup
 
-**Method 1: Using Config File**
+**Using Config File**
 
 Edit `~/.claude/config.json` (**replace `<PROJECT_ROOT>` with actual path**):
 
@@ -79,13 +80,27 @@ Edit `~/.claude/config.json` (**replace `<PROJECT_ROOT>` with actual path**):
 {
   "mcpServers": {
     "autoimprove-core": {
-      "command": "python3",
+      "command": "node",
       "args": [
-        "<PROJECT_ROOT>/src/mcp-server/server.py"
-      ],
-      "env": {
-        "PYTHONPATH": "<PROJECT_ROOT>/src/mcp-server"
-      }
+        "<PROJECT_ROOT>/src/mcp-server-ts/dist/index.js"
+      ]
+    }
+  }
+}
+```
+
+Or use `tsx` for development (no build needed):
+
+```json
+{
+  "mcpServers": {
+    "autoimprove-core": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "tsx",
+        "<PROJECT_ROOT>/src/mcp-server-ts/src/index.ts"
+      ]
     }
   }
 }

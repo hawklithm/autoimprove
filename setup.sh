@@ -1,230 +1,173 @@
 #!/bin/bash
-# AutoImprove Automatic Setup Script
-# Automatically configures Claude Code MCP Server and Skills
+
+# AutoImprove Setup Script (TypeScript)
+# Automatically configures MCP Server and Skills for Claude Code
 
 set -e
 
-# Color output
-RED='\033[0;31m'
-GREEN='\033[0;32m'
-YELLOW='\033[1;33m'
-BLUE='\033[0;34m'
-NC='\033[0m' # No Color
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+CLAUDE_DIR="$HOME/.claude"
+AUTOIMPROVE_DIR="$HOME/.autoimprove"
 
-echo -e "${BLUE}🚀 AutoImprove Automatic Setup${NC}"
+echo "==================================="
+echo "  AutoImprove Setup"
+echo "==================================="
 echo ""
 
-# Get project root directory (script's directory)
-SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
-PROJECT_ROOT="$SCRIPT_DIR"
+echo "Step 1: Installing MCP Server dependencies..."
+echo "-----------------------------------"
 
-echo -e "${GREEN}✓${NC} Project path: $PROJECT_ROOT"
-echo ""
+cd "$SCRIPT_DIR/src/mcp-server-ts"
 
-# Check Python version
-echo "Checking Python version..."
-python_version=$(python3 --version 2>&1 | awk '{print $2}')
-required_version="3.10"
-
-if [ "$(printf '%s\n' "$required_version" "$python_version" | sort -V | head -n1)" != "$required_version" ]; then
-    echo -e "${RED}❌ Error: Python 3.10+ required (current: $python_version)${NC}"
-    exit 1
+# Check if npm is installed
+if ! command -v npm &> /dev/null; then
+  echo "❌ Error: npm is not installed. Please install Node.js 18+ first."
+  exit 1
 fi
 
-echo -e "${GREEN}✓${NC} Python $python_version"
+echo "Installing Node.js dependencies..."
+npm install
+
+echo "Building TypeScript..."
+npm run build
+
+SERVER_CMD="node"
+SERVER_ARGS="[\"$SCRIPT_DIR/src/mcp-server-ts/dist/index.js\"]"
+
+echo "✓ TypeScript MCP Server installed"
+
 echo ""
+echo "Step 2: Configuring Claude Code..."
+echo "-----------------------------------"
 
-# Install MCP Server dependencies
-echo "📦 Installing MCP Server dependencies..."
-cd "$PROJECT_ROOT/src/mcp-server"
-pip install -e . --quiet
-echo -e "${GREEN}✓${NC} MCP Server dependencies installed"
-echo ""
+# Create .claude directory if not exists
+mkdir -p "$CLAUDE_DIR"
 
-# Initialize storage
-echo "💾 Initializing storage..."
-python3 -c "
-import sys
-sys.path.insert(0, '$PROJECT_ROOT/src/mcp-server')
-from storage import init_storage
-result = init_storage()
-print(f'Storage initialized: {result[\"root\"]}')
-"
-echo -e "${GREEN}✓${NC} Storage initialized"
-echo ""
+CONFIG_FILE="$CLAUDE_DIR/config.json"
 
-# Configure Claude Code
-echo "⚙️  Configuring Claude Code..."
+# Check if config.json exists
+if [ -f "$CONFIG_FILE" ]; then
+  echo "Found existing config.json"
 
-# Detect Claude Code config directory
-CLAUDE_CONFIG_DIR="$HOME/.claude"
-CLAUDE_CONFIG_FILE="$CLAUDE_CONFIG_DIR/config.json"
+  # Backup existing config
+  cp "$CONFIG_FILE" "$CONFIG_FILE.backup.$(date +%Y%m%d_%H%M%S)"
+  echo "✓ Backed up existing config"
 
-# Create config directory
-mkdir -p "$CLAUDE_CONFIG_DIR"
-
-# Generate MCP Server config
-MCP_CONFIG=$(cat <<EOF
-{
-  "autoimprove-core": {
-    "command": "python3",
-    "args": [
-      "$PROJECT_ROOT/src/mcp-server/server.py"
-    ],
-    "env": {
-      "PYTHONPATH": "$PROJECT_ROOT/src/mcp-server"
-    }
-  }
-}
-EOF
-)
-
-# Read or create config file
-if [ -f "$CLAUDE_CONFIG_FILE" ]; then
-    echo -e "${YELLOW}⚠${NC}  Existing config file detected"
-
-    # Check if mcpServers config exists
-    if grep -q '"mcpServers"' "$CLAUDE_CONFIG_FILE"; then
-        echo -e "${YELLOW}⚠${NC}  mcpServers config already exists"
-
-        # Check if autoimprove-core exists
-        if grep -q '"autoimprove-core"' "$CLAUDE_CONFIG_FILE"; then
-            echo -e "${YELLOW}⚠${NC}  autoimprove-core already configured, skipping"
-        else
-            echo -e "${BLUE}ℹ${NC}  Manual addition required: add autoimprove-core to mcpServers"
-            echo ""
-            echo "Please add the following config to mcpServers section in $CLAUDE_CONFIG_FILE:"
-            echo ""
-        echo "$MCP_CONFIG"
-            echo ""
-        fi
-    else
-        # Add mcpServers config
-        echo -e "${BLUE}ℹ${NC}  Adding mcpServers config..."
-
-        # Use Python to safely merge JSON
-        python3 <<PYTHON_SCRIPT
+  # Check if autoimprove-core already exists
+  if grep -q "autoimprove-core" "$CONFIG_FILE"; then
+    echo "⚠ autoimprove-core already configured. Skipping MCP configuration."
+  else
+    # Add autoimprove-core to existing config
+    python3 -c "
 import json
 import sys
 
-config_file = "$CLAUDE_CONFIG_FILE"
-
-# Read existing config
-with open(config_file, 'r') as f:
+with open('$CONFIG_FILE', 'r') as f:
     config = json.load(f)
 
-# Add mcpServers
 if 'mcpServers' not in config:
     config['mcpServers'] = {}
 
 config['mcpServers']['autoimprove-core'] = {
-    "command": "python3",
-    "args": ["$PROJECT_ROOT/src/mcp-server/server.py"],
-    "env": {
-        "PYTHONPATH": "$PROJECT_ROOT/src/mcp-server"
-    }
+    'command': '$SERVER_CMD',
+    'args': $SERVER_ARGS
 }
 
-# Write back config
-with open(config_file, 'w') as f:
+with open('$CONFIG_FILE', 'w') as f:
     json.dump(config, f, indent=2)
-
-print("✓ MCP Server config added")
-PYTHON_SCRIPT
-
-        echo -e "${GREEN}✓${NC} MCP Server config added"
-    fi
+"
+    echo "✓ Added autoimprove-core to config.json"
+  fi
 else
-    # Create new config file
-    echo -e "${BLUE}ℹ${NC}  Creating new config file..."
-
-    cat > "$CLAUDE_CONFIG_FILE" <<EOF
+  # Create new config.json
+  cat > "$CONFIG_FILE" <<EOF
 {
-  "mcpServers": $MCP_CONFIG
+  "mcpServers": {
+    "autoimprove-core": {
+      "command": "$SERVER_CMD",
+      "args": $SERVER_ARGS
+    }
+  }
 }
 EOF
-
-    echo -e "${GREEN}✓${NC} Config file created"
+  echo "✓ Created config.json"
 fi
 
 echo ""
+echo "Step 3: Installing Skills..."
+echo "-----------------------------------"
 
-# Configure Skills
-echo "🎯 Configuring Skills..."
-
-SKILLS_DIR="$CLAUDE_CONFIG_DIR/skills"
+SKILLS_DIR="$CLAUDE_DIR/skills"
 mkdir -p "$SKILLS_DIR"
 
-# Copy or link Skills
-for skill in autoimprove-status autoimprove-summarize autoimprove-rules autoimprove-lessons; do
-    skill_src="$PROJECT_ROOT/src/skills/$skill"
-    skill_dst="$SKILLS_DIR/$skill"
+# Create symbolic links for each skill
+for skill_dir in "$SCRIPT_DIR/src/skills"/*; do
+  if [ -d "$skill_dir" ]; then
+    skill_name=$(basename "$skill_dir")
+    target="$SKILLS_DIR/$skill_name"
 
-    if [ -d "$skill_dst" ] || [ -L "$skill_dst" ]; then
-        echo -e "${YELLOW}⚠${NC}  $skill already exists, skipping"
+    if [ -L "$target" ] || [ -e "$target" ]; then
+      echo "⚠ Skill $skill_name already exists, skipping"
     else
-        # Create symbolic link (recommended for development)
-        ln -s "$skill_src" "$skill_dst"
-        echo -e "${GREEN}✓${NC} $skill linked"
+      ln -s "$skill_dir" "$target"
+      echo "✓ Installed skill: $skill_name"
     fi
+  fi
 done
 
 echo ""
+echo "Step 4: Initializing storage..."
+echo "-----------------------------------"
 
-# Test MCP Server
-echo "🧪 Testing MCP Server..."
-cd "$PROJECT_ROOT/src/mcp-server"
+mkdir -p "$AUTOIMPROVE_DIR"
+mkdir -p "$AUTOIMPROVE_DIR/rules/content"
+mkdir -p "$AUTOIMPROVE_DIR/sessions"
+mkdir -p "$AUTOIMPROVE_DIR/cache"
+mkdir -p "$AUTOIMPROVE_DIR/logs"
 
-# Start Server and quick test
-timeout 5 python3 server.py > /dev/null 2>&1 &
-SERVER_PID=$!
+# Create default config if not exists
+if [ ! -f "$AUTOIMPROVE_DIR/config.json" ]; then
+  cat > "$AUTOIMPROVE_DIR/config.json" <<EOF
+{
+  "version": "1.0",
+  "confidence_thresholds": {
+    "repeated-correction": 0.45,
+    "anti-pattern": 0.45,
+    "preference": 0.3,
+    "performance": 0.4,
+    "security": 0.3
+  },
+  "confidence_weights": {
+    "frequency": 0.3,
+    "time_span": 0.1,
+    "behavior": 0.4,
+    "validation": 0.2
+  },
+  "rule_matching": {
+    "max_results": 10,
+    "min_confidence": 0.3
+  },
+  "business_domain_mappings": {}
+}
+EOF
+  echo "✓ Created default config"
+fi
 
-sleep 2
-
-if ps -p $SERVER_PID > /dev/null; then
-    echo -e "${GREEN}✓${NC} MCP Server starts successfully"
-    kill $SERVER_PID 2>/dev/null || true
-else
-    echo -e "${YELLOW}⚠${NC}  MCP Server test timeout (this may be normal)"
+# Create empty rule index if not exists
+if [ ! -f "$AUTOIMPROVE_DIR/rules/index.json" ]; then
+  echo '{"version":"1.0","rules":[]}' > "$AUTOIMPROVE_DIR/rules/index.json"
+  echo "✓ Initialized rule index"
 fi
 
 echo ""
-
-# Complete
-echo -e "${GREEN}✨ Setup Complete!${NC}"
+echo "==================================="
+echo "  Setup Complete! 🎉"
+echo "==================================="
 echo ""
-echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-echo ""
-echo "📋 Configuration Summary:"
-echo ""
-echo "  Project path: $PROJECT_ROOT"
-echo "  Config file: $CLAUDE_CONFIG_FILE"
-echo "  Storage directory: ~/.autoimprove/"
-echo "  Skills: $SKILLS_DIR"
-echo ""
-echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-echo ""
-echo "🎯 Next Steps:"
-echo ""
+echo "Next steps:"
 echo "  1. Restart Claude Code"
-echo "     ${BLUE}claude restart${NC}  (CLI)"
-echo "     or restart Desktop App / refresh Web page"
+echo "  2. Run: /autoimprove-status"
+echo "  3. Start coding and let AutoImprove learn from your patterns"
 echo ""
-echo "  2. Verify Installation"
-echo "     Run in Claude Code: ${BLUE}/autoimprove-status${NC}"
-echo ""
-echo "  3. Start Using"
-echo "     ${BLUE}/autoimprove-summarize${NC}  - Analyze session"
-echo "     ${BLUE}/autoimprove-rules${NC}      - Manage rules"
-echo "     ${BLUE}/autoimprove-lessons${NC}    - View rules"
-echo ""
-echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-echo ""
-echo "📚 Documentation:"
-echo "  - README.md - Complete usage guide"
-echo "  - docs/MCP_AUTO_START.md - MCP configuration details"
-echo "  - docs/MCP_TOOLS_API.md - API documentation"
-echo ""
-echo "❓ Troubleshooting:"
-echo "  ${BLUE}cat docs/MCP_AUTO_START.md | grep -A 20 'Troubleshooting'${NC}"
+echo "Documentation: $SCRIPT_DIR/README.md"
 echo ""

@@ -1,0 +1,144 @@
+/**
+ * Storage initialization and utilities.
+ */
+
+import { homedir } from "os";
+import { join } from "path";
+import { existsSync, mkdirSync, writeFileSync, readFileSync } from "fs";
+
+// ============================================================================
+// Constants
+// ============================================================================
+
+function getStorageRoot(): string {
+  // Allow overriding for tests
+  if (process.env.AUTOIMPROVE_STORAGE_ROOT) {
+    return process.env.AUTOIMPROVE_STORAGE_ROOT;
+  }
+  return join(homedir(), ".autoimprove");
+}
+
+export const STORAGE_ROOT = getStorageRoot();
+export const RULES_DIR = join(STORAGE_ROOT, "rules");
+export const RULES_INDEX_PATH = join(RULES_DIR, "index.json");
+export const RULES_CONTENT_DIR = join(RULES_DIR, "content");
+export const SESSIONS_DIR = join(STORAGE_ROOT, "sessions");
+export const CACHE_DIR = join(STORAGE_ROOT, "cache");
+export const CONFIG_PATH = join(STORAGE_ROOT, "config.json");
+export const LOG_DIR = join(STORAGE_ROOT, "logs");
+
+// ============================================================================
+// Default Configuration
+// ============================================================================
+
+export interface Config {
+  version: string;
+  confidence_thresholds: {
+    "repeated-correction": number;
+    "anti-pattern": number;
+    preference: number;
+    performance: number;
+    security: number;
+  };
+  confidence_weights: {
+    frequency: number;
+    time_span: number;
+    behavior: number;
+    validation: number;
+  };
+  rule_matching: {
+    max_results: number;
+    min_confidence: number;
+  };
+  business_domain_mappings: Record<string, string>;
+}
+
+const DEFAULT_CONFIG: Config = {
+  version: "1.0",
+  confidence_thresholds: {
+    "repeated-correction": 0.45,
+    "anti-pattern": 0.45,
+    preference: 0.3,
+    performance: 0.4,
+    security: 0.3
+  },
+  confidence_weights: {
+    frequency: 0.3,
+    time_span: 0.1,
+    behavior: 0.4,
+    validation: 0.2
+  },
+  rule_matching: {
+    max_results: 10,
+    min_confidence: 0.3
+  },
+  business_domain_mappings: {}
+};
+
+// ============================================================================
+// Initialization
+// ============================================================================
+
+export function initStorage(): void {
+  // Create directories
+  const dirs = [
+    STORAGE_ROOT,
+    RULES_DIR,
+    RULES_CONTENT_DIR,
+    SESSIONS_DIR,
+    CACHE_DIR,
+    LOG_DIR
+  ];
+
+  for (const dir of dirs) {
+    if (!existsSync(dir)) {
+      mkdirSync(dir, { recursive: true });
+    }
+  }
+
+  // Create default config if not exists
+  if (!existsSync(CONFIG_PATH)) {
+    writeFileSync(CONFIG_PATH, JSON.stringify(DEFAULT_CONFIG, null, 2));
+  }
+
+  // Create empty index if not exists
+  if (!existsSync(RULES_INDEX_PATH)) {
+    writeFileSync(RULES_INDEX_PATH, JSON.stringify({ version: "1.0", rules: [] }, null, 2));
+  }
+}
+
+export function loadConfig(): Config {
+  if (!existsSync(CONFIG_PATH)) {
+    initStorage();
+  }
+
+  const data = readFileSync(CONFIG_PATH, "utf-8");
+  return JSON.parse(data) as Config;
+}
+
+export function saveConfig(config: Config): void {
+  writeFileSync(CONFIG_PATH, JSON.stringify(config, null, 2));
+}
+
+export function getStorageInfo() {
+  const exists = existsSync(STORAGE_ROOT);
+
+  if (!exists) {
+    return {
+      initialized: false,
+      storage_root: STORAGE_ROOT
+    };
+  }
+
+  const indexExists = existsSync(RULES_INDEX_PATH);
+  const rulesCount = indexExists
+    ? JSON.parse(readFileSync(RULES_INDEX_PATH, "utf-8")).rules.length
+    : 0;
+
+  return {
+    initialized: true,
+    storage_root: STORAGE_ROOT,
+    rules_count: rulesCount,
+    config: loadConfig()
+  };
+}
