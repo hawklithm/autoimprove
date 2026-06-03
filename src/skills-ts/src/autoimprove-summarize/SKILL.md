@@ -1,25 +1,43 @@
 ---
 name: autoimprove-summarize
-description: Analyze a completed coding session and generate rules from detected patterns. Use after completing a coding session to extract learnings. Supports intelligent consolidation via sub-agent (--consolidate flag).
+description: Analyze coding sessions and generate rules from detected patterns. Supports single session, batch analysis of all sessions, and intelligent consolidation via sub-agent (--consolidate flag). Automatically tracks analyzed sessions to avoid redundant processing.
 allowed-tools: mcp__autoimprove-core__*
 ---
 
 # AutoImprove Summarize
 
-Analyze the most recent Claude Code session file and extract reusable patterns:
+Analyze Claude Code session files and extract reusable patterns:
 
 ## Usage
 
-Basic mode:
+**Single session (most recent):**
 ```bash
 /autoimprove-summarize
 ```
 
-Intelligent consolidation mode (uses sub-agent to merge and optimize patterns):
+**With intelligent consolidation:**
 ```bash
 /autoimprove-summarize --consolidate
 /autoimprove-summarize -c --min-confidence 0.9
 ```
+
+**Batch analysis (all unanalyzed sessions):**
+```bash
+/autoimprove-summarize --all
+/autoimprove-summarize --all --consolidate
+```
+
+**Force re-analyze all sessions:**
+```bash
+/autoimprove-summarize --all --force
+```
+
+## Parameters
+
+- `--consolidate` / `-c`: Enable intelligent pattern consolidation
+- `--min-confidence <float>`: Set minimum confidence threshold (default: 0.85)
+- `--all` / `-a`: Analyze all unanalyzed sessions (batch mode)
+- `--force`: Force re-analyze even if session was already analyzed
 
 ## Workflow
 
@@ -61,15 +79,47 @@ When `--consolidate` flag is enabled, the skill uses a more sophisticated approa
 
 This reduces pattern noise by 30-60% while maintaining information quality.
 
-Parameters:
-- `--consolidate` or `-c`: Enable intelligent consolidation
-- `--min-confidence <float>`: Set minimum confidence threshold (default: 0.85)
+## Batch Analysis Mode (--all)
 
-Example output comparison:
-- Without consolidation: 20 patterns → 20 rules
-- With consolidation: 20 patterns → 8 optimized rules (40% reduction)
+Batch mode analyzes all sessions in `~/.claude/projects/` directories:
 
-Use MCP tools from autoimprove-core: `analyze_session` and `generate_rules`.
+1. **Discovery**: Scans all project directories for `.jsonl` session files
+2. **Status Check**: Uses `list_unanalyzed_sessions` MCP tool to filter out already-analyzed sessions
+3. **Sequential Processing**: Analyzes each unanalyzed session one by one
+4. **Progress Tracking**: Marks each session as analyzed via `mark_session_analyzed` MCP tool
+5. **Summary Report**: Shows total patterns detected and rules generated
+
+**Benefits:**
+- Process historical sessions automatically
+- Avoid redundant analysis (sessions are tracked)
+- Extract maximum value from all coding activity
+- Perfect for onboarding or periodic knowledge extraction
+
+**Performance:**
+- Typical session: 2-5 seconds
+- 10 sessions: ~30-60 seconds
+- 100 sessions: ~5-10 minutes
+
+## Session Tracking
+
+The system automatically tracks which sessions have been analyzed:
+
+**Tracking file:** `~/.autoimprove/analyzed_sessions.json`
+
+**Recorded information:**
+- Session ID and file path
+- Analysis timestamp
+- Patterns found and rules generated
+- Analysis mode (standard vs consolidated)
+- Success status and error messages
+
+**MCP Tools used:**
+- `mark_session_analyzed` - Mark a session as processed
+- `get_analysis_status` - Check if a session was analyzed
+- `list_unanalyzed_sessions` - Filter unanalyzed from a list
+- `clear_analysis_record` - Clear record for re-analysis
+
+Use MCP tools from autoimprove-core: `analyze_session`, `generate_rules`, `mark_session_analyzed`, `list_unanalyzed_sessions`, `get_analysis_status`, `clear_analysis_record`.
 
 Note: Session files are in `~/.claude/projects/` organized by project directory path (e.g., `-Users-adazhao-workspace-autoimprove/`).
 

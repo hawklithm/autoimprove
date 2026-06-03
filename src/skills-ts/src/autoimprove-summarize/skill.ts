@@ -36,8 +36,16 @@ async function run() {
     // Parse command line arguments
     const args = process.argv.slice(2);
     const useConsolidation = args.includes("--consolidate") || args.includes("-c");
+    const analyzeAll = args.includes("--all") || args.includes("-a");
+    const forceReanalyze = args.includes("--force");
     const minConfidenceArg = args.find((a, i) => args[i - 1] === "--min-confidence");
     const minConfidence = minConfidenceArg ? parseFloat(minConfidenceArg) : 0.85;
+
+    if (analyzeAll) {
+      // Batch analysis mode
+      await runBatchAnalysis(useConsolidation, forceReanalyze, minConfidence);
+      return;
+    }
 
     console.log("🔍 Analyzing session...\n");
 
@@ -47,6 +55,7 @@ async function run() {
     if (!sessionFile) {
       console.log("❌ Could not find session file");
       console.log("\n💡 Tip: Run this command after completing a coding session");
+      console.log("   Or use --all to analyze all unanalyzed sessions");
       return;
     }
 
@@ -58,7 +67,7 @@ async function run() {
     });
 
     if (!result.success) {
-      console.log(`❌ Analyed: ${result.error}`);
+      console.log(`❌ Analysis failed: ${result.error}`);
       return;
     }
 
@@ -71,15 +80,18 @@ async function run() {
       console.log("  • The session was exploratory (no corrections needed)");
       console.log("  • Patterns were too weak to generate rules");
       console.log("  • You're already following best practices!");
+
+      // Mark as analyzed even if no patterns found
+      await markSessionAsAnalyzed(sessionFile, 0, 0, useConsolidation, true);
       return;
     }
 
     // Show summary
-    console.log(`${patternsCount} pattern(s)\n`);
+    console.log(`✅ Found ${patternsCount} pattern(s)\n`);
 
     // If consolidation is enabled, use intelligent agent-based consolidation
     if (useConsolidation) {
-      await consolidateWithAgent(patterns, minConfidence);
+      await consolidateWithAgent(patterns, minConfidence, sessionFile);
       return;
     }
 
@@ -132,6 +144,9 @@ async function run() {
     const ruleIds = rulesResult.rule_ids || [];
     console.log(`✅ Generated ${ruleIds.length} rule(s)`);
 
+    // Mark session as analyzed
+    await markSessionAsAnalyzed(sessionFile, patternsCount, ruleIds.length, useConsolidation, true);
+
     if (ruleIds.length > 0) {
       console.log("\n📋 Rules created:");
       for (const rid of ruleIds) {
@@ -147,7 +162,7 @@ async function run() {
   }
 }
 
-async function consolidateWithAgent(patterns: Pattern[], minConfidence: number): Promise<void> {
+async function consolidateWithAgent(patterns: Pattern[], minConfidence: number, sessionFile?: string): Promise<void> {
   console.log("📥 Step 1: Preparing patterns for agent analysis...");
 
   // Save patterns to temporary file for agent to read
@@ -258,6 +273,11 @@ Output ONLY the JSON, no explanations.`;
   const ruleIds = rulesResult.rule_ids || [];
   console.log(`✅ Generated ${ruleIds.length} optimized rule(s)\n`);
 
+  // Mark session as analyzed if session file provided
+  if (sessionFile) {
+    await markSessionAsAnalyzed(sessionFile, patterns.length, ruleIds.length, true, true);
+  }
+
   if (ruleIds.length > 0) {
     console.log("📋 Rules created:");
     for (const rid of ruleIds) {
@@ -352,6 +372,210 @@ function detectSessionFile(): string | null {
     return sortedFiles[0] || null;
   } catch {
     return null;
+  }
+}
+
+function getAllSessionFiles(): string[] {
+  try {
+    const projectsDir = join(homedir(), ".claude", "projects");
+    const projectDirs = readdirSync(projectsDir)
+      .filter((d) => statSync(join(projectsDir, d)).isDirectory());
+
+    const allFiles: string[] = [];
+    for (const dir of projectDirs) {
+      const dirPath = join(projectsDir, dir);
+      const files = readdirSync(dirPath)
+        .filter((f) => f.endsWith(".jsonl"))
+        .map((f) => join(dirPath, f));
+      allFiles.push(...files);
+    }
+
+    return allFiles.sort((a, b) => statSync(b).mtimeMs - statSync(a).mtimeMs);
+  } catch {
+    return [];
+  }
+}
+
+function extractSessionId(sessionFilePath: string): string | null {
+  const match = sessionFilePath.match(/([a-f0-9-]{36})\.jsonl$/);
+  return match ? match[1] : null;
+}
+
+async function markSessionAsAnalyzed(
+  sessionFilePath: string,
+  patternsFound: number,
+  rulesGenerated: number,
+  isConsolidated: boolean,
+  success: boolean,
+  errorMessage?: string
+): Promise<void> {
+  const sessionId = extractSessionId(sessionFilePath);
+  if (!sessionId) {
+    console.warn(`⚠ Could not extract session ID from: ${sessionFilePath}`);
+    return;
+  }
+
+  try {
+    await callMCPTool("mark_session_analyzed", {
+      session_id: sessionId,
+      session_file_path: sessionFilePath,
+      patterns_found: patternsFound,
+      rules_generated: rulesGenerated,
+      analysis_mode: isConsolidated ? "consolidated" : "standard",
+      success,
+      error_message: errorMessage,
+    });
+  } catch (error: any) {
+    console.warn(`⚠ Failed to mark session as analyzed: ${error.message}`);
+  }
+}
+
+async function runBatchAnalysis(
+  useConsolidation: boolean,
+  forceReanalyze: boolean,
+  minConfidence: number
+): Promise<void> {
+  console.log("🔄 Batch Analysis Mode\n");
+  console.log("=====================================\n");
+
+  // Get all session files
+  const allSessions = getAllSessionFiles();
+  console.log(`📊 Found ${allSessions.length} total session(s)\n`);
+
+  if (allSessions.length === 0) {
+    console.log("No sessions found to analyze.");
+    return;
+  }
+
+  // Filter to unanalyzed sessions (unless force reanalyze)
+  let sessionsToAnalyze = allSessions;
+
+  if (!forceReanalyze) {
+    const unanalyzedResult = await callMCPTool<any>("list_unanalyzed_sessions", {
+      session_file_paths: allSessions,
+    });
+
+    if (unanalyzedResult.success) {
+      sessionsToAnalyze = unanalyzedResult.unanalyzed_sessions || [];
+      console.log(`✅ Already analyzed: ${unanalyzedResult.analyzed_count}`);
+      console.log(`🆕 To analyze: ${unanalyzedResult.unanalyzed_count}\n`);
+
+      if (sessionsToAnalyze.length === 0) {
+        console.log("✨ All sessions have been analyzed!");
+        console.log("\n💡 Use --force to re-analyze all sessions");
+        return;
+      }
+    } else {
+      console.warn(`⚠ Could not check analysis status, analyzing all sessions`);
+    }
+  } else {
+    console.log(`🔁 Force reanalyze mode: analyzing all ${allSessions.length} sessions\n`);
+  }
+
+  // Analyze each session
+  let totalPatterns = 0;
+  let totalRules = 0;
+  let successCount = 0;
+  let failCount = 0;
+
+  for (let i = 0; i < sessionsToAnalyze.length; i++) {
+    const sessionFile = sessionsToAnalyze[i];
+    const sessionId = extractSessionId(sessionFile);
+    const sessionName = sessionFile.split("/").pop() || sessionFile;
+
+    console.log(`\n[${i + 1}/${sessionsToAnalyze.length}] Analyzing: ${sessionName}`);
+    console.log("─".repeat(60));
+
+    try {
+      // Analyze session
+      const result = await callMCPTool<AnalyzeSessionResult>("analyze_session", {
+        session_file_path: sessionFile,
+      });
+
+      if (!result.success) {
+        console.log(`  ❌ Analysis failed: ${result.error}`);
+        await markSessionAsAnalyzed(sessionFile, 0, 0, useConsolidation, false, result.error);
+        failCount++;
+        continue;
+      }
+
+      const patterns = result.patterns || [];
+      const patternsCount = result.patterns_count || 0;
+
+      if (patternsCount === 0) {
+        console.log(`  ✨ No patterns detected (exploratory session)`);
+        await markSessionAsAnalyzed(sessionFile, 0, 0, useConsolidation, true);
+        successCount++;
+        continue;
+      }
+
+      console.log(`  📊 Found ${patternsCount} pattern(s)`);
+
+      // Apply consolidation if enabled
+      let finalPatterns = patterns;
+      if (useConsolidation) {
+        console.log(`  🧠 Applying intelligent consolidation...`);
+        const consolidated = await basicConsolidation(patterns, minConfidence);
+        finalPatterns = consolidated;
+        console.log(`  ✓ Consolidated to ${finalPatterns.length} pattern(s)`);
+      }
+
+      if (finalPatterns.length === 0) {
+        console.log(`  ⚠ No patterns meet quality threshold`);
+        await markSessionAsAnalyzed(sessionFile, patternsCount, 0, useConsolidation, true);
+        successCount++;
+        continue;
+      }
+
+      // Generate rules
+      const rulesResult = await callMCPTool<GenerateRulesResult>("generate_rules", {
+        patterns_json: JSON.stringify(finalPatterns),
+        scene_json: JSON.stringify({ tech: [], functional: [], business: [] }),
+      });
+
+      if (!rulesResult.success) {
+        console.log(`  ❌ Rule generation failed: ${rulesResult.error}`);
+        await markSessionAsAnalyzed(
+          sessionFile,
+          patternsCount,
+          0,
+          useConsolidation,
+          false,
+          rulesResult.error
+        );
+        failCount++;
+        continue;
+      }
+
+      const ruleIds = rulesResult.rule_ids || [];
+      console.log(`  ✅ Generated ${ruleIds.length} rule(s)`);
+
+      totalPatterns += patternsCount;
+      totalRules += ruleIds.length;
+      successCount++;
+
+      await markSessionAsAnalyzed(sessionFile, patternsCount, ruleIds.length, useConsolidation, true);
+    } catch (error: any) {
+      console.log(`  ❌ Error: ${error.message}`);
+      await markSessionAsAnalyzed(sessionFile, 0, 0, useConsolidation, false, error.message);
+      failCount++;
+    }
+  }
+
+  // Summary
+  console.log("\n");
+  console.log("═".repeat(60));
+  console.log("📊 Batch Analysis Summary");
+  console.log("═".repeat(60));
+  console.log(`Total sessions processed: ${sessionsToAnalyze.length}`);
+  console.log(`✅ Successful: ${successCount}`);
+  console.log(`❌ Failed: ${failCount}`);
+  console.log(`📈 Total patterns detected: ${totalPatterns}`);
+  console.log(`📝 Total rules generated: ${totalRules}`);
+  console.log();
+
+  if (successCount > 0) {
+    console.log("💡 Next step: Run `/autoimprove-rules` to review and activate the rules");
   }
 }
 

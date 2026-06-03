@@ -18,6 +18,7 @@ import { initStorage, getStorageInfo, loadConfig } from "./storage/init.js";
 import { RuleIndexManager } from "./storage/rule-index.js";
 import { RuleContentManager } from "./storage/rule-content.js";
 import { RuleVersionControl } from "./storage/rule-version.js";
+import { SessionAnalysisTracker } from "./storage/session-analysis-tracker.js";
 import { SessionAnalyzer } from "./core/session-analyzer.js";
 import { RuleGenerator } from "./core/rule-generator.js";
 import { RuleMatcher } from "./core/rule-matcher.js";
@@ -35,6 +36,7 @@ import { existsSync } from "fs";
 let indexManager: RuleIndexManager;
 let contentManager: RuleContentManager;
 let versionControl: RuleVersionControl;
+let analysisTracker: SessionAnalysisTracker;
 let analyzer: SessionAnalyzer;
 let generator: RuleGenerator;
 let matcher: RuleMatcher;
@@ -52,6 +54,7 @@ function ensureInitialized() {
     indexManager = new RuleIndexManager();
     contentManager = new RuleContentManager();
     versionControl = new RuleVersionControl();
+    analysisTracker = new SessionAnalysisTracker();
     analyzer = new SessionAnalyzer();
     generator = new RuleGenerator();
     matcher = new RuleMatcher(indexManager, config.rule_matching.max_results, config.rule_matching.min_confidence);
@@ -324,6 +327,91 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
           },
         },
       },
+      {
+        name: "mark_session_analyzed",
+        description: "Mark a session as analyzed to avoid redundant processing",
+        inputSchema: {
+          type: "object",
+          properties: {
+            session_id: {
+              type: "string",
+              description: "Session ID (UUID from filename)",
+            },
+            session_file_path: {
+              type: "string",
+              description: "Full path to session file",
+            },
+            patterns_found: {
+              type: "number",
+              description: "Number of patterns found",
+            },
+            rules_generated: {
+              type: "number",
+              description: "Number of rules generated",
+            },
+            analysis_mode: {
+              type: "string",
+              description: "Analysis mode: 'standard' or 'consolidated'",
+            },
+            success: {
+              type: "boolean",
+              description: "Whether analysis was successful",
+            },
+            error_message: {
+              type: "string",
+              description: "Error message if analysis failed",
+            },
+          },
+          required: ["session_id", "session_file_path"],
+        },
+      },
+      {
+        name: "get_analysis_status",
+        description: "Get analysis status for a session or overall statistics",
+        inputSchema: {
+          type: "object",
+          properties: {
+            session_id: {
+              type: "string",
+              description: "Optional session ID. If omitted, returns overall statistics",
+            },
+          },
+        },
+      },
+      {
+        name: "list_unanalyzed_sessions",
+        description: "Filter a list of session files to find which ones haven't been analyzed yet",
+        inputSchema: {
+          type: "object",
+          properties: {
+            session_file_paths: {
+              type: "array",
+              items: {
+                type: "string",
+              },
+              description: "Array of session file paths to check",
+            },
+          },
+          required: ["session_file_paths"],
+        },
+      },
+      {
+        name: "clear_analysis_record",
+        description: "Clear analysis record for a session or all sessions (for re-analysis)",
+        inputSchema: {
+          type: "object",
+          properties: {
+            session_id: {
+              type: "string",
+              description: "Session ID to clear (mutually exclusive with clear_all)",
+            },
+            clear_all: {
+              type: "boolean",
+              description: "Clear all analysis records (mutually exclusive with session_id)",
+            },
+          },
+        },
+      },
     ],
   };
 });
@@ -377,6 +465,18 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
       case "detect_scene_enhanced":
         return await handleDetectSceneEnhanced(request.params.arguments);
+
+      case "mark_session_analyzed":
+        return await handleMarkSessionAnalyzed(request.params.arguments);
+
+      case "get_analysis_status":
+        return await handleGetAnalysisStatus(request.params.arguments);
+
+      case "list_unanalyzed_sessions":
+        return await handleListUnanalyzedSessions(request.params.arguments);
+
+      case "clear_analysis_record":
+        return await handleClearAnalysisRecord(request.params.arguments);
 
       default:
         throw new Error(`Unknown tool: ${request.params.name}`);
@@ -1044,6 +1144,211 @@ async function handleDetectSceneEnhanced(args: any) {
       },
     ],
   };
+}
+
+async function handleMarkSessionAnalyzed(args: any) {
+  const sessionId = args.session_id as string;
+  const sessionFilePath = args.session_file_path as string;
+  const patternsFound = args.patterns_found as number;
+  const rulesGenerated = args.rules_generated as number;
+  const analysisMode = (args.analysis_mode as "standard" | "consolidated") || "standard";
+  const success = args.success !== false;
+  const errorMessage = args.error_message as string | undefined;
+
+  if (!sessionId || !sessionFilePath) {
+    return {
+      content: [
+        {
+          type: "text",
+          text: JSON.stringify({
+            success: false,
+            error: "session_id and session_file_path are required",
+          }),
+        },
+      ],
+    };
+  }
+
+  analysisTracker.markAnalyzed({
+    session_id: sessionId,
+    session_file_path: sessionFilePath,
+    analyzed_at: new Date().toISOString(),
+    patterns_found: patternsFound || 0,
+    rules_generated: rulesGenerated || 0,
+    analysis_mode: analysisMode,
+    success,
+    error_message: errorMessage,
+  });
+
+  logger.info("session-analysis", `Marked session ${sessionId} as analyzed`, {
+    patterns: patternsFound,
+    rules: rulesGenerated,
+    mode: analysisMode,
+  });
+
+  return {
+    content: [
+      {
+        type: "text",
+        text: JSON.stringify({
+          success: true,
+          session_id: sessionId,
+          marked_at: new Date().toISOString(),
+        }),
+      },
+    ],
+  };
+}
+
+async function handleGetAnalysisStatus(args: any) {
+  const sessionId = args.session_id as string | undefined;
+
+  if (sessionId) {
+    // Get status for specific session
+    const record = analysisTracker.getRecord(sessionId);
+    const isAnalyzed = analysisTracker.isAnalyzed(sessionId);
+
+    return {
+      content: [
+        {
+          type: "text",
+          text: JSON.stringify({
+            success: true,
+            session_id: sessionId,
+            is_analyzed: isAnalyzed,
+            record: record || null,
+          }),
+        },
+      ],
+    };
+  } else {
+    // Get overall statistics
+    const stats = analysisTracker.getStats();
+
+    return {
+      content: [
+        {
+          type: "text",
+          text: JSON.stringify({
+            success: true,
+            stats,
+          }),
+        },
+      ],
+    };
+  }
+}
+
+async function handleListUnanalyzedSessions(args: any) {
+  const sessionFilePaths = args.session_file_paths as string[];
+
+  if (!sessionFilePaths || !Array.isArray(sessionFilePaths)) {
+    return {
+      content: [
+        {
+          type: "text",
+          text: JSON.stringify({
+            success: false,
+            error: "session_file_paths array is required",
+          }),
+        },
+      ],
+    };
+  }
+
+  // Extract session IDs from file paths
+  const sessionIds = sessionFilePaths.map((path) => {
+    const match = path.match(/([a-f0-9-]{36})\.jsonl$/);
+    return match ? match[1] : null;
+  }).filter((id): id is string => id !== null);
+
+  const unanalyzedIds = analysisTracker.filterUnanalyzed(sessionIds);
+
+  // Map back to full paths
+  const unanalyzedPaths = sessionFilePaths.filter((path) => {
+    const match = path.match(/([a-f0-9-]{36})\.jsonl$/);
+    return match && unanalyzedIds.includes(match[1]);
+  });
+
+  return {
+    content: [
+      {
+        type: "text",
+        text: JSON.stringify({
+          success: true,
+          total_sessions: sessionFilePaths.length,
+          analyzed_count: sessionFilePaths.length - unanalyzedPaths.length,
+          unanalyzed_count: unanalyzedPaths.length,
+          unanalyzed_sessions: unanalyzedPaths,
+        }),
+      },
+    ],
+  };
+}
+
+async function handleClearAnalysisRecord(args: any) {
+  const sessionId = args.session_id as string | undefined;
+  const clearAll = args.clear_all === true;
+
+  if (clearAll) {
+    analysisTracker.clearAll();
+    logger.info("session-analysis", "Cleared all analysis records");
+
+    return {
+      content: [
+        {
+          type: "text",
+          text: JSON.stringify({
+            success: true,
+            message: "All analysis records cleared",
+          }),
+        },
+      ],
+    };
+  } else if (sessionId) {
+    const cleared = analysisTracker.clearRecord(sessionId);
+
+    if (cleared) {
+      logger.info("session-analysis", `Cleared analysis record for session ${sessionId}`);
+
+      return {
+        content: [
+          {
+            type: "text",
+            text: JSON.stringify({
+              success: true,
+              session_id: sessionId,
+              message: "Analysis record cleared",
+            }),
+          },
+        ],
+      };
+    } else {
+      return {
+        content: [
+          {
+            type: "text",
+            text: JSON.stringify({
+              success: false,
+              error: `No analysis record found for session ${sessionId}`,
+            }),
+          },
+        ],
+      };
+    }
+  } else {
+    return {
+      content: [
+        {
+          type: "text",
+          text: JSON.stringify({
+            success: false,
+            error: "Either session_id or clear_all=true is required",
+          }),
+        },
+      ],
+    };
+  }
 }
 
 // ============================================================================
