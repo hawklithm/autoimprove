@@ -17,9 +17,14 @@ import {
 import { initStorage, getStorageInfo, loadConfig } from "./storage/init.js";
 import { RuleIndexManager } from "./storage/rule-index.js";
 import { RuleContentManager } from "./storage/rule-content.js";
+import { RuleVersionControl } from "./storage/rule-version.js";
 import { SessionAnalyzer } from "./core/session-analyzer.js";
 import { RuleGenerator } from "./core/rule-generator.js";
 import { RuleMatcher } from "./core/rule-matcher.js";
+import { RuleQualityController } from "./core/rule-quality.js";
+import { AdaptiveConfidenceCalculator } from "./core/adaptive-confidence.js";
+import { EnhancedSceneDetector } from "./core/enhanced-scene-detector.js";
+import { logger } from "./core/logger.js";
 import { createScene, PatternType } from "./core/models.js";
 import { existsSync } from "fs";
 
@@ -29,9 +34,13 @@ import { existsSync } from "fs";
 
 let indexManager: RuleIndexManager;
 let contentManager: RuleContentManager;
+let versionControl: RuleVersionControl;
 let analyzer: SessionAnalyzer;
 let generator: RuleGenerator;
 let matcher: RuleMatcher;
+let qualityController: RuleQualityController;
+let adaptiveConfidence: AdaptiveConfidenceCalculator;
+let sceneDetector: EnhancedSceneDetector;
 
 function ensureInitialized() {
   if (!indexManager) {
@@ -42,9 +51,15 @@ function ensureInitialized() {
 
     indexManager = new RuleIndexManager();
     contentManager = new RuleContentManager();
+    versionControl = new RuleVersionControl();
     analyzer = new SessionAnalyzer();
     generator = new RuleGenerator();
     matcher = new RuleMatcher(indexManager, config.rule_matching.max_results, config.rule_matching.min_confidence);
+    qualityController = new RuleQualityController();
+    adaptiveConfidence = new AdaptiveConfidenceCalculator();
+    sceneDetector = new EnhancedSceneDetector();
+
+    logger.info("server", "AutoImprove MCP Server initialized");
   }
 }
 
@@ -188,6 +203,127 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
           properties: {},
         },
       },
+      {
+        name: "assess_rule_quality",
+        description: "Assess the quality of a rule (clarity, specificity, actionability)",
+        inputSchema: {
+          type: "object",
+          properties: {
+            rule_id: {
+              type: "string",
+              description: "ID of rule to assess",
+            },
+          },
+          required: ["rule_id"],
+        },
+      },
+      {
+        name: "detect_rule_conflicts",
+        description: "Detect conflicts between a new rule and existing rules",
+        inputSchema: {
+          type: "object",
+          properties: {
+            rule_id: {
+              type: "string",
+              description: "ID of rule to check for conflicts",
+            },
+          },
+          required: ["rule_id"],
+        },
+      },
+      {
+        name: "get_rule_version_history",
+        description: "Get version history for a rule",
+        inputSchema: {
+          type: "object",
+          properties: {
+            rule_id: {
+              type: "string",
+              description: "ID of rule",
+            },
+          },
+          required: ["rule_id"],
+        },
+      },
+      {
+        name: "rollback_rule",
+        description: "Rollback a rule to a previous version",
+        inputSchema: {
+          type: "object",
+          properties: {
+            rule_id: {
+              type: "string",
+              description: "ID of rule",
+            },
+            version: {
+              type: "number",
+              description: "Version number to rollback to",
+            },
+          },
+          required: ["rule_id", "version"],
+        },
+      },
+      {
+        name: "record_feedback",
+        description: "Record feedback for a rule (used, ignored, corrected, disabled)",
+        inputSchema: {
+          type: "object",
+          properties: {
+            rule_id: {
+              type: "string",
+              description: "ID of rule",
+            },
+            feedback_type: {
+              type: "string",
+              enum: ["used", "ignored", "corrected", "disabled"],
+              description: "Type of feedback",
+            },
+            user_rating: {
+              type: "number",
+              description: "Optional user rating (1-5)",
+            },
+            context: {
+              type: "string",
+              description: "Optional context information",
+            },
+          },
+          required: ["rule_id", "feedback_type"],
+        },
+      },
+      {
+        name: "get_feedback_stats",
+        description: "Get feedback statistics for a rule or all rules",
+        inputSchema: {
+          type: "object",
+          properties: {
+            rule_id: {
+              type: "string",
+              description: "Optional rule ID. If omitted, returns stats for all rules",
+            },
+          },
+        },
+      },
+      {
+        name: "detect_scene_enhanced",
+        description: "Detect scene with enhanced multi-dimensional analysis",
+        inputSchema: {
+          type: "object",
+          properties: {
+            user_input: {
+              type: "string",
+              description: "User input text",
+            },
+            file_paths: {
+              type: "string",
+              description: "Comma-separated file paths",
+            },
+            project_root: {
+              type: "string",
+              description: "Project root directory",
+            },
+          },
+        },
+      },
     ],
   };
 });
@@ -220,6 +356,27 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
       case "health_check":
         return await handleHealthCheck();
+
+      case "assess_rule_quality":
+        return await handleAssessRuleQuality(request.params.arguments);
+
+      case "detect_rule_conflicts":
+        return await handleDetectRuleConflicts(request.params.arguments);
+
+      case "get_rule_version_history":
+        return await handleGetRuleVersionHistory(request.params.arguments);
+
+      case "rollback_rule":
+        return await handleRollbackRule(request.params.arguments);
+
+      case "record_feedback":
+        return await handleRecordFeedback(request.params.arguments);
+
+      case "get_feedback_stats":
+        return await handleGetFeedbackStats(request.params.arguments);
+
+      case "detect_scene_enhanced":
+        return await handleDetectSceneEnhanced(request.params.arguments);
 
       default:
         throw new Error(`Unknown tool: ${request.params.name}`);
@@ -615,6 +772,274 @@ async function handleCacheStats() {
         text: JSON.stringify({
           success: true,
           cache: stats,
+        }),
+      },
+    ],
+  };
+}
+
+async function handleAssessRuleQuality(args: any) {
+  const ruleId = args.rule_id as string;
+
+  const rule = indexManager.getRule(ruleId);
+  if (!rule) {
+    return {
+      content: [
+        {
+          type: "text",
+          text: JSON.stringify({
+            success: false,
+            error: `Rule not found: ${ruleId}`,
+          }),
+        },
+      ],
+    };
+  }
+
+  const content = contentManager.loadContent(ruleId);
+  if (!content) {
+    return {
+      content: [
+        {
+          type: "text",
+          text: JSON.stringify({
+            success: false,
+            error: `Rule content: ${ruleId}`,
+          }),
+        },
+      ],
+    };
+  }
+
+  const qualityScore = qualityController.assessQuality(content, rule);
+  logger.logQualityAssessment(ruleId, qualityScore.overall, qualityScore.issues);
+
+  return {
+    content: [
+      {
+        type: "text",
+        text: JSON.stringify({
+          success: true,
+          rule_id: ruleId,
+          quality: qualityScore,
+        }),
+      },
+    ],
+  };
+}
+
+async function handleDetectRuleConflicts(args: any) {
+  const ruleId = args.rule_id as string;
+
+  const rule = indexManager.getRule(ruleId);
+  if (!rule) {
+    return {
+      content: [
+        {
+          type: "text",
+          text: JSON.stringify({
+            success: false,
+            error: `Rule not found: ${ruleId}`,
+          }),
+        },
+      ],
+    };
+  }
+
+  const content = contentManager.loadContent(ruleId);
+  if (!content) {
+    return {
+      content: [
+        {
+          type: "text",
+          text: JSON.stringify({
+            success: false,
+            error: `Rule content not found: ${ruleId}`,
+          }),
+        },
+      ],
+    };
+  }
+
+  // Get all existing rules
+  const allRules = indexManager.listRules();
+  const existingRules = allRules
+    .filter((r) => r.id !== ruleId)
+    .map((r) => ({
+      index: r,
+      content: contentManager.loadContent(r.id)!,
+    }))
+    .filter((r) => r.content !== null);
+
+  const conflicts = qualityController.detectConflicts(content, existingRules);
+  const maxSeverity = conflicts.length > 0 ? conflicts[0].severity : "none";
+  logger.logConflictDetection(ruleId, conflicts.length, maxSeverity);
+
+  return {
+    content: [
+      {
+        type: "text",
+        text: JSON.stringify({
+          success: true,
+          rule_id: ruleId,
+          conflicts_count: conflicts.length,
+          conflicts: conflicts,
+        }),
+      },
+    ],
+  };
+}
+
+async function handleGetRuleVersionHistory(args: any) {
+  const ruleId = args.rule_id as string;
+
+  const versions = versionControl.getVersionHistory(ruleId);
+
+  return {
+    content: [
+      {
+        type: "text",
+        text: JSON.stringify({
+          success: true,
+          rule_id: ruleId,
+          versions_count: versions.length,
+          versions: versions,
+        }),
+      },
+    ],
+  };
+}
+
+async function handleRollbackRule(args: any) {
+  const ruleId = args.rule_id as string;
+  const version = args.version as number;
+
+  try {
+    const newVersion = versionControl.rollback(ruleId, version);
+
+    if (newVersion) {
+      // Update the index and content with rolled back version
+      const rule = indexManager.getRule(ruleId);
+      if (rule) {
+        indexManager.updateRule(ruleId, {
+          confidence: newVersion.content.metadata.confidence,
+        });
+        contentManager.saveContent(newVersion.content);
+      }
+
+      logger.info("version-control", `Rolled back rule ${ruleId} to version ${version}`);
+    }
+
+    return {
+      content: [
+        {
+          type: "text",
+          text: JSON.stringify({
+            success: true,
+            rule_id: ruleId,
+            rolled_back_to: version,
+            new_version: newVersion?.version,
+          }),
+        },
+      ],
+    };
+  } catch (error: any) {
+    logger.error("version-control", `Failed to rollback rule ${ruleId}`, error);
+    return {
+      content: [
+        {
+          type: "text",
+          text: JSON.stringify({
+            success: false,
+            error: error.message,
+          }),
+        },
+      ],
+    };
+  }
+}
+
+async function handleRecordFeedback(args: any) {
+  const ruleId = args.rule_id as string;
+  const feedbackType = args.feedback_type as "used" | "ignored" | "corrected" | "disabled";
+  const userRating = args.user_rating as number | undefined;
+  const context = args.context as string | undefined;
+
+  const feedback = {
+    rule_id: ruleId,
+    timestamp: new Date().toISOString(),
+    feedback_type: feedbackType,
+    user_rating: userRating,
+    context: context,
+  };
+
+  adaptiveConfidence.recordFeedback(feedback);
+  logger.info("feedback", `Recorded ${feedbackType} feedback for rule ${ruleId}`, {
+    rating: userRating,
+  });
+
+  return {
+    content: [
+      {
+        type: "text",
+        text: JSON.stringify({
+          success: true,
+          feedback: feedback,
+        }),
+      },
+    ],
+  };
+}
+
+async function handleGetFeedbackStats(args: any) {
+  const ruleId = args.rule_id as string | undefined;
+
+  const stats = adaptiveConfidence.getFeedbackStats(ruleId);
+
+  return {
+    content: [
+      {
+        type: "text",
+        text: JSON.stringify({
+          success: true,
+          rule_id: ruleId || "all",
+          stats: stats,
+        }),
+      },
+    ],
+  };
+}
+
+async function handleDetectSceneEnhanced(args: any) {
+  const userInput = args.user_input as string | undefined;
+  const filePaths = args.file_paths as string | undefined;
+  const projectRoot = args.project_root as string | undefined;
+
+  const context = {
+    userInput,
+    filePaths: filePaths ? filePaths.split(",").map((p) => p.trim()) : undefined,
+    projectRoot,
+  };
+
+  const sceneWeights = sceneDetector.detectMultiScenes(context);
+
+  logger.info("scene-detection", `Detected ${sceneWeights.length} scenes`, {
+    top_scene: sceneWeights[0]
+      ? `${sceneWeights[0].scene.tech.join(",")}/${sceneWeights[0].scene.functional.join(",")}`
+      : "none",
+  });
+
+  return {
+    content: [
+      {
+        type: "text",
+        text: JSON.stringify({
+          success: true,
+          scenes: sceneWeights.map((sw) => ({
+            scene: sw.scene,
+            weight: sw.weight,
+            reasons: sw.reasons,
+          })),
         }),
       },
     ],
