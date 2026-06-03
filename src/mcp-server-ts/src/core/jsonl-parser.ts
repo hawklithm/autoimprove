@@ -71,7 +71,20 @@ export class JSONLParser {
     toolCalls: ToolCall[],
     metadata: Record<string, any>
   ): void {
-    // Extract message
+    // Handle Claude Code format: {type: "user"|"assistant", message: {role, content}}
+    if ((data.type === "user" || data.type === "assistant") && data.message) {
+      const msgData = data.message;
+      const message: Message = {
+        role: msgData.role || data.type,
+        content: this.extractContent(msgData),
+        timestamp: data.timestamp,
+        line_number: lineNum
+      };
+      messages.push(message);
+      return;
+    }
+
+    // Extract message (legacy format)
     if (data.type === "message" || data.role) {
       const message: Message = {
         role: data.role || "assistant",
@@ -82,7 +95,22 @@ export class JSONLParser {
       messages.push(message);
     }
 
-    // Extract tool calls
+    // Extract tool calls from tool_use content blocks in assistant messages
+    if (data.message && data.message.content && Array.isArray(data.message.content)) {
+      for (const block of data.message.content) {
+        if (block.type === "tool_use") {
+          const toolCall: ToolCall = {
+            tool_name: block.name || "unknown",
+            input: block.input || {},
+            timestamp: data.timestamp,
+            line_number: lineNum
+          };
+          toolCalls.push(toolCall);
+        }
+      }
+    }
+
+    // Extract tool calls (legacy format)
     if (data.type === "tool_use" || data.tool_name) {
       const toolCall: ToolCall = {
         tool_name: data.tool_name || data.name || "unknown",

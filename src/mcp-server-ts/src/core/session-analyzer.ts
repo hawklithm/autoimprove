@@ -2,24 +2,69 @@
  * Session analyzer for AutoImprove.
  *
  * Analyzes Claude Code sessions and detects patterns.
+ * Supports incremental analysis for performance.
  */
 
 import { JSONLParser, SessionData, Message } from "./jsonl-parser.js";
 import { Pattern, PatternType, PatternOccurrence, createPattern } from "./models.js";
 import { ConfidenceCalculator } from "./confidence.js";
+import { SessionCacheManager } from "../storage/session-cache.js";
+import { statSync } from "fs";
 
 export class SessionAnalyzer {
   private parser: JSONLParser;
   private confidenceCalc: ConfidenceCalculator;
+  private cacheManager: SessionCacheManager;
 
   constructor() {
     this.parser = new JSONLParser();
     this.confidenceCalc = new ConfidenceCalculator();
+    this.cacheManager = new SessionCacheManager();
   }
 
-  analyzeSession(sessionFile: string): Pattern[] {
+  /**
+   * Analyze session file with incremental support
+   * @param sessionFile Path to session JSONL file
+   * @param options Analysis options
+   */
+  analyzeSession(
+    sessionFile: string,
+    options: { incremental?: boolean; forceReanalyze?: boolean } = {}
+  ): Pattern[] {
+    const { incremental = true, forceReanalyze = false } = options;
+
     // Parse session
     const sessionData = this.parser.parseFile(sessionFile);
+    const sessionId = sessionData.session_id;
+
+    // Check if we can use cached results
+    if (incremental && !forceReanalyze) {
+      const hasChanged = this.cacheManager.hasSessionChanged(sessionFile, sessionId);
+
+      if (!hasChanged) {
+        // No changes, return cached patterns
+        const cached = this.cacheManager.getCached(sessionId);
+        if (cached) {
+          console.error(`Using cached analysis for session ${sessionId}`);
+          return cached.cached_patterns;
+        }
+      }
+
+      // Incremental analysis: only analyze new content
+      if (this.cacheManager.hasAnalyzed(sessionId) && hasChanged) {
+        return this.performIncrementalAnalysis(sessionFile, sessionData);
+      }
+    }
+
+    // Full analysis
+    return this.performFullAnalysis(sessionFile, sessionData);
+  }
+
+  /**
+   * Perform full analysis on entire session
+   */
+  private performFullAnalysis(sessionFile: string, sessionData: SessionData): Pattern[] {
+    console.error(`Performing full analysis for session ${sessionData.session_id}`);
 
     // Detect all pattern types
     const patterns: Pattern[] = [
@@ -35,7 +80,83 @@ export class SessionAnalyzer {
       pattern.confidence = this.confidenceCalc.calculateConfidence(pattern);
     }
 
+    // Cache results
+    const stats = statSync(sessionFile);
+    const totalLines = sessionData.messages.length + sessionData.tool_calls.length;
+    this.cacheManager.saveAnalysis(
+      sessionData.session_id,
+      sessionFile,
+      totalLines,
+      stats.size,
+      patterns
+    );
+
     return patterns;
+  }
+
+  /**
+   * Perform incremental analysis on new content only
+   */
+  private performIncrementalAnalysis(sessionFile: string, sessionData: SessionData): Pattern[] {
+    const sessionId = sessionData.session_id;
+    const resumePoint = this.cacheManager.getResumePoint(sessionId);
+
+    console.error(`Performing incremental analysis for session ${sessionId} from line ${resumePoint}`);
+
+    // Filter to only new messages and tool calls
+    const newMessages = sessionData.messages.filter(m => m.line_number > resumePoint);
+    const newToolCalls = sessionData.tool_calls.filter(tc => tc.line_number > resumePoint);
+
+    // Create partial session data
+    const partialSessionData: SessionData = {
+      ...sessionData,
+      messages: newMessages,
+      tool_calls: newToolCalls,
+    };
+
+    // Detect patterns in new content only
+    const newPatterns: Pattern[] = [
+      ...this.detectRepeatedCorrections(partialSessionData),
+      ...this.detectAntiPatterns(partialSessionData),
+      ...this.detectPreferences(partialSessionData),
+      ...this.detectPerformancePatterns(partialSessionData),
+      ...this.detectSecurityPatterns(partialSessionData)
+    ];
+
+    // Calculate confidence
+    for (const pattern of newPatterns) {
+      pattern.confidence = this.confidenceCalc.calculateConfidence(pattern);
+    }
+
+    // Merge with cached patterns
+    const mergedPatterns = this.cacheManager.mergePatterns(sessionId, newPatterns);
+
+    // Update cache
+    const stats = statSync(sessionFile);
+    const totalLines = sessionData.messages.length + sessionData.tool_calls.length;
+    this.cacheManager.saveAnalysis(
+      sessionId,
+      sessionFile,
+      totalLines,
+      stats.size,
+      mergedPatterns
+    );
+
+    return mergedPatterns;
+  }
+
+  /**
+   * Clear cache for a specific session
+   */
+  clearCache(sessionId: string): void {
+    this.cacheManager.clearSession(sessionId);
+  }
+
+  /**
+   * Get cache statistics
+   */
+  getCacheStats() {
+    return this.cacheManager.getStats();
   }
 
   private detectRepeatedCorrections(sessionData: SessionData): Pattern[] {

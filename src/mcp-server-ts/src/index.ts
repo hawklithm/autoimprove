@@ -74,13 +74,21 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
     tools: [
       {
         name: "analyze_session",
-        description: "Analyze a Claude Code session file and detect patterns",
+        description: "Analyze a Claude Code session file and detect patterns. Supports incremental analysis.",
         inputSchema: {
           type: "object",
           properties: {
             session_file_path: {
               type: "string",
               description: "Path to session JSONL file",
+            },
+            incremental: {
+              type: "boolean",
+              description: "Use incremental analysis (only analyze new content since last run). Default: true",
+            },
+            force_reanalyze: {
+              type: "boolean",
+              description: "Force full reanalysis even if cached. Default: false",
             },
           },
           required: ["session_file_path"],
@@ -120,7 +128,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
             },
             rule_id: {
               type: "string",
-              description: "Optional specific rule ID",
+              description: "Optional ule ID",
             },
           },
         },
@@ -146,6 +154,27 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
       {
         name: "list_scenes",
         description: "List all known scenes from rules and sessions",
+        inputSchema: {
+          type: "object",
+          properties: {},
+        },
+      },
+      {
+        name: "clear_cache",
+        description: "Clear analysis cache for a session or all sessions",
+        inputSchema: {
+          type: "object",
+          properties: {
+            session_id: {
+              type: "string",
+              description: "Optional session ID to clear. If omitted, clears all cache.",
+            },
+          },
+        },
+      },
+      {
+        name: "cache_stats",
+        description: "Get cache statistics and health info",
         inputSchema: {
           type: "object",
           properties: {},
@@ -182,6 +211,12 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
       case "list_scenes":
         return await handleListScenes();
+
+      case "clear_cache":
+        return await handleClearCache(request.params.arguments);
+
+      case "cache_stats":
+        return await handleCacheStats();
 
       case "health_check":
         return await handleHealthCheck();
@@ -225,7 +260,10 @@ async function handleAnalyzeSession(args: any) {
     };
   }
 
-  const patterns = analyzer.analyzeSession(sessionFilePath);
+  const patterns = analyzer.analyzeSession(sessionFilePath, {
+    incremental: args.incremental !== false,
+    forceReanalyze: args.force_reanalyze === true,
+  });
   const patternsData = patterns.map((p) => ({
     type: p.type,
     description: p.description,
@@ -249,6 +287,7 @@ async function handleAnalyzeSession(args: any) {
           session_id: sessionId,
           patterns_count: patterns.length,
           patterns: patternsData,
+          analysis_mode: args.force_reanalyze ? "full" : args.incremental !== false ? "incremental" : "full",
         }),
       },
     ],
@@ -259,7 +298,52 @@ async function handleGenerateRules(args: any) {
   const patternsJson = args.patterns_json as string;
   const sceneJson = args.scene_json as string | undefined;
 
-  const patternsData = JSON.parse(patternsJson);
+  // Validate input
+  if (!patternsJson || patternsJson === "undefined") {
+    return {
+      content: [
+        {
+          type: "text",
+          text: JSON.stringify({
+            success: false,
+            error: "patterns_json is required and cannot be undefined",
+          }),
+        },
+      ],
+    };
+  }
+
+  let patternsData;
+  try {
+    patternsData = JSON.parse(patternsJson);
+  } catch (error: any) {
+    return {
+      content: [
+        {
+          type: "text",
+          text: JSON.stringify({
+            success: false,
+            error: `Invalid patterns_json: ${error.message}`,
+          }),
+        },
+      ],
+    };
+  }
+
+  if (!Array.isArray(patternsData)) {
+    return {
+      content: [
+        {
+          type: "text",
+          text: JSON.stringify({
+            success: false,
+            error: "patterns_json must be an array",
+          }),
+        },
+      ],
+    };
+  }
+
   const patterns = patternsData.map((p: any) => ({
     type: p.type as PatternType,
     description: p.description,
@@ -476,6 +560,61 @@ async function handleHealthCheck() {
           success: true,
           status: "healthy",
           storage: storageInfo,
+        }),
+      },
+    ],
+  };
+}
+
+async function handleClearCache(args: any) {
+  const sessionId = args.session_id as string | undefined;
+
+  if (sessionId) {
+    analyzer.clearCache(sessionId);
+    return {
+      content: [
+        {
+          type: "text",
+          text: JSON.stringify({
+            success: true,
+            message: `Cache cleared for session ${sessionId}`,
+          }),
+        },
+      ],
+    };
+  } else {
+    // Clear all cache - need to access cache manager through analyzer
+    const stats = analyzer.getCacheStats();
+    const count = stats.total_sessions;
+
+    // Clear by recreating the cache manager
+    analyzer.clearCache("_all_");
+
+    return {
+      content: [
+        {
+          type: "text",
+          text: JSON.stringify({
+            success: true,
+            message: `Cleared cache for ${count} session(s)`,
+            cleared_count: count,
+          }),
+        },
+      ],
+    };
+  }
+}
+
+async function handleCacheStats() {
+  const stats = analyzer.getCacheStats();
+
+  return {
+    content: [
+      {
+        type: "text",
+        text: JSON.stringify({
+          success: true,
+          cache: stats,
         }),
       },
     ],

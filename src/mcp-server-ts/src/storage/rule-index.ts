@@ -4,7 +4,7 @@
  * Manages the lightweight index file (rules/index.json) for fast rule loading.
  */
 
-import { readFileSync, writeFileSync, existsSync, mkdirSync } from "fs";
+import { readFileSync, writeFileSync, existsSync, mkdirSync, renameSync } from "fs";
 import { join } from "path";
 import { homedir } from "os";
 import { RuleIndex, RuleIndexEntry, createRuleIndex } from "../core/models.js";
@@ -52,8 +52,7 @@ export class RuleIndexManager {
     writeFileSync(tempPath, JSON.stringify(index, null, 2));
 
     // Atomic rename
-    const fs = require("fs");
-    fs.renameSync(tempPath, indexPath);
+    renameSync(tempPath, indexPath);
   }
 
   addRule(entry: RuleIndexEntry): void {

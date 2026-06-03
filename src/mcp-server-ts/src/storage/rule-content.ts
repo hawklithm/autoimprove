@@ -4,7 +4,7 @@
  * Manages individual rule content files (rules/content/rule-{id}.md).
  */
 
-import { readFileSync, writeFileSync, unlinkSync, existsSync, mkdirSync } from "fs";
+import { readFileSync, writeFileSync, unlinkSync, existsSync, mkdirSync, renameSync } from "fs";
 import { join } from "path";
 import { homedir } from "os";
 import { RuleContent } from "../core/models.js";
@@ -132,8 +132,7 @@ export class RuleContentManager {
     writeFileSync(tempPath, markdown);
 
     // Atomic rename
-    const fs = require("fs");
-    fs.renameSync(tempPath, path);
+    renameSync(tempPath, path);
   }
 
   deleteContent(ruleId: string): boolean {

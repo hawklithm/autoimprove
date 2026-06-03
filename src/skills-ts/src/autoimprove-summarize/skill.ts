@@ -96,6 +96,15 @@ async function run() {
     // Generate rules
     console.log("🎯 Generating rules...\n");
 
+    // Debug: check patterns before sending
+    if (!patterns || patterns.length === 0) {
+      console.log("⚠️  No patterns to generate rules from");
+      return;
+    }
+
+    console.error(`[DEBUG] Patterns count: ${patterns.length}`);
+    console.error(`[DEBUG] First pattern:`, JSON.stringify(patterns[0], null, 2));
+
     const rulesResult = await callMCPTool<GenerateRulesResult>("generate_rules", {
       patterns_json: JSON.stringify(patterns),
       scene_json: JSON.stringify({ tech: [], functional: [], business: [] }),
@@ -126,16 +135,40 @@ async function run() {
 
 function detectSessionFile(): string | null {
   try {
-    // Look for most recent session file
-    const sessionsDir = join(homedir(), ".claude", "sessions");
-    const files = readdirSync(sessionsDir);
+    // Look for most recent session file in current project
+    const cwd = process.cwd();
+    const projectKey = cwd.replace(/\//g, "-");
+    const projectDir = join(homedir(), ".claude", "projects", projectKey);
 
-    const jsonlFiles = files
-      .filter((f) => f.endsWith(".jsonl"))
-      .map((f) => join(sessionsDir, f))
-      .sort((a, b) => statSync(b).mtimeMs - statSync(a).mtimeMs);
+    // Try project-specific sessions first
+    if (statSync(projectDir).isDirectory()) {
+      const files = readdirSync(projectDir);
+      const jsonlFiles = files
+        .filter((f) => f.endsWith(".jsonl"))
+        .map((f) => join(projectDir, f))
+        .sort((a, b) => statSync(b).mtimeMs - statSync(a).mtimeMs);
 
-    return jsonlFiles[0] || null;
+      if (jsonlFiles.length > 0) {
+        return jsonlFiles[0];
+      }
+    }
+
+    // Fallback: search all project directories
+    const projectsDir = join(homedir(), ".claude", "projects");
+    const projectDirs = readdirSync(projectsDir)
+      .filter((d) => statSync(join(projectsDir, d)).isDirectory());
+
+    const allFiles: string[] = [];
+    for (const dir of projectDirs) {
+      const dirPath = join(projectsDir, dir);
+      const files = readdirSync(dirPath)
+        .filter((f) => f.endsWith(".jsonl"))
+        .map((f) => join(dirPath, f));
+      allFiles.push(...files);
+    }
+
+    const sortedFiles = allFiles.sort((a, b) => statSync(b).mtimeMs - statSync(a).mtimeMs);
+    return sortedFiles[0] || null;
   } catch {
     return null;
   }

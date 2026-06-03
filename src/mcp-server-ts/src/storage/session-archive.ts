@@ -4,7 +4,7 @@
  * Manages session archive files (sessions/{session_id}.json).
  */
 
-import { readFileSync, writeFileSync, readdirSync, existsSync, mkdirSync } from "fs";
+import { readFileSync, writeFileSync, readdirSync, existsSync, mkdirSync, renameSync } from "fs";
 import { join } from "path";
 import { homedir } from "os";
 import { SessionArchive } from "../core/models.js";
@@ -43,8 +43,7 @@ export class SessionArchiveManager {
     writeFileSync(tempPath, JSON.stringify(archive, null, 2));
 
     // Atomic rename
-    const fs = require("fs");
-    fs.renameSync(tempPath, path);
+    renameSync(tempPath, path);
   }
 
   loadArchive(sessionId: string): SessionArchive | null {
