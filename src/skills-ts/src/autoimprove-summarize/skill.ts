@@ -407,7 +407,10 @@ async function markSessionAsAnalyzed(
   rulesGenerated: number,
   isConsolidated: boolean,
   success: boolean,
-  errorMessage?: string
+  errorMessage?: string,
+  isIncremental?: boolean,
+  previousPatterns?: number,
+  previousRules?: number
 ): Promise<void> {
   const sessionId = extractSessionId(sessionFilePath);
   if (!sessionId) {
@@ -424,6 +427,9 @@ async function markSessionAsAnalyzed(
       analysis_mode: isConsolidated ? "consolidated" : "standard",
       success,
       error_message: errorMessage,
+      incremental_analysis: isIncremental,
+      previous_patterns: previousPatterns,
+      previous_rules: previousRules,
     });
   } catch (error: any) {
     console.warn(`⚠ Failed to mark session as analyzed: ${error.message}`);

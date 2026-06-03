@@ -412,6 +412,20 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
           },
         },
       },
+      {
+        name: "check_session_needs_analysis",
+        description: "Check if a session needs analysis based on file modification time",
+        inputSchema: {
+          type: "object",
+          properties: {
+            session_file_path: {
+              type: "string",
+              description: "Full path to session file",
+            },
+          },
+          required: ["session_file_path"],
+        },
+      },
     ],
   };
 });
@@ -477,6 +491,9 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
       case "clear_analysis_record":
         return await handleClearAnalysisRecord(request.params.arguments);
+
+      case "check_session_needs_analysis":
+        return await handleCheckSessionNeedsAnalysis(request.params.arguments);
 
       default:
         throw new Error(`Unknown tool: ${request.params.name}`);
@@ -1154,6 +1171,9 @@ async function handleMarkSessionAnalyzed(args: any) {
   const analysisMode = (args.analysis_mode as "standard" | "consolidated") || "standard";
   const success = args.success !== false;
   const errorMessage = args.error_message as string | undefined;
+  const incrementalAnalysis = args.incremental_analysis as boolean | undefined;
+  const previousPatterns = args.previous_patterns as number | undefined;
+  const previousRules = args.previous_rules as number | undefined;
 
   if (!sessionId || !sessionFilePath) {
     return {
@@ -1169,21 +1189,42 @@ async function handleMarkSessionAnalyzed(args: any) {
     };
   }
 
+  // Get file stats
+  let fileMtime = 0;
+  let fileSize = 0;
+  try {
+    const { existsSync, statSync } = await import("fs");
+    if (existsSync(sessionFilePath)) {
+      const stats = statSync(sessionFilePath);
+      fileMtime = stats.mtimeMs;
+      fileSize = stats.size;
+    }
+  } catch (error) {
+    // If we can't get file stats, use current time
+    fileMtime = Date.now();
+  }
+
   analysisTracker.markAnalyzed({
     session_id: sessionId,
     session_file_path: sessionFilePath,
     analyzed_at: new Date().toISOString(),
+    file_mtime: fileMtime,
+    file_size: fileSize,
     patterns_found: patternsFound || 0,
     rules_generated: rulesGenerated || 0,
     analysis_mode: analysisMode,
     success,
     error_message: errorMessage,
+    incremental_analysis: incrementalAnalysis,
+    previous_patterns: previousPatterns,
+    previous_rules: previousRules,
   });
 
   logger.info("session-analysis", `Marked session ${sessionId} as analyzed`, {
     patterns: patternsFound,
     rules: rulesGenerated,
     mode: analysisMode,
+    incremental: incrementalAnalysis || false,
   });
 
   return {
@@ -1194,6 +1235,8 @@ async function handleMarkSessionAnalyzed(args: any) {
           success: true,
           session_id: sessionId,
           marked_at: new Date().toISOString(),
+          file_mtime: fileMtime,
+          file_size: fileSize,
         }),
       },
     ],
@@ -1345,6 +1388,97 @@ async function handleClearAnalysisRecord(args: any) {
             success: false,
             error: "Either session_id or clear_all=true is required",
           }),
+        },
+      ],
+    };
+  }
+}
+
+async function handleCheckSessionNeedsAnalysis(args: any) {
+  const sessionFilePath = args.session_file_path as string;
+
+  if (!sessionFilePath) {
+    return {
+      content: [
+        {
+          type: "text",
+          text: JSON.stringify({
+            success: false,
+            error: "session_file_path is required",
+          }),
+        },
+      ],
+    };
+  }
+
+  // Extract session ID
+  const match = sessionFilePath.match(/([a-f0-9-]{36})\.jsonl$/);
+  if (!match) {
+    return {
+      content: [
+        {
+          type: "text",
+          text: JSON.stringify({
+            success: false,
+            error: "Invalid session file path format",
+          }),
+        },
+      ],
+    };
+  }
+
+  const sessionId = match[1];
+
+  // Get current file stats
+  try {
+    const { existsSync, statSync } = await import("fs");
+
+    if (!existsSync(sessionFilePath)) {
+      return {
+        content: [
+          {
+            type: "text",
+            text: JSON.stringify({
+              success: false,
+              error: "Session file does not exist",
+            }),
+          },
+        ],
+      };
+    }
+
+    const stats = statSync(sessionFilePath);
+    const currentMtime = stats.mtimeMs;
+    const currentSize = stats.size;
+
+    // Check if needs analysis
+    const checkResult = analysisTracker.checkIfNeedsAnalysis(sessionId, currentMtime, currentSize);
+
+    return {
+      content: [
+        {
+          type: "text",
+          text: JSON.stringify({
+            success: true,
+            session_id: sessionId,
+            needs_analysis: checkResult.needsAnalysis,
+            reason: checkResult.reason,
+            is_incremental: checkResult.isIncremental,
+            current_mtime: currentMtime,
+            current_size: currentSize,
+          }),
+        },
+      ],
+    };
+  } catch (error: any) {
+    return {
+      content: [
+        {
+          type: "text",
+          text: JSON.stringify({
+            success: false,
+            error: error.message,
+      }),
         },
       ],
     };

@@ -12,11 +12,16 @@ export interface SessionAnalysisRecord {
   session_id: string;
   session_file_path: string;
   analyzed_at: string;
+  file_mtime: number; // File modification time in milliseconds
+  file_size: number; // File size in bytes for quick change detection
   patterns_found: number;
   rules_generated: number;
   analysis_mode: "standard" | "consolidated";
   success: boolean;
   error_message?: string;
+  incremental_analysis?: boolean; // True if this was an incremental update
+  previous_patterns?: number; // Patterns from previous analysis (for incremental)
+  previous_rules?: number; // Rules from previous analysis (for incremental)
 }
 
 export interface AnalysisTrackerState {
@@ -78,10 +83,70 @@ export class SessionAnalysisTracker {
   }
 
   /**
-   * Check if a session has been analyzed
+   * Check if a session needs re-analysis based on file modification time
+   * Returns: { needsAnalysis: boolean, reason: string, isIncremental: boolean }
+   */
+  checkIfNeedsAnalysis(sessionId: string, currentMtime: number, currentSize: number): {
+    needsAnalysis: boolean;
+    reason: string;
+    isIncremental: boolean;
+  } {
+    const record = this.getRecord(sessionId);
+
+    if (!record) {
+      return {
+        needsAnalysis: true,
+        reason: "never_analyzed",
+        isIncremental: false,
+      };
+    }
+
+    if (!record.success) {
+      return {
+        needsAnalysis: true,
+        reason: "previous_failed",
+        isIncremental: false,
+      };
+    }
+
+    // Check if file has been modified since last analysis
+    if (currentMtime > record.file_mtime) {
+      return {
+        needsAnalysis: true,
+        reason: "file_updated",
+        isIncremental: true,
+      };
+    }
+
+    // Also check file size as a quick change detector
+    if (currentSize !== record.file_size) {
+      return {
+        needsAnalysis: true,
+        reason: "file_size_changed",
+        isIncremental: true,
+      };
+    }
+
+    return {
+      needsAnalysis: false,
+      reason: "up_to_date",
+      isIncremental: false,
+    };
+  }
+
+  /**
+   * Check if a session has been analyzed (legacy method for compatibility)
    */
   isAnalyzed(sessionId: string): boolean {
     return sessionId in this.state.analyzed_sessions;
+  }
+
+  /**
+   * Get the last analysis timestamp for incremental analysis
+   */
+  getLastAnalysisTime(sessionId: string): string | null {
+    const record = this.getRecord(sessionId);
+    return record ? record.analyzed_at : null;
   }
 
   /**
