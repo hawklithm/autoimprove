@@ -162,7 +162,56 @@ if [ ! -f "$AUTOIMPROVE_DIR/rules/index.json" ]; then
 fi
 
 echo ""
-echo "Step 6: Restarting MCP Server..."
+echo "Step 6: Initializing Claude index file..."
+echo "-----------------------------------"
+
+# Create initial claude-index.md
+node "$SCRIPT_DIR/scripts/init-claude-index.js"
+
+if [ -f "$AUTOIMPROVE_DIR/rules/claude-index.md" ]; then
+  echo "✓ Created initial claude-index.md"
+else
+  echo "⚠ Warning: Failed to create claude-index.md"
+fi
+
+echo ""
+echo "Step 7: Configuring Claude Code global settings..."
+echo "-----------------------------------"
+
+# Add reference to claude-index.md in global CLAUDE.md
+GLOBAL_CLAUDE_MD="$CLAUDE_DIR/CLAUDE.md"
+
+# Ensure .claude directory exists
+mkdir -p "$CLAUDE_DIR"
+
+# Create CLAUDE.md if it doesn't exist
+if [ ! -f "$GLOBAL_CLAUDE_MD" ]; then
+  echo "Creating $GLOBAL_CLAUDE_MD..."
+  cat > "$GLOBAL_CLAUDE_MD" << 'EOF'
+# Global Claude Code Instructions
+
+This file contains global instructions that apply to all your projects.
+
+EOF
+fi
+
+# Check if autoimprove reference already exists
+if grep -q "@.*autoimprove.*rules.*claude-index.md" "$GLOBAL_CLAUDE_MD" 2>/dev/null; then
+  echo "✓ AutoImprove rules reference already exists in CLAUDE.md"
+else
+  echo "Adding AutoImprove rules reference to CLAUDE.md..."
+  cat >> "$GLOBAL_CLAUDE_MD" << 'EOF'
+
+## AutoImprove Learned Rules
+
+@~/.autoimprove/rules/claude-index.md
+
+EOF
+  echo "✓ Added AutoImprove rules reference to $GLOBAL_CLAUDE_MD"
+fi
+
+echo ""
+echo "Step 7: Restarting MCP Server..."
 echo "-----------------------------------"
 
 # Kill any existing autoimprove MCP server processes

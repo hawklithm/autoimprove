@@ -59,13 +59,21 @@ Analyze Claude Code session files and extract reusable patterns:
    - `patterns_json`: JSON string of the patterns array from step 2
    - `scene_json`: JSON string of scene context (tech stack, domain, etc.)
 
-5. **Show results**: Display:
+5. **Export to Claude index** (ONLY if rules were generated): Call MCP tool `export_rules_to_claude_md` with:
+   - `strategy`: "category-balanced" (recommended) or "top-n"
+   - `limit`: 10 (default)
+   - `min_confidence`: 0.6 (default)
+   
+   This automatically updates `~/.autoimprove/rules/claude-index.md` with the top rules, which are loaded into every Claude Code session.
+
+6. **Show results**: Display:
    - Number of patterns found (grouped by type)
    - Sample patterns with descriptions and confidence scores
    - Generated rule IDs
-   - Next steps (use `/autoimprove-rules` to review and activate)
+   - Export status (rules exported to claude-index.md, token estimate)
+   - Next steps (use `/autoimprove-rules` to review all rules)
 
-**Important**: Always check if patterns were found before calling `generate_rules`. Do not call `generate_rules` with an empty patterns array.
+**Important**: Always check if patterns were found before calling `generate_rules`. Do not call `generate_rules` with an empty patterns array. After generating rules, always call `export_rules_to_claude_md` to update the Claude index.
 
 ## Intelligent Consolidation Mode (--consolidate)
 
@@ -119,7 +127,17 @@ The system automatically tracks which sessions have been analyzed:
 - `list_unanalyzed_sessions` - Filter unanalyzed from a list
 - `clear_analysis_record` - Clear record for re-analysis
 
-Use MCP tools from autoimprove-core: `analyze_session`, `generate_rules`, `mark_session_analyzed`, `list_unanalyzed_sessions`, `get_analysis_status`, `clear_analysis_record`.
+Use MCP tools from autoimprove-core: `analyze_session`, `generate_rules`, `export_rules_to_claude_md`, `mark_session_analyzed`, `list_unanalyzed_sessions`, `get_analysis_status`, `clear_analysis_record`.
 
 Note: Session files are in `~/.claude/projects/` organized by project directory path (e.g., `-Users-adazhao-workspace-autoimprove/`).
+
+## Claude Index Auto-Export
+
+After generating rules, the system automatically exports top rules to `~/.autoimprove/rules/claude-index.md`:
+
+- **Category-balanced strategy**: Selects rules across categories (30% security, 30% repeated-corrections, 20% anti-patterns, 15% performance, 5% preferences)
+- **Top 10 rules by default**: Keeps context usage low (~400 tokens)
+- **Auto-loaded**: These rules are automatically loaded in every Claude Code session via reference in `~/.claude/CLAUDE.md`
+
+This ensures Claude learns from your habits automatically without manual intervention.
 

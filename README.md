@@ -1,10 +1,12 @@
 # AutoImprove
 
-Learn coding patterns from Claude Code sessions and generate reusable rules.
+Learn coding patterns from Claude Code sessions and generate reusable rules that **automatically load** into every session.
 
 ## Overview
 
 AutoImprove analyzes your Claude Code sessions to detect patterns in corrections, preferences, and best practices. It automatically generates rules that Claude will follow in future sessions, reducing repetitive corrections and improving consistency.
+
+**✨ New in v0.2.0**: Rules are now **automatically loaded** into every Claude Code session through `~/.claude/CLAUDE.md` reference. No manual invocation needed!
 
 ## Features
 
@@ -26,9 +28,16 @@ AutoImprove analyzes your Claude Code sessions to detect patterns in corrections
   - Functional domain (auth, api, etc.)
   - Business domain (e-commerce, finance, etc.)
 
-- **MCP Server**: MCP-based server with 5 tools and 2 resources (TypeScript)
+- **🆕 Automatic Rule Loading**: Top rules are automatically loaded into every Claude Code session
+  - Rules exported to `~/.autoimprove/rules/claude-index.md`
+  - Referenced from `~/.claude/CLAUDE.md` (global)
+  - Category-balanced selection (security, corrections, anti-patterns, performance, preferences)
+  - Low token cost (~400 tokens for top 10 rules)
+
+- **MCP Server**: MCP-based server with tools and resources (TypeScript)
   - `analyze_session` - Analyze session patterns
   - `generate_rules` - Generate rules from patterns
+  - `export_rules_to_claude_md` - 🆕 Export top rules to Claude index
   - `search_knowledge` - Search rules
   - `update_rules` - Update existing rules
   - `list_scenes` - List known scenes
@@ -56,8 +65,11 @@ This will automatically:
 3. ✅ Configure Claude Code MCP Server (user-level, **available in all projects**)
 4. ✅ Install Skills to `~/.claude/skills/`
 5. ✅ Initialize storage directory at `~/.autoimprove/`
+6. ✅ 🆕 Configure automatic rule loading in `~/.claude/CLAUDE.md`
 
 **Configuration Scope**: The setup script configures `autoimprove-core` as a **user-level MCP server**, making it accessible from any project directory. You only need to run setup once.
+
+**Automatic Rule Loading**: Setup adds a reference to `~/.autoimprove/rules/claude-index.md` in your global `~/.claude/CLAUDE.md`, ensuring top rules are automatically loaded in every Claude Code session.
 
 ### Verify Installation
 

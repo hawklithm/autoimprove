@@ -25,6 +25,7 @@ import { RuleMatcher } from "./core/rule-matcher.js";
 import { RuleQualityController } from "./core/rule-quality.js";
 import { AdaptiveConfidenceCalculator } from "./core/adaptive-confidence.js";
 import { EnhancedSceneDetector } from "./core/enhanced-scene-detector.js";
+import { ClaudeIndexExporter } from "./tools/export-rules-to-claude.js";
 import { logger } from "./core/logger.js";
 import { createScene, PatternType } from "./core/models.js";
 import { existsSync } from "fs";
@@ -43,6 +44,7 @@ let matcher: RuleMatcher;
 let qualityController: RuleQualityController;
 let adaptiveConfidence: AdaptiveConfidenceCalculator;
 let sceneDetector: EnhancedSceneDetector;
+let claudeIndexExporter: ClaudeIndexExporter;
 
 function ensureInitialized() {
   if (!indexManager) {
@@ -61,6 +63,7 @@ function ensureInitialized() {
     qualityController = new RuleQualityController();
     adaptiveConfidence = new AdaptiveConfidenceCalculator();
     sceneDetector = new EnhancedSceneDetector();
+    claudeIndexExporter = new ClaudeIndexExporter(indexManager, contentManager);
 
     logger.info("server", "AutoImprove MCP Server initialized");
   }
@@ -426,6 +429,29 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
           required: ["session_file_path"],
         },
       },
+      {
+        name: "export_rules_to_claude_md",
+        description: "Export top rules to ~/.autoimprove/rules/claude-index.md for automatic loading by Claude",
+        inputSchema: {
+          type: "object",
+          properties: {
+            strategy: {
+              type: "string",
+              enum: ["top-n", "category-balanced"],
+              description: "Selection strategy: 'top-n' nce) or 'category-balanced' (recommended)",
+            },
+            limit: {
+              type: "number",
+              description: "Maximum number of rules to export (default: 10)",
+            },
+            min_confidence: {
+              type: "number",
+              description: "Minimum confidence threshold (default: 0.6)",
+            },
+          },
+          required: ["strategy"],
+        },
+      },
     ],
   };
 });
@@ -494,6 +520,9 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
       case "check_session_needs_analysis":
         return await handleCheckSessionNeedsAnalysis(request.params.arguments);
+
+      case "export_rules_to_claude_md":
+        return await handleExportRulesToClaudeMd(request.params.arguments);
 
       default:
         throw new Error(`Unknown tool: ${request.params.name}`);
@@ -1479,6 +1508,53 @@ async function handleCheckSessionNeedsAnalysis(args: any) {
             success: false,
             error: error.message,
       }),
+        },
+      ],
+    };
+  }
+}
+
+async function handleExportRulesToClaudeMd(args: any) {
+  const strategy = args.strategy as "top-n" | "category-balanced";
+  const limit = (args.limit as number) || 10;
+  const minConfidence = (args.min_confidence as number) || 0.6;
+
+  try {
+    const result = claudeIndexExporter.export({
+      strategy,
+      limit,
+      minConfidence,
+    });
+
+    logger.info("export", `Exported ${result.rulesExported} rules to claude-index.md`, {
+      strategy,
+      tokens: result.tokenEstimate,
+    });
+
+    return {
+      content: [
+        {
+          type: "text",
+          text: JSON.stringify({
+            success: true,
+            path: result.path,
+            rules_exported: result.rulesExported,
+            token_estimate: result.tokenEstimate,
+            strategy,
+          }),
+        },
+      ],
+    };
+  } catch (error: any) {
+    logger.error("export", "Failed to export rules to claude-index.md", error);
+    return {
+      content: [
+        {
+          type: "text",
+          text: JSON.stringify({
+            success: false,
+            error: error.message,
+          }),
         },
       ],
     };
