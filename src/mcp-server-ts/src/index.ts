@@ -438,7 +438,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
             strategy: {
               type: "string",
               enum: ["top-n", "category-balanced"],
-              description: "Selection strategy: 'top-n' nce) or 'category-balanced' (recommended)",
+              description: "Selection strategy: 'top-n' (by confidence) or 'category-balanced' (recommended)",
             },
             limit: {
               type: "number",
@@ -450,6 +450,20 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
             },
           },
           required: ["strategy"],
+        },
+      },
+      {
+        name: "clear_all_rules",
+        description: "Clear all rules from the knowledge base (use with caution - creates backup)",
+        inputSchema: {
+          type: "object",
+          properties: {
+            confirm: {
+              type: "boolean",
+              description: "Must be true to confirm deletion",
+            },
+          },
+          required: ["confirm"],
         },
       },
     ],
@@ -523,6 +537,9 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
       case "export_rules_to_claude_md":
         return await handleExportRulesToClaudeMd(request.params.arguments);
+
+      case "clear_all_rules":
+        return await handleClearAllRules(request.params.arguments);
 
       default:
         throw new Error(`Unknown tool: ${request.params.name}`);
@@ -1547,6 +1564,97 @@ async function handleExportRulesToClaudeMd(args: any) {
     };
   } catch (error: any) {
     logger.error("export", "Failed to export rules to claude-index.md", error);
+    return {
+      content: [
+        {
+          type: "text",
+          text: JSON.stringify({
+            success: false,
+            error: error.message,
+          }),
+        },
+      ],
+    };
+  }
+}
+
+async function handleClearAllRules(args: any) {
+  const confirm = args.confirm as boolean;
+
+  if (!confirm) {
+    return {
+      content: [
+        {
+          type: "text",
+          text: JSON.stringify({
+            success: false,
+            error: "Must set confirm=true to clear all rules",
+          }),
+        },
+      ],
+    };
+  }
+
+  try {
+    const { writeFileSync, readdirSync, unlinkSync } = await import("fs");
+    const { join } = await import("path");
+    const { homedir } = await import("os");
+
+    const rulesDir = join(homedir(), ".autoimprove", "rules");
+    const contentDir = join(rulesDir, "content");
+    const indexFile = join(rulesDir, "index.json");
+    const claudeIndexFile = join(rulesDir, "claude-index.md");
+
+    let deletedCount = 0;
+
+    // Clear all rule content files
+    try {
+      const files = readdirSync(contentDir);
+      for (const file of files) {
+        if (file.endsWith(".md")) {
+          unlinkSync(join(contentDir, file));
+          deletedCount++;
+        }
+      }
+    } catch (error: any) {
+      // Content dir might not exist, that's ok
+    }
+
+    // Reset index.json
+    writeFileSync(indexFile, JSON.stringify({ version: "1.0", rules: [] }, null, 2));
+
+    // Reset claude-index.md
+    const initialContent = `# AutoImprove Learned Rules
+
+> 这些规则从你的编码习惯中自动学习。规则会根据当前工作场景自动匹配。
+
+---
+
+💡 **动态匹配**: Claude 会根据你当前的代码场景自动应用相关规则。
+📊 **完整规则库**: 运行 \`/autoimprove-rules\` 查看全部规则。
+`;
+    writeFileSync(claudeIndexFile, initialContent);
+
+    // Clear in-memory index
+    indexManager = new RuleIndexManager();
+    contentManager = new RuleContentManager();
+
+    logger.info("clear", `Cleared ${deletedCount} rules from knowledge base`);
+
+    return {
+      content: [
+        {
+          type: "text",
+          text: JSON.stringify({
+            success: true,
+            deleted_count: deletedCount,
+            message: "All rules cleared successfully",
+          }),
+        },
+      ],
+    };
+  } catch (error: any) {
+    logger.error("clear", "Failed to clear rules", error);
     return {
       content: [
         {

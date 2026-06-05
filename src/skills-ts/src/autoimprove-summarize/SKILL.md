@@ -20,15 +20,16 @@ Analyze Claude Code session files and extract reusable patterns:
 /autoimprove-summarize --enhance
 ```
 
-**With custom confidence threshold:**
-```bash
-/autoimprove-summarize --min-confidence 0.9
-```
-
 **Batch analysis (all unanalyzed sessions):**
 ```bash
 /autoimprove-summarize --all
 /autoimprove-summarize --all --enhance
+```
+
+**Rebuild all rules from scratch (clears existing rules):**
+```bash
+/autoimprove-summarize --rebuild
+/autoimprove-summarize --rebuild --enhance
 ```
 
 **Force re-analyze all sessions:**
@@ -43,6 +44,7 @@ Analyze Claude Code session files and extract reusable patterns:
 
 ## Parameters
 
+- `--rebuild`: Clear all existing rules and rebuild from all sessions (creates backup)
 - `--enhance`: Use AI Agent for deep semantic analysis and quality enhancement
 - `--min-confidence <float>`: Set minimum confidence threshold (default: 0.85)
 - `--all` / `-a`: Analyze all unanalyzed sessions (batch mode)

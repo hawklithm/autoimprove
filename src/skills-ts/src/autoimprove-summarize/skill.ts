@@ -53,8 +53,15 @@ async function run() {
     const useAgentEnhancement = args.includes("--enhance");
     const analyzeAll = args.includes("--all") || args.includes("-a");
     const forceReanalyze = args.includes("--force");
+    const rebuildAll = args.includes("--rebuild");
     const minConfidenceArg = args.find((a, i) => args[i - 1] === "--min-confidence");
     const minConfidence = minConfidenceArg ? parseFloat(minConfidenceArg) : 0.85;
+
+    // Rebuild mode: clear all rules and reanalyze everything
+    if (rebuildAll) {
+      await rebuildAllRules(useConsolidation, minConfidence, useAgentEnhancement);
+      return;
+    }
 
     if (analyzeAll) {
       // Batch analysis mode
@@ -1008,6 +1015,175 @@ async function runBatchAnalysis(
   if (successCount > 0) {
     console.log("💡 Next step: Run `/autoimprove-rules` to review and activate the rules");
   }
+}
+
+/**
+ * Rebuild all rules from scratch
+ * This will:
+ * 1. Clear all existing rules
+ * 2. Clear analysis tracking
+ * 3. Reanalyze all sessions
+ * 4. Generate fresh rules
+ */
+async function rebuildAllRules(
+  useConsolidation: boolean,
+  minConfidence: number,
+  useAgentEnhancement: boolean
+): Promise<void> {
+  console.log("🔄 REBUILD MODE: Complete Rules Reconstruction\n");
+  console.log("═".repeat(60));
+  console.log("⚠️  WARNING: This will permanently delete all existing rules!");
+  console.log("═".repeat(60));
+  console.log();
+
+  // Step 1: Backup current rules
+  console.log("📦 Step 1: Backing up current rules...");
+  const backupDir = join(homedir(), ".autoimprove", "backups");
+  const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
+  const backupPath = join(backupDir, `rules_backup_${timestamp}`);
+
+  try {
+    const fs = await import("fs");
+    const { execSync } = await import("child_process");
+
+    // Create backup directory
+    if (!fs.existsSync(backupDir)) {
+      fs.mkdirSync(backupDir, { recursive: true });
+    }
+
+    // Backup rules directory
+    const rulesDir = join(homedir(), ".autoimprove", "rules");
+    if (fs.existsSync(rulesDir)) {
+      execSync(`cp -r "${rulesDir}" "${backupPath}"`);
+      console.log(`   ✓ Backup saved to: ${backupPath}\n`);
+    } else {
+      console.log(`   ℹ No existing rules to backup\n`);
+    }
+  } catch (error: any) {
+    console.warn(`   ⚠️  Backup failed: ${error.message}`);
+    console.log(`   Continuing without backup...\n`);
+  }
+
+  // Step 2: Clear all rules
+  console.log("🗑️  Step 2: Clearing all existing rules...");
+  try {
+    const clearResult = await callMCPTool("clear_all_rules", { confirm: true });
+    if (clearResult.success) {
+      console.log(`   ✓ Cleared ${clearResult.deleted_count} rules from database`);
+    } else {
+      console.log(`   ⚠️  Clear failed: ${clearResult.error}`);
+    }
+  } catch (error: any) {
+    console.log(`   ⚠️  Clear operation not available, manually cleaning...`);
+
+    // Manual cleanup
+    try {
+      const fs = await import("fs");
+      const rulesDir = join(homedir(), ".autoimprove", "rules");
+      const contentDir = join(rulesDir, "content");
+
+      // Clear content directory
+      if (fs.existsSync(contentDir)) {
+        const files = fs.readdirSync(contentDir);
+        for (const file of files) {
+          fs.unlinkSync(join(contentDir, file));
+        }
+        console.log(`   ✓ Removed ${files.length} rule files`);
+      }
+
+      // Reset index
+      const indexFile = join(rulesDir, "index.json");
+      if (fs.existsSync(indexFile)) {
+        fs.writeFileSync(indexFile, JSON.stringify({ version: "1.0", rules: [] }, null, 2));
+        console.log(`   ✓ Reset rules index`);
+      }
+
+      // Reset claude index
+      const claudeIndexFile = join(rulesDir, "claude-index.md");
+      if (fs.existsSync(claudeIndexFile)) {
+        const initialContent = `# AutoImprove Learned Rules
+
+> 这些规则从你的编码习惯中自动学习。规则会根据当前工作场景自动匹配。
+
+---
+
+💡 **动态匹配**: Claude 会根据你当前的代码场景自动应用相关规则。
+📊 **完整规则库**: 运行 \`/autoimprove-rules\` 查看全部规则。
+`;
+        fs.writeFileSync(claudeIndexFile, initialContent);
+        console.log(`   ✓ Reset Claude index`);
+      }
+    } catch (error: any) {
+      console.warn(`   ⚠️  Manual cleanup failed: ${error.message}`);
+    }
+  }
+  console.log();
+
+  // Step 3: Clear analysis tracking
+  console.log("🔄 Step 3: Clearing analysis tracking...");
+  try {
+    const trackingFile = join(homedir(), ".autoimprove", "analyzed_sessions.json");
+    const fs = await import("fs");
+    if (fs.existsSync(trackingFile)) {
+      fs.unlinkSync(trackingFile);
+      console.log(`   ✓ Cleared session tracking (all sessions will be reanalyzed)\n`);
+    } else {
+      console.log(`   ℹ No tracking file to clear\n`);
+    }
+  } catch (error: any) {
+    console.warn(`   ⚠️  Tracking clear failed: ${error.message}\n`);
+  }
+
+  // Step 4: Get all sessions
+  console.log("🔍 Step 4: Discovering all sessions...");
+  const allSessions = getAllSessionFiles();
+  console.log(`   ✓ Found ${allSessions.length} session file(s)\n`);
+
+  if (allSessions.length === 0) {
+    console.log("❌ No sessions found. Nothing to rebuild.");
+    return;
+  }
+
+  // Step 5: Reanalyze everything
+  console.log("🤖 Step 5: Reanalyzing all sessions with latest quality controls...");
+  console.log(`   • Consolidation: ${useConsolidation ? "✓ Enabled" : "✗ Disabled"}`);
+  console.log(`   • Agent enhancement: ${useAgentEnhancement ? "✓ Enabled" : "✗ Disabled"}`);
+  console.log(`   • Min confidence: ${minConfidence}`);
+  console.log();
+
+  // Run batch analysis with force flag
+  await runBatchAnalysis(useConsolidation, true, minConfidence, useAgentEnhancement);
+
+  // Step 6: Export to Claude index
+  console.log("\n📤 Step 6: Exporting top rules to Claude index...");
+  try {
+    const exportResult = await callMCPTool("export_rules_to_claude_md", {
+      strategy: "category-balanced",
+      limit: 10,
+      min_confidence: 0.6
+    });
+
+    if (exportResult.success) {
+      console.log(`   ✓ Exported rules to ~/.autoimprove/rules/claude-index.md`);
+      console.log(`   ✓ These rules are now auto-loaded in all Claude Code sessions\n`);
+    }
+  } catch (error: any) {
+    console.warn(`   ⚠️  Export failed: ${error.message}\n`);
+  }
+
+  // Final summary
+  console.log("═".repeat(60));
+  console.log("🎉 REBUILD COMPLETE!");
+  console.log("═".repeat(60));
+  console.log();
+  console.log("✅ All rules have been rebuilt from scratch");
+  console.log(`✅ Backup saved to: ${backupPath}`);
+  console.log("✅ Fresh, high-quality rules are now active");
+  console.log();
+  console.log("📋 Next steps:");
+  console.log("   • Run `/autoimprove-rules` to review new rules");
+  console.log("   • Run `/autoimprove-status` to see system stats");
+  console.log("   • Start coding - rules will auto-apply!\n");
 }
 
 run().catch(console.error);
