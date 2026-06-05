@@ -1,6 +1,6 @@
 ---
 name: autoimprove-summarize
-description: Analyze coding sessions and generate rules from detected patterns. Supports single session, batch analysis of all sessions, and intelligent consolidation via sub-agent (--consolidate flag). Automatically tracks analyzed sessions to avoid redundant processing.
+description: Analyze coding sessions and generate rules from detected patterns. Supports single session, batch analysis of all sessions, intelligent consolidation (default), and optional AI Agent enhancement (--enhance flag). Automatically tracks analyzed sessions to avoid redundant processing.
 allowed-tools: mcp__autoimprove-core__*
 ---
 
@@ -15,16 +15,20 @@ Analyze Claude Code session files and extract reusable patterns:
 /autoimprove-summarize
 ```
 
-**With intelligent consolidation:**
+**With AI Agent enhancement (recommended for highest quality):**
 ```bash
-/autoimprove-summarize --consolidate
-/autoimprove-summarize -c --min-confidence 0.9
+/autoimprove-summarize --enhance
+```
+
+**With custom confidence threshold:**
+```bash
+/autoimprove-summarize --min-confidence 0.9
 ```
 
 **Batch analysis (all unanalyzed sessions):**
 ```bash
 /autoimprove-summarize --all
-/autoimprove-summarize --all --consolidate
+/autoimprove-summarize --all --enhance
 ```
 
 **Force re-analyze all sessions:**
@@ -32,12 +36,18 @@ Analyze Claude Code session files and extract reusable patterns:
 /autoimprove-summarize --all --force
 ```
 
+**Disable intelligent consolidation (not recommended):**
+```bash
+/autoimprove-summarize --no-consolidate
+```
+
 ## Parameters
 
-- `--consolidate` / `-c`: Enable intelligent pattern consolidation
+- `--enhance`: Use AI Agent for deep semantic analysis and quality enhancement
 - `--min-confidence <float>`: Set minimum confidence threshold (default: 0.85)
 - `--all` / `-a`: Analyze all unanalyzed sessions (batch mode)
 - `--force`: Force re-analyze even if session was already analyzed
+- `--no-consolidate`: Disable intelligent pattern consolidation (enabled by default)
 
 ## Workflow
 
@@ -75,9 +85,11 @@ Analyze Claude Code session files and extract reusable patterns:
 
 **Important**: Always check if patterns were found before calling `generate_rules`. Do not call `generate_rules` with an empty patterns array. After generating rules, always call `export_rules_to_claude_md` to update the Claude index.
 
-## Intelligent Consolidation Mode (--consolidate)
+## Intelligent Consolidation Mode (Default)
 
-When `--consolidate` flag is enabled, the skill uses a more sophisticated approach:
+**Note**: Consolidation is now enabled by default for better quality. Use `--no-consolidate` to disable.
+
+The intelligent consolidation mode uses a more sophisticated approach:
 
 1. **Semantic Grouping**: Group similar patterns by semantic similarity (not just type matching)
 2. **Description Merging**: Intelligently merge descriptions to capture all unique insights

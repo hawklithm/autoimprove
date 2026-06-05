@@ -221,9 +221,16 @@ export class SessionAnalyzer {
 
     for (const msg of userMessages) {
       if (antiPatternKeywords.some(kw => msg.content.toLowerCase().includes(kw))) {
+        const description = this.extractAntiPatternDescription(msg);
+
+        // Skip if description is empty (filtered as noise)
+        if (!description || description.trim().length === 0) {
+          continue;
+        }
+
         const pattern = createPattern({
           type: PatternType.ANTI_PATTERN,
-          description: this.extractAntiPatternDescription(msg),
+          description,
           occurrences: [this.createOccurrence(sessionData, msg, "explicit_correction")],
           first_seen: msg.timestamp || new Date().toISOString(),
           last_seen: msg.timestamp || new Date().toISOString()
@@ -254,9 +261,16 @@ export class SessionAnalyzer {
 
     for (const msg of userMessages) {
       if (preferenceKeywords.some(kw => msg.content.toLowerCase().includes(kw))) {
+        const description = this.extractPreferenceDescription(msg);
+
+        // Skip if description is empty (filtered as noise)
+        if (!description || description.trim().length === 0) {
+          continue;
+        }
+
         const pattern = createPattern({
           type: PatternType.PREFERENCE,
-          description: this.extractPreferenceDescription(msg),
+          description,
           occurrences: [this.createOccurrence(sessionData, msg, "accept")],
           first_seen: msg.timestamp || new Date().toISOString(),
           last_seen: msg.timestamp || new Date().toISOString()
@@ -288,9 +302,16 @@ export class SessionAnalyzer {
 
     for (const msg of userMessages) {
       if (performanceKeywords.some(kw => msg.content.toLowerCase().includes(kw))) {
+        const description = this.extractPerformanceDescription(msg);
+
+        // Skip if description is empty (filtered as noise)
+        if (!description || description.trim().length === 0) {
+          continue;
+        }
+
         const pattern = createPattern({
           type: PatternType.PERFORMANCE,
-          description: this.extractPerformanceDescription(msg),
+          description,
           occurrences: [
             {
               ...this.createOccurrence(sessionData, msg, "explicit_correction"),
@@ -330,9 +351,16 @@ export class SessionAnalyzer {
         msg.content.toLowerCase().includes(kw)
       );
       if (matchedKeyword) {
+        const description = this.extractSecurityDescription(msg);
+
+        // Skip if description is empty (filtered as noise)
+        if (!description || description.trim().length === 0) {
+          continue;
+        }
+
         const pattern = createPattern({
           type: PatternType.SECURITY,
-          description: this.extractSecurityDescription(msg),
+          description,
           occurrences: [
             {
               ...this.createOccurrence(sessionData, msg, "explicit_correction"),
@@ -387,18 +415,111 @@ export class SessionAnalyzer {
   }
 
   private extractAntiPatternDescription(msg: Message): string {
-    return msg.content.length > 100 ? msg.content.substring(0, 100) + "..." : msg.content;
+    return this.extractMeaningfulDescription(msg, "anti-pattern");
   }
 
   private extractPreferenceDescription(msg: Message): string {
-    return msg.content.length > 100 ? msg.content.substring(0, 100) + "..." : msg.content;
+    return this.extractMeaningfulDescription(msg, "preference");
   }
 
   private extractPerformanceDescription(msg: Message): string {
-    return msg.content.length > 100 ? msg.content.substring(0, 100) + "..." : msg.content;
+    return this.extractMeaningfulDescription(msg, "performance");
   }
 
   private extractSecurityDescription(msg: Message): string {
-    return msg.content.length > 100 ? msg.content.substring(0, 100) + "..." : msg.content;
+    return this.extractMeaningfulDescription(msg, "security");
+  }
+
+  /**
+   * Extract meaningful description from message, filtering out noise
+   */
+  private extractMeaningfulDescription(msg: Message, patternType: string): string {
+    let content = msg.content.trim();
+
+    // Skip if too short (likely not a real pattern)
+    if (content.length < 15) {
+      return "";
+    }
+
+    // Filter out noise patterns
+    const noisePatterns = [
+      // System/debug messages
+      /(Base directory|Context Usage|Session analyzed|Model:|Tokens:)/i,
+      // Generic questions without context
+      /^(为什么|怎么|如何|what|why|how)\s*(还是不行|不work|doesn't work)/i,
+      // Pure questions without actionable content
+      /^\?+$|^[\?\？]+.*[\?\？]$/,
+      // File paths and system info
+      /^\/[\/\w\-\.]+$/,
+      // Session IDs and UUIDs
+      /^[a-f0-9-]{8,36}$/i,
+      // Generic error messages without details
+      /^(error|failed|不行|问题)$/i,
+      // Continuation markers
+      /^\.\.\./,
+      // Pure metadata
+      /^(AutoImprove|Consolidation|Analysis|Summary).*Results?$/i
+    ];
+
+    for (const pattern of noisePatterns) {
+      if (pattern.test(content)) {
+        return "";
+      }
+    }
+
+    // Extract sentences that contain actionable information
+    const sentences = content.split(/[。.!！\n]+/).filter(s => s.trim().length > 10);
+
+    if (sentences.length === 0) {
+      return "";
+    }
+
+    // For corrections/anti-patterns, look for sentences with corrective language
+    if (patternType === "anti-pattern" || patternType === "performance" || patternType === "security") {
+      const correctiveKeywords = [
+        "应该", "不应该", "需要", "必须", "建议", "改成", "修改", "优化",
+        "should", "shouldn't", "need to", "must", "recommend", "change to", "fix", "improve"
+      ];
+
+      const correctiveSentences = sentences.filter(s =>
+        correctiveKeywords.some(kw => s.toLowerCase().includes(kw))
+      );
+
+      if (correctiveSentences.length > 0) {
+        const description = correctiveSentences.join(". ").substring(0, 150);
+        return description.length < correctiveSentences.join(". ").length
+          ? description + "..."
+          : description;
+      }
+    }
+
+    // For preferences, look for declarative statements
+    if (patternType === "preference") {
+      const preferenceKeywords = [
+        "我们用", "我们使用", "团队", "约定", "规范", "习惯",
+        "we use", "our team", "convention", "practice", "prefer"
+      ];
+
+      const preferenceSentences = sentences.filter(s =>
+        preferenceKeywords.some(kw => s.toLowerCase().includes(kw))
+      );
+
+      if (preferenceSentences.length > 0) {
+        const description = preferenceSentences.join(". ").substring(0, 150);
+        return description.length < preferenceSentences.join(". ").length
+          ? description + "..."
+          : description;
+      }
+    }
+
+    // Fallback: use first meaningful sentence
+    const firstSentence = sentences[0].trim();
+    if (firstSentence.length > 15) {
+      return firstSentence.length > 150
+        ? firstSentence.substring(0, 150) + "..."
+        : firstSentence;
+    }
+
+    return "";
   }
 }
