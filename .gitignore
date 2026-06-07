@@ -1,4 +1,37 @@
 
+# Dependencies
+node_modules/
+*/node_modules/
+
+# Build outputs
+dist/
+*/dist/
+
 # Skills TypeScript build artifacts
 src/skills-ts/node_modules/
 src/skills-ts/dist/
+
+# Environment files
+.env
+.env.local
+.env.*.local
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+logs/
+
+# Python virtual environment
+venv/
+
+# User-specific paths (don't commit absolute paths)
+*.local.sh

@@ -22,7 +22,9 @@ fi
 echo ""
 echo "2. Checking MCP Server files..."
 echo "--------------------------------------"
-SERVER_PATH="/Users/adazhao/workspace/autoimprove/src/mcp-server-ts/dist/index.js"
+# Get script directory and construct server path dynamically
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SERVER_PATH="$SCRIPT_DIR/src/mcp-server-ts/dist/index.js"
 if [ -f "$SERVER_PATH" ]; then
   echo "✓ Server file exists: $SERVER_PATH"
 else
