@@ -284,18 +284,22 @@ export class ClaudeIndexExporter {
   /**
    * Format scene for display
    */
-  private formatScene(scenes: { tech: string[]; functional: string[]; business: string[] }): string {
+  private formatScene(scenes: { tech: string[]; functional: string[]; business: string[] } | undefined): string {
+    if (!scenes) {
+      return "";
+    }
+
     const parts: string[] = [];
 
-    if (scenes.tech.length > 0) {
+    if (scenes.tech && scenes.tech.length > 0) {
       parts.push(scenes.tech.join(", "));
     }
 
-    if (scenes.functional.length > 0) {
+    if (scenes.functional && scenes.functional.length > 0) {
       parts.push(scenes.functional.join(", "));
     }
 
-    if (scenes.business.length > 0) {
+    if (scenes.business && scenes.business.length > 0) {
       parts.push(scenes.business.join(", "));
     }
 
