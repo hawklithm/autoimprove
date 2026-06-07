@@ -50,6 +50,55 @@
 - 减少 30-60% 噪音
 - 更好的默认体验
 
+### 4. 自动反馈记录机制（v2.1）
+
+**双轨反馈系统**：
+
+**Track 1: 自动记录**（无需手动干预）
+- ✅ `search_knowledge` 工具自动记录：
+  - 按 ID 查询规则时记录 "used" 反馈
+  - 按场景匹配规则时为所有匹配结果记录 "used" 反馈
+- ✅ 反馈上下文包含：场景信息 + 相关性分数
+- ✅ 可通过 `skip_feedback: true` 参数禁用
+
+**Track 2: Claude 主动记录**（智能感知）
+- ✅ Claude 配置自动加载反馈指南
+- ✅ 在以下场景主动调用 `record_feedback` 工具：
+  - 用户明确表示规则有用（"used" + rating 4-5）
+  - 用户忽略或拒绝规则（"ignored" + 原因）
+  - 规则需要修正（"corrected" + 原因）
+  - 规则被禁用（"disabled" + 原因）
+
+**存储位置**：`~/.autoimprove/feedback_history.jsonl`
+
+### 5. 规则使用统计分析（v2.1）
+
+**多维度统计**：
+- 📊 总体概览：规则总数、使用率、反馈总量
+- 📁 按类别统计：Security、Performance、Preferences 等
+- 🎬 按场景统计：react-auth、python-api 等
+- 🎯 按优先级统计：critical、high、medium、low
+- 📈 时间序列分析：每日/每周使用趋势
+- 🏆 热门规则排行：使用次数 Top N
+- ⚠️ 问题规则识别：被忽略/纠正/禁用的规则
+
+**新增 MCP 工具**：
+- `get_rule_usage_stats`: 获取统计数据（支持 JSON/Markdown/Summary 格式）
+- `record_feedback`: 手动记录反馈
+- `get_feedback_stats`: 获取反馈统计
+
+**独立 CLI 脚本**：
+```bash
+# 查看使用统计
+npx tsx scripts/rule-usage-stats.ts --format summary
+
+# 生成 Markdown 报告
+npx tsx scripts/rule-usage-stats.ts --format markdown --output report.md
+
+# 过滤特定时间段
+npx tsx scripts/rule-usage-stats.ts --last 30days --top 20
+```
+
 ---
 
 ## 📊 质量演进对比
@@ -118,6 +167,10 @@
 
 # 查看系统状态
 /autoimprove-status
+
+# 🆕 查看规则使用统计
+Ask Claude: "Show me rule usage statistics for the last 30 days"
+# Claude will call get_rule_usage_stats tool
 ```
 
 ### 获取场景化建议
@@ -213,32 +266,89 @@
    - 智能验证、清理、关键词提取、置信度调整
    - 修改 `--consolidate` 为默认行为
 
+3. ✅ `src/mcp-server-ts/src/core/rule-usage-stats.ts` **（新增）**
+   - 完整的统计分析引擎
+   - 多维度数据聚合
+   - Markdown/JSON/Summary 格式支持
+
+4. ✅ `src/mcp-server-ts/src/index.ts`
+   - 新增 `get_rule_usage_stats` 工具
+   - 修改 `search_knowledge` 工具支持自动反馈记录
+   - 添加 `skip_feedback` 参数
+
+5. ✅ `scripts/rule-usage-stats.ts` **（新增）**
+   - 独立 CLI 统计脚本
+   - 支持时间过滤、格式输出、Top N 限制
+
+6. ✅ `setup.sh`
+   - 新增 Step 7：配置自动反馈指南
+   - 复制模板到 `~/.claude/`
+   - 添加引用到 `~/.claude/CLAUDE.md`
+
 ### 文档
-3. ✅ `src/skills-ts/src/autoimprove-summarize/SKILL.md`
+7. ✅ `src/skills-ts/src/autoimprove-summarize/SKILL.md`
    - 更新参数说明
    - 添加 `--enhance` 使用示例
 
-4. ✅ `docs/QUALITY_IMPROVEMENTS.md`
+8. ✅ `docs/QUALITY_IMPROVEMENTS.md`
    - 详细的问题分析和解决方案
    - 噪音过滤详解
    - 效果对比
 
-5. ✅ `docs/AGENT_ENHANCEMENT_DESIGN.md`
+9. ✅ `docs/AGENT_ENHANCEMENT_DESIGN.md`
    - 完整的架构设计
    - 三种实现方案对比
    - Prompt 设计
    - 性能优化策略
 
-6. ✅ `docs/AGENT_ENHANCEMENT_FEATURE.md`
-   - 功能使用指南
-   - 实际示例
-   - 最佳实践
-   - 故障排除
+10. ✅ `docs/AGENT_ENHANCEMENT_FEATURE.md`
+    - 功能使用指南
+    - 实际示例
+    - 最佳实践
+    - 故障排除
 
-7. ✅ `docs/V2.1_RELEASE_NOTES.md`
-   - 完整的版本更新说明
-   - 使用示例
-   - 效果对比
+11. ✅ `docs/V2.1_RELEASE_NOTES.md`
+    - 完整的版本更新说明
+    - 使用示例
+    - 效果对比
+
+12. ✅ `docs/rule-usage-stats.md` **（新增）**
+    - 统计功能完整使用指南
+    - CLI 和 MCP 工具使用示例
+    - 输出格式说明
+
+13. ✅ `docs/feedback-mechanism.md` **（新增）**
+    - 双轨反馈系统技术实现
+    - 数据流设计
+    - 存储格式说明
+
+14. ✅ `docs/AUTO_FEEDBACK_IMPLEMENTATION.md` **（新增）**
+    - 自动反馈功能实现总结
+    - 配置说明
+    - 使用场景
+
+15. ✅ `docs/IMPLEMENTATION_SUMMARY.md` **（新增）**
+    - 统计分析功能实现总结
+
+16. ✅ `templates/claude-feedback-instructions.md` **（新增）**
+    - Claude 反馈记录指南模板
+    - 4 种反馈类型说明
+    - 最佳实践和示例
+
+17. ✅ `README.md`
+    - 更新功能列表：自动反馈记录、使用统计
+    - 更新 MCP 工具列表
+    - 更新安装步骤说明
+
+18. ✅ `docs/MCP_TOOLS_API.md`
+    - 添加 3 个新工具文档
+    - 更新 `search_knowledge` 工具说明
+    - 添加反馈记录系统说明
+
+19. ✅ `docs/COMPLETE_SUMMARY.md`
+    - 添加自动反馈记录功能说明
+    - 添加规则使用统计功能说明
+    - 更新最佳实践和工作流
 
 ---
 
@@ -326,6 +436,11 @@
 
 # 5. 获取建议：开始新任务时
 /autoimprove-lessons
+
+# 6. 🆕 查看使用统计：了解规则实际效果
+Ask Claude: "Show me a summary of rule usage statistics"
+Ask Claude: "Which rules have been used most in the last 30 days?"
+Ask Claude: "Are there any problematic rules I should review?"
 ```
 
 ### 质量控制
@@ -337,6 +452,14 @@
 # 查看特定技术栈规则
 /autoimprove-rules --category performance
 
+# 🆕 查看规则使用情况（通过 Claude）
+Ask Claude: "Show me detailed usage statistics for security rules"
+Ask Claude: "Generate a markdown report of rule usage for the last 90 days"
+
+# 🆕 查看规则使用情况（CLI）
+npx tsx scripts/rule-usage-stats.ts --format summary
+npx tsx scripts/rule-usage-stats.ts --category Security --format markdown
+
 # 清理低质量规则（如果需要）
 /autoimprove-rules --clean-low-quality
 ```
@@ -345,7 +468,10 @@
 
 ## 🔮 未来计划
 
-### v2.2（计划中）
+### v2.2（已完成部分功能）
+- ✅ 自动反馈记录机制
+- ✅ 规则使用统计分析
+- ✅ 多维度数据报告
 - 🔄 真正的 LLM Agent 集成（使用 Claude Code Agent 工具）
 - 🔄 多轮对话上下文分析
 - 🔄 用户反馈学习
@@ -356,12 +482,14 @@
 - 🔄 模型选择（Opus/Sonnet/Haiku）
 - 🔄 成本预算控制
 - 🔄 A/B 测试框架
+- 🔄 基于统计数据的规则质量自动调整
 
 ### v3.0（愿景）
 - 🔄 跨项目模式学习
 - 🔄 行业最佳实践推荐
 - 🔄 团队协作和规则共享
 - 🔄 实时规则应用和建议
+- 🔄 预测性规则推荐（基于历史使用数据）
 
 ---
 
@@ -383,12 +511,20 @@
    - 可选的 Agent 增强（--enhance）
    - 完整的文档和示例
 
+4. **数据驱动**：自动反馈和统计（v2.1）
+   - 双轨自动反馈记录
+   - 多维度使用统计分析
+   - 问题规则自动识别
+   - 数据驱动的规则优化
+
 ### 质量保证
 
 - ✅ 编译成功
 - ✅ 安装成功
 - ✅ 所有功能实现
 - ✅ 文档完整
+- ✅ 反馈机制完整
+- ✅ 统计分析完整
 
 ### 立即可用
 
@@ -398,6 +534,9 @@
 
 # 🎯 查看高质量规则
 /autoimprove-rules --min-confidence 0.9
+
+# 📊 查看使用统计
+Ask Claude: "Show me rule usage statistics"
 ```
 
 ---
@@ -410,5 +549,9 @@
 - ✅ 过滤所有噪音
 - ✅ 生成高质量规则
 - ✅ 自动学习你的编码习惯
+- ✅ 自动记录规则使用反馈
+- ✅ 提供多维度使用统计
+- ✅ 识别问题规则并优化
 
 不再有系统日志和调试信息污染你的知识库！🚀
+现在你还能看到哪些规则真正有用！📊

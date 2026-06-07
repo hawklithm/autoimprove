@@ -165,7 +165,12 @@ export class ClaudeIndexExporter {
 
     lines.push("# AutoImprove Learned Rules");
     lines.push("");
-    lines.push("> 这些规则从你的编码习惯中自动学习。规则会根据当前工作场景自动匹配。");
+    lines.push("> **🎯 Application Instructions**: These rules are learned from your coding habits. When writing code:");
+    lines.push("> 1. **Auto-check**: At task start, identify applicable rules based on file types and user description");
+    lines.push("> 2. **Proactively apply**: 🔴 Critical and 🟠 High rules MUST be followed; 🟡 Medium and ⚪ Low rules are preferred");
+    lines.push("> 3. **Transparent notification**: Briefly explain when applying rules (e.g., \"Following RULE-010, adding parameter validation\")");
+    lines.push("> 4. **Record feedback**: After applying a rule, call `record_feedback` tool (feedback_type: 'used', with context and user_rating)");
+    lines.push("> 5. **Question when unclear**: If a rule doesn't apply to current scenario, explain why and ask user if rule needs updating");
     lines.push("");
 
     // Group by priority
@@ -219,8 +224,9 @@ export class ClaudeIndexExporter {
     lines.push("");
     lines.push("---");
     lines.push("");
-    lines.push("💡 **动态匹配**: Claude 会根据你当前的代码场景自动应用相关规则。");
-    lines.push(`📊 **完整规则库**: 运行 \`/autoimprove-rules\` 查看全部规则。`);
+    lines.push("💡 **Scene Matching**: Rules are automatically matched based on file extensions, import statements, and keywords.");
+    lines.push("📊 **Full Rule Library**: Run `/autoimprove-rules` to view all rules.");
+    lines.push("🔧 **Rule Management**: If a rule is outdated or inapplicable, inform the user and suggest running `/autoimprove-summarize` to re-learn.");
     lines.push("");
 
     return lines.join("\n");
@@ -239,20 +245,20 @@ export class ClaudeIndexExporter {
     const typeLabel = this.getTypeLabel(rule.type);
     const sceneLabel = this.formatScene(rule.scenes);
 
-    lines.push(`### [${rule.id.toUpperCase()}] ${typeLabel} [置信度: ${rule.confidence.toFixed(2)}]`);
+    lines.push(`### [${rule.id.toUpperCase()}] ${typeLabel} [Confidence: ${rule.confidence.toFixed(2)}]`);
 
     if (sceneLabel) {
-      lines.push(`**场景**: ${sceneLabel}`);
+      lines.push(`**Scene**: ${sceneLabel}`);
     }
 
     if (rule.keywords && rule.keywords.length > 0) {
-      lines.push(`**关键词**: ${rule.keywords.join(", ")}`);
+      lines.push(`**Keywords**: ${rule.keywords.join(", ")}`);
     }
 
     if (content) {
       // Extract a short summary from content (first 2 lines or 150 chars)
       const summary = this.extractSummary(content.content);
-      lines.push(`**规则**: ${summary}`);
+      lines.push(`**Rule**: ${summary}`);
     }
 
     lines.push("");
@@ -265,11 +271,11 @@ export class ClaudeIndexExporter {
    */
   private getTypeLabel(type: string): string {
     const labels: Record<string, string> = {
-      "repeated-correction": "反复修正的模式",
-      "anti-pattern": "反模式警告",
-      security: "安全规则",
-      performance: "性能优化",
-      preference: "编码偏好",
+      "repeated-correction": "Repeated Correction Pattern",
+      "anti-pattern": "Anti-pattern Warning",
+      security: "Security Rule",
+      performance: "Performance Optimization",
+      preference: "Coding Preference",
     };
 
     return labels[type] || type;

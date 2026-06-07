@@ -26,6 +26,7 @@ import { RuleQualityController } from "./core/rule-quality.js";
 import { AdaptiveConfidenceCalculator } from "./core/adaptive-confidence.js";
 import { EnhancedSceneDetector } from "./core/enhanced-scene-detector.js";
 import { ClaudeIndexExporter } from "./tools/export-rules-to-claude.js";
+import { RuleUsageStatsAnalyzer } from "./core/rule-usage-stats.js";
 import { logger } from "./core/logger.js";
 import { createScene, PatternType } from "./core/models.js";
 import { existsSync } from "fs";
@@ -45,6 +46,7 @@ let qualityController: RuleQualityController;
 let adaptiveConfidence: AdaptiveConfidenceCalculator;
 let sceneDetector: EnhancedSceneDetector;
 let claudeIndexExporter: ClaudeIndexExporter;
+let statsAnalyzer: RuleUsageStatsAnalyzer;
 
 function ensureInitialized() {
   if (!indexManager) {
@@ -64,6 +66,7 @@ function ensureInitialized() {
     adaptiveConfidence = new AdaptiveConfidenceCalculator();
     sceneDetector = new EnhancedSceneDetector();
     claudeIndexExporter = new ClaudeIndexExporter(indexManager, contentManager);
+    statsAnalyzer = new RuleUsageStatsAnalyzer(indexManager, contentManager, adaptiveConfidence);
 
     logger.info("server", "AutoImprove MCP Server initialized");
   }
@@ -149,7 +152,11 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
             },
             rule_id: {
               type: "string",
-              description: "Optional ule ID",
+              description: "Optional rule ID",
+            },
+            skip_feedback: {
+              type: "boolean",
+              description: "Skip automatic feedback recording (default: false)",
             },
           },
         },
@@ -466,6 +473,49 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
           required: ["confirm"],
         },
       },
+      {
+        name: "get_rule_usage_stats",
+        description: "Get multi-dimensional rule usage statistics with various output formats",
+        inputSchema: {
+          type: "object",
+          properties: {
+            dimensions: {
+              type: "array",
+              items: {
+                type: "string",
+                enum: ["category", "scene", "priority", "time", "top_rules"],
+              },
+              description: "Statistics ions to include (default: all)",
+            },
+            start_date: {
+              type: "string",
+              description: "Start date for time range filter (ISO format: YYYY-MM-DD)",
+            },
+            end_date: {
+              type: "string",
+              description: "End date for time range filter (ISO format: YYYY-MM-DD)",
+            },
+            categories: {
+              type: "array",
+              items: { type: "string" },
+              description: "Filter by specific categories",
+            },
+            min_feedbacks: {
+              type: "number",
+              description: "Minimum feedback count for problematic rules analysis (default: 5)",
+            },
+            top_n: {
+              type: "number",
+              description: "Number of top rules to return (default: 10)",
+            },
+            output_format: {
+              type: "string",
+              enum: ["json", "markdown", "summary"],
+              description: "Output format (default: json)",
+            },
+          },
+        },
+      },
     ],
   };
 });
@@ -540,6 +590,9 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
       case "clear_all_rules":
         return await handleClearAllRules(request.params.arguments);
+
+      case "get_rule_usage_stats":
+        return await handleGetRuleUsageStats(request.params.arguments);
 
       default:
         throw new Error(`Unknown tool: ${request.params.name}`);
@@ -706,12 +759,24 @@ async function handleSearchKnowledge(args: any) {
   const sceneJson = args.scene_json as string | undefined;
   const keywords = args.keywords as string | undefined;
   const ruleId = args.rule_id as string | undefined;
+  const skipFeedback = args.skip_feedback === true;
 
   // Search by ID
   if (ruleId) {
     const rule = indexManager.getRule(ruleId);
     if (rule) {
       const content = contentManager.loadContent(ruleId);
+
+      // 🆕 Auto-record feedback when rule is queried
+      if (!skipFeedback) {
+        adaptiveConfidence.recordFeedback({
+          rule_id: ruleId,
+          timestamp: new Date().toISOString(),
+          feedback_type: "used",
+          context: "rule_query_by_id",
+        });
+      }
+
       return {
         content: [
           {
@@ -750,6 +815,26 @@ async function handleSearchKnowledge(args: any) {
     const kwList = keywords ? keywords.split(",") : undefined;
     const matches = matcher.matchRules(scene, kwList);
 
+    // 🆕 Auto-record feedback for matched rules
+    if (!skipFeedback && matches.length > 0) {
+      const sceneContext = `scene:${scene.tech.join(",")}/${scene.functional.join(",")}`;
+      const keywordContext = kwList ? `:keywords:${kwList.join(",")}` : "";
+
+      for (const match of matches) {
+        adaptiveConfidence.recordFeedback({
+          rule_id: match.rule.id,
+          timestamp: new Date().toISOString(),
+          feedback_type: "used",
+          context: `${sceneContext}${keywordContext}:relevance:${match.relevance_score.toFixed(2)}`,
+        });
+      }
+
+      logger.info("feedback", `Auto-recorded ${matches.length} rule queries`, {
+        scene: sceneContext,
+        keywords: kwList,
+      });
+    }
+
     return {
       content: [
         {
@@ -768,7 +853,7 @@ async function handleSearchKnowledge(args: any) {
     };
   }
 
-  // List all rules
+  // List all rules (no feedback recording for list-all queries)
   const rules = indexManager.listRules();
   return {
     content: [
@@ -1626,12 +1711,12 @@ async function handleClearAllRules(args: any) {
     // Reset claude-index.md
     const initialContent = `# AutoImprove Learned Rules
 
-> 这些规则从你的编码习惯中自动学习。规则会根据当前工作场景自动匹配。
+> These rules are automatically learned from your coding habits and will match based on your current work context.
 
 ---
 
-💡 **动态匹配**: Claude 会根据你当前的代码场景自动应用相关规则。
-📊 **完整规则库**: 运行 \`/autoimprove-rules\` 查看全部规则。
+💡 **Dynamic Matching**: Claude will automatically apply relevant rules based on your current code context.
+📊 **Full Rule Library**: Run \`/autoimprove-rules\` to view all rules.
 `;
     writeFileSync(claudeIndexFile, initialContent);
 
@@ -1655,6 +1740,65 @@ async function handleClearAllRules(args: any) {
     };
   } catch (error: any) {
     logger.error("clear", "Failed to clear rules", error);
+    return {
+      content: [
+        {
+          type: "text",
+          text: JSON.stringify({
+            success: false,
+            error: error.message,
+          }),
+        },
+      ],
+    };
+  }
+}
+
+async function handleGetRuleUsageStats(args: any) {
+  try {
+    const outputFormat = (args.output_format as "json" | "markdown" | "summary") || "json";
+    const minFeedbacks = (args.min_feedbacks as number) || 5;
+    const topN = (args.top_n as number) || 10;
+
+    // Parse dates if provided
+    const startDate = args.start_date ? new Date(args.start_date) : undefined;
+    const endDate = args.end_date ? new Date(args.end_date) : undefined;
+
+    // Get statistics
+    const stats = statsAnalyzer.getMultiDimensionalStats({
+      startDate,
+      endDate,
+      categories: args.categories,
+      minFeedbacks,
+      topN,
+    });
+
+    logger.info("stats", "Generated rule usage statistics", {
+      total_rules: stats.overview.total_rules,
+      total_feedbacks: stats.overview.total_feedbacks,
+      format: outputFormat,
+    });
+
+    // Format output
+    let output: string;
+    if (outputFormat === "markdown") {
+      output = statsAnalyzer.generateReport(stats);
+    } else if (outputFormat === "summary") {
+      output = statsAnalyzer.generateSummary(stats);
+    } else {
+      output = JSON.stringify(stats, null, 2);
+    }
+
+    return {
+      content: [
+        {
+          type: "text",
+          text: output,
+        },
+      ],
+    };
+  } catch (error: any) {
+    logger.error("stats", "Failed to generate statistics", error);
     return {
       content: [
         {

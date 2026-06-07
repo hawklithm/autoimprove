@@ -1103,12 +1103,12 @@ async function rebuildAllRules(
       if (fs.existsSync(claudeIndexFile)) {
         const initialContent = `# AutoImprove Learned Rules
 
-> 这些规则从你的编码习惯中自动学习。规则会根据当前工作场景自动匹配。
+> These rules are automatically learned from your coding habits and will match based on your current work context.
 
 ---
 
-💡 **动态匹配**: Claude 会根据你当前的代码场景自动应用相关规则。
-📊 **完整规则库**: 运行 \`/autoimprove-rules\` 查看全部规则。
+💡 **Dynamic Matching**: Claude will automatically apply relevant rules based on your current code context.
+📊 **Full Rule Library**: Run \`/autoimprove-rules\` to view all rules.
 `;
         fs.writeFileSync(claudeIndexFile, initialContent);
         console.log(`   ✓ Reset Claude index`);

@@ -34,11 +34,26 @@ AutoImprove analyzes your Claude Code sessions to detect patterns in corrections
   - Category-balanced selection (security, corrections, anti-patterns, performance, preferences)
   - Low token cost (~400 tokens for top 10 rules)
 
+- **🆕 Automatic Feedback Recording**: Tracks rule usage automatically
+  - Auto-records when rules are queried (方案1)
+  - Claude actively records detailed feedback (方案2)
+  - Stores feedback in `~/.autoimprove/feedback_history.jsonl`
+  - Supports 4 feedback types: used, ignored, corrected, disabled
+
+- **🆕 Usage Statistics & Analytics**: Multi-dimensional rule usage analysis
+  - Statistics by category, scene, priority, time
+  - Top rules ranking with ratings
+  - Problematic rules identification (high ignore/correct rate)
+  - Both MCP tool and CLI script available
+
 - **MCP Server**: MCP-based server with tools and resources (TypeScript)
   - `analyze_session` - Analyze session patterns
   - `generate_rules` - Generate rules from patterns
-  - `export_rules_to_claude_md` - 🆕 Export top rules to Claude index
-  - `search_knowledge` - Search rules
+  - `export_rules_to_claude_md` - Export top rules to Claude index
+  - `search_knowledge` - Search rules (🆕 auto-records feedback)
+  - `record_feedback` - 🆕 Record rule usage feedback
+  - `get_feedback_stats` - 🆕 Get feedback statistics
+  - `get_rule_usage_stats` - 🆕 Multi-dimensional usage statistics
   - `update_rules` - Update existing rules
   - `list_scenes` - List known scenes
   - `knowledge://rules/{id}` - Get rule content
@@ -65,11 +80,14 @@ This will automatically:
 3. ✅ Configure Claude Code MCP Server (user-level, **available in all projects**)
 4. ✅ Install Skills to `~/.claude/skills/`
 5. ✅ Initialize storage directory at `~/.autoimprove/`
-6. ✅ 🆕 Configure automatic rule loading in `~/.claude/CLAUDE.md`
+6. ✅ Configure automatic rule loading in `~/.claude/CLAUDE.md`
+7. ✅ 🆕 Configure automatic feedback recording in `~/.claude/CLAUDE.md`
 
 **Configuration Scope**: The setup script configures `autoimprove-core` as a **user-level MCP server**, making it accessible from any project directory. You only need to run setup once.
 
 **Automatic Rule Loading**: Setup adds a reference to `~/.autoimprove/rules/claude-index.md` in your global `~/.claude/CLAUDE.md`, ensuring top rules are automatically loaded in every Claude Code session.
+
+**Automatic Feedback Recording**: Setup copies feedback instructions to `~/.claude/autoimprove-feedback-instructions.md` and adds a reference in `~/.claude/CLAUDE.md`, enabling Claude to actively record rule usage feedback.
 
 ### Verify Installation
 

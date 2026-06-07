@@ -210,8 +210,34 @@ EOF
   echo "✓ Added AutoImprove rules reference to $GLOBAL_CLAUDE_MD"
 fi
 
+# Add feedback instructions reference
+if grep -q "autoimprove-feedback-instructions.md" "$GLOBAL_CLAUDE_MD" 2>/dev/null; then
+  echo "✓ Feedback instructions reference already exists in CLAUDE.md"
+else
+  echo "Adding feedback instructions to CLAUDE.md..."
+
+  # Copy feedback instructions template to .claude directory
+  FEEDBACK_INSTRUCTIONS="$CLAUDE_DIR/autoimprove-feedback-instructions.md"
+  if [ -f "$TEMPLATES_DIR/claude-feedback-instructions.md" ]; then
+    cp "$TEMPLATES_DIR/claude-feedback-instructions.md" "$FEEDBACK_INSTRUCTIONS"
+    echo "✓ Copied feedback instructions to $FEEDBACK_INSTRUCTIONS"
+  else
+    echo "⚠ Warning: Feedback instructions template not found at $TEMPLATES_DIR/claude-feedback-instructions.md"
+  fi
+
+  # Add reference to CLAUDE.md
+  cat >> "$GLOBAL_CLAUDE_MD" << 'EOF'
+
+## AutoImprove 规则使用反馈
+
+@~/.claude/autoimprove-feedback-instructions.md
+
+EOF
+  echo "✓ Added feedback instructions reference to $GLOBAL_CLAUDE_MD"
+fi
+
 echo ""
-echo "Step 7: Restarting MCP Server..."
+echo "Step 8: Restarting MCP Server..."
 echo "-----------------------------------"
 
 # Kill any existing autoimprove MCP server processes

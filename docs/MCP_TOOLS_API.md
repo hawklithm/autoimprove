@@ -2,7 +2,7 @@
 
 ## Overview
 
-AutoImprove MCP Server provides 5 tools and 2 resources for session analysis and rule management.
+AutoImprove MCP Server provides 8 tools and 2 resources for session analysis, rule management, and usage statistics.
 
 ## Tools
 
@@ -65,12 +65,13 @@ result = mcp.call_tool("generate_rules", {
 
 ### search_knowledge
 
-Search rules by scene, keywords, or ID.
+Search rules by scene, keywords, or ID. Automatically records "used" feedback for matched rules.
 
 **Parameters:**
 - `scene_json` (string, optional): JSON string of scene to match
 - `keywords` (string, optional): Comma-separated keywords
 - `rule_id` (string, optional): Specific rule ID
+- `skip_feedback` (boolean, optional): Set to true to skip automatic feedback recording (default: false)
 
 **Returns:**
 ```json
@@ -92,16 +93,27 @@ Search rules by scene, keywords, or ID.
 }
 ```
 
+**Automatic Feedback Recording:**
+When `skip_feedback` is false (default), this tool automatically records:
+- "used" feedback when querying a rule by ID
+- "used" feedback for all matched rules when searching by scene
+
 **Example:**
 ```python
-# Search by scene
+# Search by scene (records feedback for matches)
 result = mcp.call_tool("search_knowledge", {
     "scene_json": json.dumps({"tech": ["react"], "functional": ["auth"]})
 })
 
-# Search by ID
+# Search by ID (records feedback)
 result = mcp.call_tool("search_knowledge", {
     "rule_id": "rule-001"
+})
+
+# Search without recording feedback
+result = mcp.call_tool("search_knowledge", {
+    "scene_json": json.dumps({"tech": ["react"]}),
+    "skip_feedback": True
 })
 ```
 
@@ -162,6 +174,170 @@ List all known scenes from rules and sessions.
 result = mcp.call_tool("list_scenes", {})
 ```
 
+### record_feedback
+
+Record feedback for a rule (used, ignored, corrected, disabled).
+
+**Parameters:**
+- `rule_id` (string, required): ID of the rule
+- `feedback_type` (string, required): Type of feedback ("used", "ignored", "corrected", "disabled")
+- `context` (string, optional): Context information about the feedback
+- `user_rating` (number, optional): User rating 1-5
+
+**Returns:**
+```json
+{
+  "success": true,
+  "message": "Feedback recorded successfully"
+}
+```
+
+**Example:**
+```python
+# Record that a rule was used with rating
+result = mcp.call_tool("record_feedback", {
+    "rule_id": "rule-001",
+    "feedback_type": "used",
+    "context": "Applied to React authentication flow",
+    "user_rating": 5
+})
+
+# Record that a rule was ignored
+result = mcp.call_tool("record_feedback", {
+    "rule_id": "rule-002",
+    "feedback_type": "ignored",
+    "context": "Not applicable to this use case"
+})
+```
+
+### get_feedback_stats
+
+Get feedback statistics for a rule or all rules.
+
+**Parameters:**
+- `rule_id` (string, optional): Rule ID to get stats for (omit for all rules)
+
+**Returns:**
+```json
+{
+  "success": true,
+  "stats": {
+    "rule-001": {
+      "rule_id": "rule-001",
+      "total_feedbacks": 45,
+      "by_type": {
+        "used": 30,
+        "ignored": 10,
+        "corrected": 3,
+        "disabled": 2
+      },
+      "average_rating": 4.2,
+      "ratings_count": 15,
+      "last_feedback": "2026-06-05T10:30:00Z"
+    }
+  }
+}
+```
+
+**Example:**
+```python
+# Get stats for specific rule
+result = mcp.call_tool("get_feedback_stats", {
+    "rule_id": "rule-001"
+})
+
+# Get stats for all rules
+result = mcp.call_tool("get_feedback_stats", {})
+```
+
+### get_rule_usage_stats
+
+Get multi-dimensional usage statistics for rules.
+
+**Parameters:**
+- `output_format` (string, optional): Output format ("json", "markdown", "summary"; default: "json")
+- `start_date` (string, optional): Start date filter (ISO format)
+- `end_date` (string, optional): End date filter (ISO format)
+- `categories` (array, optional): Filter by rule categories
+- `min_feedbacks` (number, optional): Minimum feedback count to include
+- `top_n` (number, optional): Limit to top N rules (default: 10)
+
+**Returns:**
+```json
+{
+  "success": true,
+  "format": "json",
+  "stats": {
+    "overview": {
+      "total_rules": 50,
+      "rules_with_usage": 35,
+      "total_feedbacks": 450,
+      "date_range": {
+        "start": "2026-01-01T00:00:00Z",
+        "end": "2026-06-06T00:00:00Z"
+      }
+    },
+    "by_category": {
+      "Security": {
+        "rules_count": 12,
+        "total_usage": 150,
+        "avg_usage_per_rule": 12.5
+      }
+    },
+    "by_scene": {
+      "react-auth": {
+        "rules_count": 8,
+        "total_usage": 95
+      }
+    },
+    "by_priority": {
+      "critical": 180,
+      "high": 120,
+      "medium": 100,
+      "low": 50
+    },
+    "top_used_rules": [
+      {
+        "rule_id": "rule-001",
+        "usage_count": 45,
+        "category": "Security",
+        "priority": "critical"
+      }
+    ],
+    "problematic_rules": [
+      {
+        "rule_id": "rule-010",
+        "ignored_count": 15,
+        "corrected_count": 8,
+        "disabled_count": 3
+      }
+    ]
+  }
+}
+```
+
+**Example:**
+```python
+# Get JSON stats
+result = mcp.call_tool("get_rule_usage_stats", {
+    "output_format": "json",
+    "top_n": 20
+})
+
+# Get markdown report for last 30 days
+result = mcp.call_tool("get_rule_usage_stats", {
+    "output_format": "markdown",
+    "start_date": "2026-05-07",
+    "end_date": "2026-06-06"
+})
+
+# Get quick summary filtered by category
+result = mcp.call_tool("get_rule_usage_stats", {
+    "output_format": "summary",
+    "categories": ["Security", "Performance"]
+})
+```
+
 ## Resources
 
 ### knowledge://rules/{rule_id}
@@ -217,3 +393,25 @@ Use `health_check` tool to verify server status:
 result = mcp.call_tool("health_check", {})
 # Returns: {"success": true, "status": "healthy", "storage": {...}}
 ```
+
+## Feedback Recording
+
+AutoImprove uses a dual-track feedback recording system:
+
+1. **Automatic Recording**: `search_knowledge` tool automatically records "used" feedback when:
+   - A rule is queried by ID
+   - Rules are matched by scene context
+   - Can be disabled with `skip_feedback: true` parameter
+
+2. **Manual Recording**: Claude actively records feedback via `record_feedback` tool when:
+   - User explicitly approves/rejects a rule
+   - A rule needs correction
+   - A rule is disabled
+   - User provides a quality rating
+
+Feedback is stored in `~/.autoimprove/feedback_history.jsonl` and used to:
+- Generate usage statistics via `get_rule_usage_stats`
+- Calculate per-rule stats via `get_feedback_stats`
+- Improve rule quality and relevance over time
+
+See [feedback-mechanism.md](./feedback-mechanism.md) for implementation details.
