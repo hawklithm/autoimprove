@@ -165,11 +165,31 @@ export class ClaudeIndexExporter {
 
     lines.push("# AutoImprove Learned Rules");
     lines.push("");
-    lines.push("> **🎯 Application Instructions**: These rules are learned from your coding habits. When writing code:");
+    lines.push("> **🎯 CRITICAL: You MUST record rule usage for statistics tracking**");
+    lines.push(">");
+    lines.push("> **Application Instructions**: These rules are learned from your coding habits. When writing code:");
     lines.push("> 1. **Auto-check**: At task start, identify applicable rules based on file types and user description");
     lines.push("> 2. **Proactively apply**: 🔴 Critical and 🟠 High rules MUST be followed; 🟡 Medium and ⚪ Low rules are preferred");
     lines.push("> 3. **Transparent notification**: Briefly explain when applying rules (e.g., \"Following RULE-010, adding parameter validation\")");
-    lines.push("> 4. **Record feedback**: After applying a rule, call `record_feedback` tool (feedback_type: 'used', with context and user_rating)");
+    lines.push("> 4. **⚠️ MANDATORY: Record feedback immediately after applying/ignoring a rule**:");
+    lines.push(">");
+    lines.push(">    ```typescript");
+    lines.push(">    // When you apply a rule:");
+    lines.push(">    mcp__autoimprove-core__record_feedback({");
+    lines.push(">      rule_id: \"RULE-XXX\",");
+    lines.push(">      feedback_type: \"used\",");
+    lines.push(">      context: \"Brief scenario description\",");
+    lines.push(">      user_rating: 5  // 1-5 based on how well it fit");
+    lines.push(">    })");
+    lines.push(">");
+    lines.push(">    // When you skip a rule:");
+    lines.push(">    mcp__autoimprove-core__record_feedback({");
+    lines.push(">      rule_id: \"RULE-XXX\",");
+    lines.push(">      feedback_type: \"ignored\",");
+    lines.push(">      context: \"Why it doesn't apply\"");
+    lines.push(">    })");
+    lines.push(">    ```");
+    lines.push(">");
     lines.push("> 5. **Question when unclear**: If a rule doesn't apply to current scenario, explain why and ask user if rule needs updating");
     lines.push("");
 
