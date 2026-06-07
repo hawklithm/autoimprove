@@ -1,12 +1,14 @@
 # AutoImprove
 
-Learn coding patterns from Claude Code sessions and generate reusable rules that **automatically load** into every session.
+Learn coding patterns from Claude Code sessions and generate reusable rules.
 
 ## Overview
 
 AutoImprove analyzes your Claude Code sessions to detect patterns in corrections, preferences, and best practices. It automatically generates rules that Claude will follow in future sessions, reducing repetitive corrections and improving consistency.
 
-**✨ New in v0.2.0**: Rules are now **automatically loaded** into every Claude Code session through `~/.claude/CLAUDE.md` reference. No manual invocation needed!
+**✨ New in v0.2.0**: 
+- Rules are **automatically loaded** into every Claude Code session through `~/.claude/CLAUDE.md` reference
+- **npm-installable package** with CLI commands for easy setup and management
 
 ## Features
 
@@ -94,127 +96,87 @@ This will automatically:
 After setup completes:
 
 ```bash
-# Check MCP server status (works from any directory)
-claude mcp list
+# Check system health
+autoimprove status
 
+# View existing rules
+autoimprove rules
+
+# Or check MCP server directly
+claude mcp list
 # Expected output:
 # autoimprove-core: node .../dist/index.js - ✓ Connected
-
-# Check system health
-claude
-# Then type: /autoimprove-status
 ```
 
-### Manual Setup
+### Manual Setup (Development)
 
-If you prefer manual installation or need to customize the setup:
-
-**Step 1: Build MCP Server**
+If you're developing AutoImprove from source:
 
 ```bash
-cd src/mcp-server-ts
+# Clone repository
+git clone <repo-url>
+cd autoimprove
+
+# Install dependencies
 npm install
+
+# Build
 npm run build
-```
 
-**Step 2: Build Skills**
+# Link for local testing
+npm link
 
-```bash
-cd src/skills-ts
-npm install
-npm run build
-```
-
-**Step 3: Configure MCP Server**
-
-Using Claude Code CLI (recommended - works globally):
-
-```bash
-claude mcp add autoimprove-core -s user -- node /path/to/autoimprove/src/mcp-server-ts/dist/index.js
-```
-
-**Note**: Use `-s user` to make the server available in all projects, or `-s local` for project-specific configuration.
-
-**Step 4: Install Skills**
-
-```bash
-# Copy skills to Claude Code skills directory
-mkdir -p ~/.claude/skills
-cp -r src/skills-ts/src/autoimprove-* ~/.claude/skills/
+# Run setup
+autoimprove setup
 ```
 
 ## Quick Start
 
 ### 1. Verify Installation
 
-Check that the MCP Server is running (works from any project directory):
-
 ```bash
-# Check MCP server status
-claude mcp list
+# Check system health
+autoimprove status
 
-# Expected output:
-# codegraph: codegraph serve --mcp - ✓ Connected
-# autoimprove-core: node .../dist/index.js - ✓ Connected
-
-# Get detailed server info
-claude mcp get autoimprove-core
-
-# Expected output:
-# Scope: User config (available in all your projects)
-# Status: ✓ Connected
+# View existing rules
+autoimprove rules
 ```
 
-### 2. Use Skills
+### 2. Start Using Claude Code
 
-Available skills (work in any project):
+Rules will automatically load into every Claude Code session. Just start coding normally!
+
+### 3. Analyze Sessions
+
+After coding, extract patterns from your session:
 
 ```bash
-# Launch Claude Code and use these commands:
+# In Claude Code
+/autoimprove-summarize
+```
 
+Or use other skills:
+```bash
 /autoimprove-status      # Check system health and statistics
-/autoimprove-summarize   # Analyze session patterns
-/autoimprove-rules       # Manage knowledge rules
+/autoimprove-rules       # View detailed rules with filtering
 /autoimprove-lessons     # View learned lessons
 ```
 
-### 3. Use MCP Tools
+### 4. Manage Rules from CLI
 
-You can call the MCP tools directly through Claude Code's MCP integration:
+```bash
+# View all rules
+autoimprove rules
 
-**Analyze a session:**
-```
-Ask Claude to call the analyze_session tool with a session file path
-```
+# Filter by category
+autoimprove rules --category security
 
-**Generate rules:**
-```
-Ask Claude to call the generate_rules tool with detected patterns
-```
+# Filter by confidence
+autoimprove rules --min-confidence 0.7
 
-**Search knowledge:**
+# Filter by priority
+autoimprove rules --priority critical
 ```
-Ask Claude to call the search_knowledge tool to find relevant rules
-```
-
-**List available scenes:**
-```
-Ask Claude to call the list_scenes tool to see all known tech/functional scenes
-```
-
-### 4. Access Resources
-
-**Get rule content:**
-```
-Access knowledge://rules/rule-001
-```
-
-**Get lessons for a scene:**
-```
-Access knowledge://lessons/react-auth
-```
-
-See rules applicable to your current coding context.
 
 ## Architecture
 
@@ -294,81 +256,132 @@ Edit `~/.autoimprove/config.json`:
 }
 ```
 
+## CLI Commands
+
+### `autoimprove setup`
+
+Install and configure AutoImprove MCP server and skills.
+
+**Options**:
+- `--force` - Force reinstall even if already configured
+
+### `autoimprove status`
+
+Check system health and statistics:
+- Storage status and rule counts
+- MCP server registration
+- Skills installation
+- Configuration status
+
+### `autoimprove rules`
+
+View and manage knowledge rules.
+
+**Options**:
+- `--category <type>` - Filter by category (security, performance, preference, etc.)
+- `--min-confidence <number>` - Minimum confidence threshold (0-1)
+- `--priority <level>` - Filter by priority (critical, high, medium, low)
+
+**Example**:
+```bash
+autoimprove rules --category security --min-confidence 0.7
+```
+
+### `autoimprove summarize`
+
+Guide for analyzing sessions. Use the `/autoimprove-summarize` skill in Claude Code instead.
+
+**Options**:
+- `--all` - Analyze all historical sessions
+- `--enhance` - Use AI enhancement for better rule quality
+- `--force` - Force reanalysis of already-analyzed sessions
+- `--min-confidence <number>` - Minimum confidence threshold
+
 ## Development
 
-### Run Tests
+### Building from Source
 
 ```bash
-cd src/mcp-server
-pytest tests/ -v
+# Clone repository
+git clone <repo-url>
+cd autoimprove
+
+# Install dependencies
+npm install
+
+# Build
+npm run build
+
+# Test locally
+npm link
 ```
 
-### Run MCP Server Locally
+### Project Structure
 
-```bash
-cd src/mcp-server
-python server.py
 ```
-
-### Run Skills Locally
-
-```bash
-cd src/skills/autoimprove-status
-python skill.py
+autoimprove/
+├── bin/                      # CLI entry point
+│   └── autoimprove.js
+├── src/
+│   ├── cli/                  # CLI implementation
+│   │   ├── commands/         # Command implementations
+│   │   └── index.ts          # Commander.js setup
+│   ├── mcp-server-ts/        # MCP server
+│   │   └── src/
+│   │       ├── tools/        # MCP tools
+│   │       └── index.ts      # Server entry
+│   └── skills-ts/            # Claude Code skills
+│       └── src/
+├── templates/                # Template files
+├── package.json
+└── tsconfig.json
 ```
 
 ## Troubleshooting
 
-### MCP Server Not Found
-
-If `claude mcp list` doesn't show `autoimprove-core`:
+### MCP Server Not Registered
 
 ```bash
-# Re-run the setup script
-./setup.sh
-
-# Or manually add the server
-claude mcp add autoimprove-core -s user -- node /path/to/autoimprove/src/mcp-server-ts/dist/index.js
+autoimprove setup --force
 ```
 
-### Server Status Shows Disconnected
+### Rules Not Loading
+
+Check that `~/.claude/CLAUDE.md` contains:
+```markdown
+@~/.autoimprove/rules/claude-index.md
+```
+
+If missing, run:
+```bash
+autoimprove setup --force
+```
+
+### Skills Not Available
+
+Verify installation:
+```bash
+ls ~/.claude/skills/autoimprove-*
+```
+
+Reinstall if needed:
+```bash
+autoimprove setup --force
+```
+
+### Check System Status
 
 ```bash
-# Check server details
+# Comprehensive health check
+autoimprove status
+
+# Check MCP server directly
 claude mcp get autoimprove-core
-
-# Remove and re-add the server
-claude mcp remove autoimprove-core -s user
-claude mcp add autoimprove-core -s user -- node /path/to/autoimprove/src/mcp-server-ts/dist/index.js
-```
-
-### Skills Not Working
-
-Skills require the MCP server to be running. Check:
-
-1. MCP server is connected: `claude mcp list`
-2. Skills are installed: `ls ~/.claude/skills/autoimprove-*`
-3. Storage is initialized: `ls ~/.autoimprove/`
-
-If skills are missing, reinstall:
-
-```bash
-./setup.sh  # Reinstalls everything including skills
-```
-
-### Storage Not Initialized
-
-Run `/autoimprove-status` to initialize storage automatically, or manually:
-
-```bash
-mkdir -p ~/.autoimprove/{rules/content,sessions,cache,logs}
-echo '{"version":"1.0","rules":[]}' > ~/.autoimprove/rules/index.json
 ```
 
 ### No Patterns Detected
 
 - Ensure you made corrections during the session
-- Check that session file exists in `~/.claude/sessions/`
 - Try with more explicit corrections
 - Verify patterns meet confidence thresholds in `~/.autoimprove/config.json`
 
@@ -377,33 +390,6 @@ echo '{"version":"1.0","rules":[]}' > ~/.autoimprove/rules/index.json
 - Check scene detection with `/autoimprove-status`
 - Verify rule scenes match your current work (tech stack, functional domain)
 - Adjust confidence thresholds in `~/.autoimprove/config.json`
-- Use `search_knowledge` tool to test rule matching
-
-### Build Errors
-
-```bash
-# Clean and rebuild MCP server
-cd src/mcp-server-ts
-rm -rf dist node_modules
-npm install
-npm run build
-
-# Clean and rebuild skills
-cd src/skills-ts
-rm -rf dist node_modules
-npm install
-npm run build
-```
-
-### Check Logs
-
-```bash
-# View MCP server logs (if available)
-ls ~/.autoimprove/logs/
-
-# Check Claude Code logs
-ls ~/.claude/logs/
-```
 
 ### Configuration Scope Issues
 
@@ -414,10 +400,8 @@ If the server works in one project but not others:
 claude mcp get autoimprove-core
 
 # Should show: "Scope: User config (available in all your projects)"
-# If it shows "Local config", remove and re-add with -s user:
-
-claude mcp remove autoimprove-core -s local
-claude mcp add autoimprove-core -s user -- node /path/to/dist/index.js
+# If it shows "Local config", reinstall with:
+autoimprove setup --force
 ```
 
 ## License
@@ -426,4 +410,22 @@ MIT License
 
 ## Version
 
-Current version: 0.1.0
+Current version: 0.2.0
+
+### Changelog
+
+**v0.2.0** (2026-06-06)
+- 🎉 npm-installable package with global CLI
+- ✨ New `autoimprove` CLI commands: setup, status, rules, summarize
+- 🔧 Automated setup with `autoimprove setup`
+- 📦 Single-package distribution (no monorepo complexity)
+- 🌍 Commander.js-based CLI framework
+- 📄 Comprehensive README with npm installation guide
+
+**v0.1.0** (Initial Release)
+- MCP server with TypeScript implementation
+- Pattern detection and rule generation
+- Automatic rule loading via CLAUDE.md
+- Skills for Claude Code integration
+- Feedback recording system
+- Multi-dimensional usage statistics

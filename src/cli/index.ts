@@ -1,0 +1,43 @@
+#!/usr/bin/env node
+import { Command } from 'commander';
+import { setup } from './commands/setup';
+import { status } from './commands/status';
+import { summarize } from './commands/summarize';
+import { rules } from './commands/rules';
+
+const program = new Command();
+
+program
+  .name('autoimprove')
+  .description('Learn coding patterns from Claude Code sessions and generate reusable rules')
+  .version('0.2.0');
+
+program
+  .command('setup')
+  .description('Install and configure AutoImprove MCP server and skills')
+  .option('--force', 'Force reinstall even if already configured')
+  .action(setup);
+
+program
+  .command('status')
+  .description('Check AutoImprove system health and statistics')
+  .action(status);
+
+program
+  .command('summarize')
+  .description('Analyze Claude Code sessions and generate rules')
+  .option('--all', 'Analyze all historical sessions')
+  .option('--enhance', 'Use AI enhancement for better rule quality')
+  .option('--force', 'Force reanalysis of already-analyzed sessions')
+  .option('--min-confidence <number>', 'Minimum confidence threshold (0-1)', parseFloat)
+  .action(summarize);
+
+program
+  .command('rules')
+  .description('View and manage knowledge rules')
+  .option('--category <type>', 'Filter by category (security, performance, preference, etc.)')
+  .option('--min-confidence <number>', 'Minimum confidence threshold (0-1)', parseFloat)
+  .option('--priority <level>', 'Filter by priority (critical, high, medium, low)')
+  .action(rules);
+
+program.parse();

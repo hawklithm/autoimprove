@@ -1,0 +1,62 @@
+{
+  "name": "autoimprove",
+  "version": "0.2.0",
+  "description": "Learn coding patterns from Claude Code sessions and generate reusable rules",
+  "author": "AutoImprove Contributors",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/yourusername/autoimprove.git"
+  },
+  "bugs": {
+    "url": "https://github.com/yourusername/autoimprove/issues"
+  },
+  "homepage": "https://github.com/yourusername/autoimprove#readme",
+  "keywords": [
+    "claude",
+    "claude-code",
+    "mcp",
+    "mcp-server",
+    "ai",
+    "code-analysis",
+    "patterns",
+    "rules",
+    "autoimprove",
+    "session-analysis"
+  ],
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "bin": {
+    "autoimprove": "./bin/autoimprove.js"
+  },
+  "main": "./lib/index.js",
+  "types": "./lib/index.d.ts",
+  "files": [
+    "bin/",
+    "lib/",
+    "templates/",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "prebuild": "npm run clean",
+    "build": "npm run build:mcp && npm run build:cli",
+    "build:mcp": "cd src/mcp-server-ts && npm install && npm run build",
+    "build:cli": "tsc -p tsconfig.cli.json",
+    "clean": "rm -rf lib && cd src/mcp-server-ts && rm -rf dist",
+    "prepare": "npm run build",
+    "test": "cd src/mcp-server-ts && npm test",
+    "lint": "cd src/mcp-server-ts && npm run lint",
+    "dev": "npm run build && npm link",
+    "prepublishOnly": "npm run build && npm test"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.0.4",
+    "commander": "^12.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.2",
+    "typescript": "^5.7.2"
+  }
+}

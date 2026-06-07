@@ -1,0 +1,35 @@
+# Source files (we ship compiled code)
+src/
+tsconfig*.json
+*.ts
+!*.d.ts
+
+# Development files
+.git/
+.github/
+.vscode/
+.idea/
+*.log
+*.tgz
+
+# Test files
+test/
+tests/
+**/*.test.js
+**/*.spec.js
+coverage/
+
+# Documentation (except README)
+docs/
+*.md
+!README.md
+
+# Build artifacts we don't need
+*.map
+.DS_Store
+Thumbs.db
+
+# Local development
+.env*
+debug.sh
+setup_all.sh
