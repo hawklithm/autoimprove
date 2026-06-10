@@ -2,6 +2,7 @@
 # Dependencies
 node_modules/
 */node_modules/
+.codegraph/
 
 # Build outputs
 dist/

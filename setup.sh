@@ -175,7 +175,196 @@ else
 fi
 
 echo ""
-echo "Step 7: Configuring Claude Code global settings..."
+echo "Step 7: Initializing project CLAUDE.md with AutoImprove guidance..."
+echo "-----------------------------------"
+
+PROJECT_CLAUDE_MD="$SCRIPT_DIR/CLAUDE.md"
+
+# Check if AutoImprove MCP Tools section already exists
+if grep -q "## AutoImprove MCP Tools" "$PROJECT_CLAUDE_MD" 2>/dev/null; then
+  echo "✓ AutoImprove guidance already exists in project CLAUDE.md"
+  echo "  (Skipping to avoid duplication)"
+else
+  echo "Adding AutoImprove tool usage guidance to project CLAUDE.md..."
+
+  # Create backup before modification
+  cp "$PROJECT_CLAUDE_MD" "$PROJECT_CLAUDE_MD.backup" 2>/dev/null || true
+
+  # Create temporary file with AutoImprove guidance template
+  TEMP_GUIDANCE=$(mktemp)
+  cat > "$TEMP_GUIDANCE" << 'GUIDANCE_EOF'
+## AutoImprove MCP Tools
+
+This project has AutoImprove MCP tools (`mcp__autoimprove-core__*`) configured. AutoImprove learns from user corrections and generates reusable coding rules.
+
+### When to use AutoImprove
+
+Use AutoImprove tools **proactively during coding** — not just when explicitly asked. The system learns from patterns and helps you apply learned best practices automatically.
+
+| Scenario | Tool |
+|---|---|
+| Starting a new task in a familiar area | `search_knowledge` with scene context |
+| User corrects your approach/code | Record the pattern for future learning |
+| Finishing a conversation with corrections | Suggest running `/autoimprove-summarize` |
+| Applying a learned rule | `record_feedback` with type "used" |
+| Rule doesn't fit current context | `record_feedback` with type "ignored" |
+| Checking system health | `health_check` |
+| Viewing all learned patterns | `/autoimprove-rules` skill |
+| Analyzing session for patterns | `analyze_session` + `generate_rules` |
+
+### Integration with coding workflow
+
+**At task start**: Check for applicable rules by calling `search_knowledge` with the current scene (file types + task description). Example:
+```typescript
+mcp__autoimprove-core__search_knowledge({
+  scene_json: JSON.stringify({
+    tech: ["typescript", "react"],
+    functional: ["authentication"],
+    business: []
+  }),
+  keywords: "jwt,token,validation"
+})
+```
+
+**During coding**: When you apply a rule from `~/.autoimprove/rules/claude-index.md` or from search results:
+- Mention which rule you're following (e.g., "Following RULE-010 for parameter validation")
+- After user confirms it worked, record feedback:
+```typescript
+mcp__autoimprove-core__record_feedback({
+  rule_id: "RULE-010",
+  feedback_type: "used",
+  user_rating: 5,
+  context: "form-validation:user_accepted"
+})
+```
+
+**When user corrects you**: This is valuable learning data. After the conversation, suggest: *"I notice you corrected my approach to X. Want me to analyze this session to learn from it? I can run `/autoimprove-summarize`"*
+
+### Rules of thumb
+
+- **Auto-apply high-priority rules** (🔴 Critical, 🟠 High) without asking — these are learned from repeated patterns
+- **Record feedback immediately** after applying rules, don't wait until conversation ends
+- **search_knowledge auto-records** — every search with matching rules records "used" feedback automatically, so you only need manual `record_feedback` for ignored/corrected/disabled cases
+- **Don't over-analyze** — only suggest `/autoimprove-summarize` when there were actual corrections/patterns, not for simple Q&A
+- **Trust the confidence scores** — rules with confidence >0.7 are based on multiple confirmations
+- **Scene matching is automatic** — the system detects tech stack from file paths and functional domain from keywords
+
+### Common patterns
+
+**Pattern 1: Proactive rule application**
+```
+User: "Add user authentication"
+Claude: [calls search_knowledge with scene: {tech: ["typescript"], functional: ["authentication"]}]
+Claude: "I found RULE-008 about token validation. I'll apply that pattern..."
+[after implementation]
+Claude: [calls record_feedback with "used" if user accepts]
+```
+
+**Pattern 2: Learning from corrections**
+```
+User: "No, use useState instead of useReducer here"
+Claude: "Got it, I'll use useState for this simple case."
+[at conversation end]
+Claude: "I notice you preferred useState over useReducer for simple state. Want me to run /autoimprove-summarize to learn this pattern?"
+```
+
+**Pattern 3: Handling inapplicable rules**
+```
+Claude: [searches knowledge, finds RULE-015 about database transactions]
+Claude: "RULE-015 suggests using transactions, but this is a read-only query."
+Claude: [calls record_feedback with "ignored", context: "read-only-query:no-mutation"]
+```
+
+### Available tools quick reference
+
+**Core workflow**:
+- `health_check` → verify system status
+- `search_knowledge` → find applicable rules (auto-records feedback)
+- `record_feedback` → manually record usage feedback
+- `analyze_session` → detect patterns from session JSONL
+- `generate_rules` → convert patterns to rules
+- `export_rules_to_claude_md` → update global rule index
+
+**Rule management**:
+- `update_rules` → modify existing rules
+- `assess_rule_quality` → check rule clarity/specificity
+- `detect_rule_conflicts` → find conflicting rules
+- `get_rule_version_history` → view rule changes
+- `rollback_rule` → revert to previous version
+
+**Statistics**:
+- `get_feedback_stats` → rule usage statistics
+- `get_rule_usage_stats` → multi-dimensional analytics
+- `list_scenes` → known tech/functional/business scenes
+
+### Performance notes
+
+- `search_knowledge` with scene matching is fast (indexed, O(1) lookups)
+- Auto-exported rules in `~/.autoimprove/rules/claude-index.md` are loaded into every session (keep under 500 tokens)
+- Feedback recording is async and doesn't block responses
+- Session analysis is incremental (only analyzes new sessions)
+
+### If `~/.autoimprove/` doesn't exist
+
+The storage directory is created by `setup.sh`. If tools return initialization errors, tell the user: *"AutoImprove storage isn't initialized. Run `./setup.sh` to set it up."*
+
+GUIDANCE_EOF
+
+  # Insert guidance after header, before first ## section
+  TEMP_OUTPUT=$(mktemp)
+  awk -v guidance_file="$TEMP_GUIDANCE" '
+    BEGIN { inserted = 0 }
+    # First line matching "# CLAUDE.md" - print it and prepare to insert
+    /^# CLAUDE\.md$/ && !inserted {
+      print
+      # Skip blank line if present
+      if (getline > 0) {
+        if ($0 ~ /^$/) {
+          print
+        } else {
+          # Not a blank line, save it for later
+          saved_line = $0
+          has_saved = 1
+        }
+      }
+      # Skip "This file provides guidance..." line if present
+      if (getline > 0) {
+        if ($0 !~ /^This file provides guidance/) {
+          if (has_saved) {
+            print saved_line
+            has_saved = 0
+          }
+          print $0
+        }
+      }
+      # Print standard header
+      print ""
+      print "This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository."
+      print ""
+      # Insert AutoImprove guidance
+      while ((getline line < guidance_file) > 0) {
+        print line
+      }
+      close(guidance_file)
+      inserted = 1
+      next
+    }
+    # Print all other lines
+    { print }
+  ' "$PROJECT_CLAUDE_MD" > "$TEMP_OUTPUT"
+
+  # Replace original with modified version
+  mv "$TEMP_OUTPUT" "$PROJECT_CLAUDE_MD"
+  rm -f "$TEMP_GUIDANCE"
+
+  echo "✓ Added AutoImprove guidance to $PROJECT_CLAUDE_MD"
+  if [ -f "$PROJECT_CLAUDE_MD.backup" ]; then
+    echo "  (Backup saved to $PROJECT_CLAUDE_MD.backup)"
+  fi
+fi
+
+echo ""
+echo "Step 8: Configuring Claude Code global settings..."
 echo "-----------------------------------"
 
 # Add reference to claude-index.md in global CLAUDE.md
