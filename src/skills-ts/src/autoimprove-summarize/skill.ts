@@ -186,7 +186,24 @@ async function run() {
         console.log(`   • ${rid}`);
       }
 
-      console.log("\n💡 Next step: Run `/autoimprove-rules` to review and activate these rules");
+      // Auto-export to claude-index.md so rules are immediately available
+      console.log("\n📤 Exporting top rules to Claude index...");
+      try {
+        const exportResult = await callMCPTool("export_rules_to_claude_md", {
+          strategy: "category-balanced",
+          limit: 10,
+          min_confidence: 0.6
+        });
+
+        if (exportResult.success) {
+          console.log("   ✓ Rules exported to ~/.autoimprove/rules/claude-index.md");
+          console.log("   ✓ New rules will be auto-loaded in your next Claude Code session\n");
+          console.log("💡 To use these rules immediately, restart your Claude Code session");
+        }
+      } catch (error: any) {
+        console.warn(`   ⚠️  Auto-export failed: ${error.message}`);
+        console.log("   💡 Run `/autoimprove-rules` to manually review and export rules");
+      }
     }
   } catch (error: any) {
     console.log(`❌ Error: ${error.message}`);
@@ -715,7 +732,24 @@ Output ONLY the JSON, no explanations.`;
       console.log(`   • ${rid}`);
     }
 
-    console.log("\n💡 Next step: Run `/autoimprove-rules` to review and activate these rules");
+    // Auto-export to claude-index.md so rules are immediately available
+    console.log("\n📤 Exporting top rules to Claude index...");
+    try {
+      const exportResult = await callMCPTool("export_rules_to_claude_md", {
+        strategy: "category-balanced",
+        limit: 10,
+        min_confidence: 0.6
+      });
+
+      if (exportResult.success) {
+        console.log("   ✓ Rules exported to ~/.autoimprove/rules/claude-index.md");
+        console.log("   ✓ New rules will be auto-loaded in your next Claude Code session\n");
+        console.log("💡 To use these rules immediately, restart your Claude Code session");
+      }
+    } catch (error: any) {
+      console.warn(`   ⚠️  Auto-export failed: ${error.message}`);
+      console.log("   💡 Run `/autoimprove-rules` to manually review and export rules");
+    }
   }
 }
 
