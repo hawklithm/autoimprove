@@ -96,7 +96,32 @@ This will automatically:
 After setup completes:
 
 ```bash
-# Check system health
+# Check MCP server status
+claude mcp list
+
+# Test with a skill
+/autoimprove-status
+```
+
+### Development: Restarting MCP Server
+
+After modifying MCP server code, restart the server to load changes:
+
+```bash
+# Quick restart (no rebuild)
+./restart-mcp.sh
+
+# Rebuild and restart
+./restart-mcp.sh --build
+```
+
+The restart script will:
+1. Stop existing MCP server processes
+2. Re-register the server with Claude Code
+3. Verify the new configuration
+4. Test server startup
+
+**Note**: If the server still shows old behavior after restart, start a new Claude Code conversation.
 autoimprove status
 
 # View existing rules

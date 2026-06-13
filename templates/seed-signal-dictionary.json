@@ -1,0 +1,502 @@
+{
+  "version": "1.0",
+  "description": "Seed signal dictionary for pattern recognition",
+  "created_at": "2026-01-15T00:00:00Z",
+  "signals": [
+    {
+      "text": "不对",
+      "language": "zh",
+      "pattern_type": "correction",
+      "polarity": "negative",
+      "confidence": 0.85,
+      "typical_context": ["这个不对", "不对，应该"],
+      "source": "seed"
+    },
+    {
+      "text": "不是",
+      "language": "zh",
+      "pattern_type": "correction",
+      "polarity": "negative",
+      "confidence": 0.80,
+      "typical_context": ["不是这样", "不是用"],
+      "source": "seed"
+    },
+    {
+      "text": "改成",
+      "language": "zh",
+      "pattern_type": "correction",
+      "polarity": "positive",
+      "confidence": 0.85,
+      "typical_context": ["改成用", "应该改成"],
+      "source": "seed"
+    },
+    {
+      "text": "应该",
+      "language": "zh",
+      "pattern_type": "correction",
+      "polarity": "positive",
+      "confidence": 0.75,
+      "typical_context": ["应该用", "应该是"],
+      "source": "seed"
+    },
+    {
+      "text": "修正",
+      "language": "zh",
+      "pattern_type": "correction",
+      "polarity": "positive",
+      "confidence": 0.80,
+      "typical_context": ["需要修正", "修正为"],
+      "source": "seed"
+    },
+    {
+      "text": "修改",
+      "language": "zh",
+      "pattern_type": "correction",
+      "polarity": "neutral",
+      "confidence": 0.70,
+      "typical_context": ["修改一下", "需要修改"],
+      "source": "seed"
+    },
+    {
+      "text": "不要",
+      "language": "zh",
+      "pattern_type": "correction",
+      "polarity": "negative",
+      "confidence": 0.85,
+      "typical_context": ["不要用", "不要这样"],
+      "source": "seed"
+    },
+    {
+      "text": "别",
+      "language": "zh",
+      "pattern_type": "correction",
+      "polarity": "negative",
+      "confidence": 0.80,
+      "typical_context": ["别用", "别这样做"],
+      "source": "seed"
+    },
+    {
+      "text": "错误",
+      "language": "zh",
+      "pattern_type": "anti-pattern",
+      "polarity": "negative",
+      "confidence": 0.90,
+      "typical_context": ["这是错误的", "错误的做法"],
+      "source": "seed"
+    },
+    {
+      "text": "问题",
+      "language": "zh",
+      "pattern_type": "anti-pattern",
+      "polarity": "negative",
+      "confidence": 0.75,
+      "typical_context": ["有问题", "这个问题"],
+      "source": "seed"
+    },
+    {
+      "text": "bug",
+      "language": "en",
+      "pattern_type": "anti-pattern",
+      "polarity": "negative",
+      "confidence": 0.90,
+      "typical_context": ["this is a bug", "fix the bug"],
+      "source": "seed"
+    },
+    {
+      "text": "我们团队",
+      "language": "zh",
+      "pattern_type": "preference",
+      "polarity": "positive",
+      "confidence": 0.85,
+      "typical_context": ["我们团队用", "我们团队约定"],
+      "source": "seed"
+    },
+    {
+      "text": "团队习惯",
+      "language": "zh",
+      "pattern_type": "preference",
+      "polarity": "positive",
+      "confidence": 0.85,
+      "typical_context": ["团队习惯是", "根据团队习惯"],
+      "source": "seed"
+    },
+    {
+      "text": "我更喜欢",
+      "language": "zh",
+      "pattern_type": "preference",
+      "polarity": "positive",
+      "confidence": 0.80,
+      "typical_context": ["我更喜欢用", "我更喜欢这样"],
+      "source": "seed"
+    },
+    {
+      "text": "我们约定",
+      "language": "zh",
+      "pattern_type": "preference",
+      "polarity": "positive",
+      "confidence": 0.85,
+      "typical_context": ["我们约定用", "按照我们约定"],
+      "source": "seed"
+    },
+    {
+      "text": "约定",
+      "language": "zh",
+      "pattern_type": "preference",
+      "polarity": "positive",
+      "confidence": 0.75,
+      "typical_context": ["代码约定", "约定使用"],
+      "source": "seed"
+    },
+    {
+      "text": "规范",
+      "language": "zh",
+      "pattern_type": "preference",
+      "polarity": "positive",
+      "confidence": 0.80,
+      "typical_context": ["代码规范", "按照规范"],
+      "source": "seed"
+    },
+    {
+      "text": "性能",
+      "language": "zh",
+      "pattern_type": "performance",
+      "polarity": "positive",
+      "confidence": 0.80,
+      "typical_context": ["性能问题", "提升性能"],
+      "source": "seed"
+    },
+    {
+      "text": "优化",
+      "language": "zh",
+      "pattern_type": "performance",
+      "polarity": "positive",
+      "confidence": 0.85,
+      "typical_context": ["需要优化", "性能优化"],
+      "source": "seed"
+    },
+    {
+      "text": "卡顿",
+      "language": "zh",
+      "pattern_type": "performance",
+      "polarity": "negative",
+      "confidence": 0.85,
+      "typical_context": ["页面卡顿", "出现卡顿"],
+      "source": "seed"
+    },
+    {
+      "text": "重渲染",
+      "language": "zh",
+      "pattern_type": "performance",
+      "polarity": "negative",
+      "confidence": 0.85,
+      "typical_context": ["避免重渲染", "不必要的重渲染"],
+      "source": "seed"
+    },
+    {
+      "text": "useMemo",
+      "language": "en",
+      "pattern_type": "performance",
+      "polarity": "positive",
+      "confidence": 0.80,
+      "typical_context": ["use useMemo", "wrap with useMemo"],
+      "source": "seed"
+    },
+    {
+      "text": "useCallback",
+      "language": "en",
+      "pattern_type": "performance",
+      "polarity": "positive",
+      "confidence": 0.80,
+      "typical_context": ["use useCallback", "wrap with useCallback"],
+      "source": "seed"
+    },
+    {
+      "text": "React.memo",
+      "language": "en",
+      "pattern_type": "performance",
+      "polarity": "positive",
+      "confidence": 0.80,
+      "typical_context": ["wrap with React.memo", "use React.memo"],
+      "source": "seed"
+    },
+    {
+      "text": "安全",
+      "language": "zh",
+      "pattern_type": "security",
+      "polarity": "positive",
+      "confidence": 0.90,
+      "typical_context": ["安全问题", "安全风险"],
+      "source": "seed"
+    },
+    {
+      "text": "注入",
+      "language": "zh",
+      "pattern_type": "security",
+      "polarity": "negative",
+      "confidence": 0.95,
+      "typical_context": ["SQL注入", "防止注入"],
+      "source": "seed"
+    },
+    {
+      "text": "sql injection",
+      "language": "en",
+      "pattern_type": "security",
+      "polarity": "negative",
+      "confidence": 0.95,
+      "typical_context": ["prevent sql injection", "sql injection vulnerability"],
+      "source": "seed"
+    },
+    {
+      "text": "xss",
+      "language": "en",
+      "pattern_type": "security",
+      "polarity": "negative",
+      "confidence": 0.95,
+      "typical_context": ["xss attack", "prevent xss"],
+      "source": "seed"
+    },
+    {
+      "text": "csrf",
+      "language": "en",
+      "pattern_type": "security",
+      "polarity": "negative",
+      "confidence": 0.95,
+      "typical_context": ["csrf token", "prevent csrf"],
+      "source": "seed"
+    },
+    {
+      "text": "sanitize",
+      "language": "en",
+      "pattern_type": "security",
+      "polarity": "positive",
+      "confidence": 0.90,
+      "typical_context": ["sanitize input", "sanitize user data"],
+      "source": "seed"
+    },
+    {
+      "text": "escape",
+      "language": "en",
+      "pattern_type": "security",
+      "polarity": "positive",
+      "confidence": 0.85,
+      "typical_context": ["escape html", "escape special characters"],
+      "source": "seed"
+    },
+    {
+      "text": "validate",
+      "language": "en",
+      "pattern_type": "security",
+      "polarity": "positive",
+      "confidence": 0.85,
+      "typical_context": ["validate input", "validate user data"],
+      "source": "seed"
+    },
+    {
+      "text": "fix",
+      "language": "en",
+      "pattern_type": "correction",
+      "polarity": "positive",
+      "confidence": 0.80,
+      "typical_context": ["fix this", "need to fix"],
+      "source": "seed"
+    },
+    {
+      "text": "change",
+      "language": "en",
+      "pattern_type": "correction",
+      "polarity": "neutral",
+      "confidence": 0.70,
+      "typical_context": ["change it to", "need to change"],
+      "source": "seed"
+    },
+    {
+      "text": "should",
+      "language": "en",
+      "pattern_type": "correction",
+      "polarity": "positive",
+      "confidence": 0.75,
+      "typical_context": ["should be", "should use"],
+      "source": "seed"
+    },
+    {
+      "text": "correct",
+      "language": "en",
+      "pattern_type": "correction",
+      "polarity": "positive",
+      "confidence": 0.80,
+      "typical_context": ["correct way", "correct approach"],
+      "source": "seed"
+    },
+    {
+      "text": "instead",
+      "language": "en",
+      "pattern_type": "correction",
+      "polarity": "positive",
+      "confidence": 0.85,
+      "typical_context": ["use instead", "instead of"],
+      "source": "seed"
+    },
+    {
+      "text": "don't",
+      "language": "en",
+      "pattern_type": "correction",
+      "polarity": "negative",
+      "confidence": 0.85,
+      "typical_context": ["don't use", "don't do"],
+      "source": "seed"
+    },
+    {
+      "text": "avoid",
+      "language": "en",
+      "pattern_type": "correction",
+      "polarity": "negative",
+      "confidence": 0.85,
+      "typical_context": ["avoid using", "avoid this"],
+      "source": "seed"
+    },
+    {
+      "text": "wrong",
+      "language": "en",
+      "pattern_type": "anti-pattern",
+      "polarity": "negative",
+      "confidence": 0.90,
+      "typical_context": ["this is wrong", "wrong approach"],
+      "source": "seed"
+    },
+    {
+      "text": "incorrect",
+      "language": "en",
+      "pattern_type": "anti-pattern",
+      "polarity": "negative",
+      "confidence": 0.90,
+      "typical_context": ["incorrect usage", "incorrect way"],
+      "source": "seed"
+    },
+    {
+      "text": "broken",
+      "language": "en",
+      "pattern_type": "anti-pattern",
+      "polarity": "negative",
+      "confidence": 0.85,
+      "typical_context": ["this is broken", "broken logic"],
+      "source": "seed"
+    },
+    {
+      "text": "issue",
+      "language": "en",
+      "pattern_type": "anti-pattern",
+      "polarity": "negative",
+      "confidence": 0.75,
+      "typical_context": ["there's an issue", "this issue"],
+      "source": "seed"
+    },
+    {
+      "text": "fail",
+      "language": "en",
+      "pattern_type": "anti-pattern",
+      "polarity": "negative",
+      "confidence": 0.85,
+      "typical_context": ["will fail", "failed to"],
+      "source": "seed"
+    },
+    {
+      "text": "crash",
+      "language": "en",
+      "pattern_type": "anti-pattern",
+      "polarity": "negative",
+      "confidence": 0.90,
+      "typical_context": ["app crashes", "will crash"],
+      "source": "seed"
+    },
+    {
+      "text": "we prefer",
+      "language": "en",
+      "pattern_type": "preference",
+      "polarity": "positive",
+      "confidence": 0.85,
+      "typical_context": ["we prefer to", "we prefer using"],
+      "source": "seed"
+    },
+    {
+      "text": "our team",
+      "language": "en",
+      "pattern_type": "preference",
+      "polarity": "positive",
+      "confidence": 0.85,
+      "typical_context": ["our team uses", "our team convention"],
+      "source": "seed"
+    },
+    {
+      "text": "we use",
+      "language": "en",
+      "pattern_type": "preference",
+      "polarity": "positive",
+      "confidence": 0.80,
+      "typical_context": ["we use this", "we typically use"],
+      "source": "seed"
+    },
+    {
+      "text": "convention",
+      "language": "en",
+      "pattern_type": "preference",
+      "polarity": "positive",
+      "confidence": 0.80,
+      "typical_context": ["coding convention", "by convention"],
+      "source": "seed"
+    },
+    {
+      "text": "optimize",
+      "language": "en",
+      "pattern_type": "performance",
+      "polarity": "positive",
+      "confidence": 0.85,
+      "typical_context": ["optimize this", "need to optimize"],
+      "source": "seed"
+    },
+    {
+      "text": "performance",
+      "language": "en",
+      "pattern_type": "performance",
+      "polarity": "positive",
+      "confidence": 0.80,
+      "typical_context": ["performance issue", "improve performance"],
+      "source": "seed"
+    },
+    {
+      "text": "slow",
+      "language": "en",
+      "pattern_type": "performance",
+      "polarity": "negative",
+      "confidence": 0.85,
+      "typical_context": ["too slow", "running slow"],
+      "source": "seed"
+    },
+    {
+      "text": "lag",
+      "language": "en",
+      "pattern_type": "performance",
+      "polarity": "negative",
+      "confidence": 0.85,
+      "typical_context": ["page lags", "experiencing lag"],
+      "source": "seed"
+    },
+    {
+      "text": "security",
+      "language": "en",
+      "pattern_type": "security",
+      "polarity": "positive",
+      "confidence": 0.90,
+      "typical_context": ["security issue", "security concern"],
+      "source": "seed"
+    },
+    {
+      "text": "vulnerability",
+      "language": "en",
+      "pattern_type": "security",
+      "polarity": "negative",
+      "confidence": 0.95,
+      "typical_context": ["security vulnerability", "has vulnerability"],
+      "source": "seed"
+    }
+  ]
+}

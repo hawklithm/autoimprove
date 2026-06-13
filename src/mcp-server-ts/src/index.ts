@@ -27,6 +27,13 @@ import { AdaptiveConfidenceCalculator } from "./core/adaptive-confidence.js";
 import { EnhancedSceneDetector } from "./core/enhanced-scene-detector.js";
 import { ClaudeIndexExporter } from "./tools/export-rules-to-claude.js";
 import { RuleUsageStatsAnalyzer } from "./core/rule-usage-stats.js";
+import { SignalDictionaryDB } from "./storage/signal-dictionary-db.js";
+import { SignalMatcher } from "./core/signal-matcher.js";
+import { LLMSignalExtractor } from "./core/llm-signal-extractor.js";
+import { BayesianConfidenceUpdater } from "./core/bayesian-confidence-updater.js";
+import { PatternClusterer } from "./core/pattern-clusterer.js";
+import { LLMRuleGenerator } from "./core/llm-rule-generator.js";
+import { AdaptiveSessionAnalyzer } from "./core/adaptive-session-analyzer.js";
 import { logger } from "./core/logger.js";
 import { createScene, PatternType } from "./core/models.js";
 import { existsSync } from "fs";
@@ -47,6 +54,15 @@ let adaptiveConfidence: AdaptiveConfidenceCalculator;
 let sceneDetector: EnhancedSceneDetector;
 let claudeIndexExporter: ClaudeIndexExporter;
 let statsAnalyzer: RuleUsageStatsAnalyzer;
+// Adaptive pattern recognition components (initialized but reserved for future use)
+// Reserved for future adaptive pattern recognition features
+let _signalDB: SignalDictionaryDB;
+let _signalMatcher: SignalMatcher;
+let _signalExtractor: LLMSignalExtractor;
+let _confidenceUpdater: BayesianConfidenceUpdater;
+let _patternClusterer: PatternClusterer;
+let _llmRuleGenerator: LLMRuleGenerator;
+let _adaptiveAnalyzer: AdaptiveSessionAnalyzer;
 
 function ensureInitialized() {
   if (!indexManager) {
@@ -67,6 +83,15 @@ function ensureInitialized() {
     sceneDetector = new EnhancedSceneDetector();
     claudeIndexExporter = new ClaudeIndexExporter(indexManager, contentManager);
     statsAnalyzer = new RuleUsageStatsAnalyzer(indexManager, contentManager, adaptiveConfidence);
+
+    // Initialize adaptive pattern recognition components
+    _signalDB = new SignalDictionaryDB();
+    _signalMatcher = new SignalMatcher();
+    _signalExtractor = new LLMSignalExtractor();
+    _confidenceUpdater = new BayesianConfidenceUpdater();
+    _patternClusterer = new PatternClusterer();
+    _llmRuleGenerator = new LLMRuleGenerator();
+    _adaptiveAnalyzer = new AdaptiveSessionAnalyzer();
 
     logger.info("server", "AutoImprove MCP Server initialized");
   }
@@ -206,6 +231,27 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
         inputSchema: {
           type: "object",
           properties: {},
+        },
+      },
+      {
+        name: "compact_cache_stats",
+        description: "Get compact cache statistics (performance metrics, hit rate, savings)",
+        inputSchema: {
+          type: "object",
+          properties: {},
+        },
+      },
+      {
+        name: "clear_compact_cache",
+        description: "Clear compact cache for a session or all sessions",
+        inputSchema: {
+          type: "object",
+          properties: {
+            session_id: {
+              type: "string",
+              description: "Optional session ID to clear. If omitted, clears all compact caches.",
+            },
+          },
         },
       },
       {
@@ -497,7 +543,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
             },
             categories: {
               type: "array",
-              items: { type: "string" },
+            items: { type: "string" },
               description: "Filter by specific categories",
             },
             min_feedbacks: {
@@ -514,6 +560,174 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
               description: "Output format (default: json)",
             },
           },
+        },
+      },
+      {
+        name: "view_signal_dictionary",
+        description: "List signals with filters (pattern_type, min_confidence, source)",
+        inputSchema: {
+          type: "object",
+          properties: {
+            pattern_type: {
+              type: "string",
+              enum: ["repeated-correction", "anti-pattern", "preference", "performance", "security"],
+              description: "Filter by pattern type",
+            },
+            min_confidence: {
+              type: "number",
+              description: "Minimum confidence threshold (default: 0.0)",
+            },
+            source: {
+              type: "string",
+              enum: ["seed", "llm-extracted", "manual"],
+              description: "Filter by signal source",
+            },
+            limit: {
+              type: "number",
+              description: "Maximum number of signals to return (default: 100)",
+            },
+          },
+        },
+      },
+      {
+        name: "add_signal_manually",
+        description: "Add signal to dictionary",
+        inputSchema: {
+          type: "object",
+          properties: {
+            signal_text: {
+              type: "string",
+              description: "Signal text/phrase",
+            },
+            pattern_type: {
+              type: "string",
+              enum: ["repeated-correction", "anti-pattern", "preference", "performance", "security"],
+              description: "Pattern type this signal indicates",
+            },
+            confidence: {
+              type: "number",
+              description: "Initial confidence (0.0-1.0, default: 0.5)",
+            },
+            context: {
+              type: "string",
+              description: "Optional context or notes",
+            },
+          },
+          required: ["signal_text", "pattern_type"],
+        },
+      },
+      {
+        name: "update_signal_confidence",
+        description: "Manually update signal confidence",
+        inputSchema: {
+          type: "object",
+          properties: {
+            signal_id: {
+              type: "string",
+              description: "Signal ID",
+            },
+            new_confidence: {
+              type: "number",
+              description: "New confidence value (0.0-1.0)",
+            },
+            reason: {
+              type: "string",
+              description: "Reason for update",
+            },
+          },
+          required: ["signal_id", "new_confidence"],
+        },
+      },
+      {
+        name: "extract_signals_from_session",
+        description: "Extract new signals from session's unmatched content",
+        inputSchema: {
+          type: "object",
+          properties: {
+            session_file_path: {
+              type: "string",
+              description: "Path to session JSONL file",
+            },
+            min_confidence_threshold: {
+              type: "number",
+              description: "Minimum confidence for extracted signals (default: 0.6)",
+            },
+          },
+          required: ["session_file_path"],
+        },
+      },
+      {
+        name: "view_labeled_content",
+        description: "View labeled content by session/pattern_type",
+        inputSchema: {
+          type: "object",
+          properties: {
+            session_id: {
+              type: "string",
+              description: "Filter by session ID",
+            },
+            pattern_type: {
+              type: "string",
+              enum: ["repeated-correction", "anti-pattern", "preference", "performance", "security"],
+              description: "Filter by pattern type",
+            },
+            limit: {
+              type: "number",
+              description: "Maximum number of records to return (default: 50)",
+            },
+          },
+        },
+      },
+      {
+        name: "trigger_clustering",
+        description: "Cluster labeled content for a session",
+        inputSchema: {
+          type: "object",
+          properties: {
+            session_id: {
+              type: "string",
+              description: "Session ID to cluster",
+            },
+            min_cluster_size: {
+              type: "number",
+              description: "Minimum cluster size (default: 2)",
+            },
+            min_confidence: {
+              type: "number",
+              description: "Minimum confidence for clustering (default: 0.6)",
+            },
+          },
+          required: ["session_id"],
+        },
+      },
+      {
+        name: "generate_rules_from_clusters",
+        description: "Generate rules from clusters",
+        inputSchema: {
+          type: "object",
+          properties: {
+            session_id: {
+              type: "string",
+              description: "Session ID with clusters",
+            },
+            min_cluster_quality: {
+              type: "number",
+              description: "Minimum cluster quality score (default: 0.7)",
+            },
+            min_occurrences: {
+              type: "number",
+              description: "Minimum occurrences per cluster (default: 2)",
+            },
+          },
+          required: ["session_id"],
+        },
+      },
+      {
+        name: "get_signal_stats",
+        description: "Get signal dictionary statistics",
+        inputSchema: {
+          type: "object",
+          properties: {},
         },
       },
     ],
@@ -545,6 +759,12 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
       case "cache_stats":
         return await handleCacheStats();
+
+      case "compact_cache_stats":
+        return await handleCompactCacheStats();
+
+      case "clear_compact_cache":
+        return await handleClearCompactCache(request.params.arguments);
 
       case "health_check":
         return await handleHealthCheck();
@@ -593,6 +813,30 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
       case "get_rule_usage_stats":
         return await handleGetRuleUsageStats(request.params.arguments);
+
+      case "view_signal_dictionary":
+        return await handleViewSignalDictionary(request.params.arguments);
+
+      case "add_signal_manually":
+        return await handleAddSignalManually(request.params.arguments);
+
+      case "update_signal_confidence":
+        return await handleUpdateSignalConfidence(request.params.arguments);
+
+      case "extract_signals_from_session":
+        return await handleExtractSignalsFromSession(request.params.arguments);
+
+      case "view_labeled_content":
+        return await handleViewLabeledContent(request.params.arguments);
+
+      case "trigger_clustering":
+        return await handleTriggerClustering(request.params.arguments);
+
+      case "generate_rules_from_clusters":
+        return await handleGenerateRulesFromClusters(request.params.arguments);
+
+      case "get_signal_stats":
+        return await handleGetSignalStats();
 
       default:
         throw new Error(`Unknown tool: ${request.params.name}`);
@@ -1024,6 +1268,56 @@ async function handleCacheStats() {
       },
     ],
   };
+}
+
+async function handleCompactCacheStats() {
+  const stats = analyzer.getCompactCacheStats();
+
+  return {
+    content: [
+      {
+        type: "text",
+        text: JSON.stringify({
+          success: true,
+          compact_cache: stats,
+          summary: {
+            total_requests: stats.total_requests,
+            hit_rate: `${(stats.hit_rate * 100).toFixed(1)}%`,
+            time_saved: `${(stats.time_saved_ms / 1000).toFixed(2)}s`,
+            bytes_saved: formatBytes(stats.bytes_saved),
+          }
+        }),
+      },
+    ],
+  };
+}
+
+async function handleClearCompactCache(args: any) {
+  const sessionId = args.seon_id as string | undefined;
+
+  const result = analyzer.clearCompactCache(sessionId);
+
+  return {
+    content: [
+      {
+        type: "text",
+        text: JSON.stringify({
+          success: result.errors.length === 0,
+          cleared: result.cleared,
+          errors: result.errors,
+          message: sessionId
+            ? `Cleared compact cache for session ${sessionId}`
+            : `Cleared ${result.cleared} compact cache file(s)`,
+        }),
+      },
+    ],
+  };
+}
+
+function formatBytes(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
 
 async function handleAssessRuleQuality(args: any) {
@@ -1799,6 +2093,480 @@ async function handleGetRuleUsageStats(args: any) {
     };
   } catch (error: any) {
     logger.error("stats", "Failed to generate statistics", error);
+    return {
+      content: [
+        {
+          type: "text",
+          text: JSON.stringify({
+            success: false,
+            error: error.message,
+          }),
+        },
+      ],
+    };
+  }
+}
+
+async function handleViewSignalDictionary(args: any) {
+  const patternType = args.pattern_type as string | undefined;
+  const minConfidence = (args.min_confidence as number) || 0.0;
+  const limit = (args.limit as number) || 100;
+
+  try {
+    const signals = _signalDB.getAllSignals({
+      pattern_type: patternType,
+      min_confidence: minConfidence,
+      limit: limit,
+    });
+
+    logger.info("signal-dictionary", `Retrieved ${signals.length} signals`, {
+      pattern_type: patternType,
+      min_confidence: minConfidence,
+    });
+
+    return {
+      content: [
+        {
+          type: "text",
+          text: JSON.stringify({
+            success: true,
+            count: signals.length,
+            signals: signals,
+          }),
+        },
+      ],
+    };
+  } catch (error: any) {
+    logger.error("signal-dictionary", "Failed to retrieve signals", error);
+    return {
+      content: [
+        {
+          type: "text",
+          text: JSON.stringify({
+            success: false,
+            error: error.message,
+          }),
+        },
+      ],
+    };
+  }
+}
+
+async function handleAddSignalManually(args: any) {
+  const signalText = args.signal_text as string;
+  const patternType = args.pattern_type as "correction" | "anti-pattern" | "preference" | "performance" | "security";
+  const confidence = (args.confidence as number) || 0.5;
+  const context = args.context as string | undefined;
+
+  try {
+    const now = new Date().toISOString();
+    const signalId = _signalDB.addSignal({
+      text: signalText,
+      language: "en",
+      pattern_type: patternType,
+      polarity: "neutral",
+      confidence: confidence,
+      typical_context: context ? [context] : [],
+      related_signals: [],
+      match_count: 0,
+      true_positive: 0,
+      false_positive: 0,
+      first_seen: now,
+      last_seen: now,
+      source: "user_added",
+      created_at: now,
+      updated_at: now,
+    });
+
+    // Rebuild signal matcher to include new signal
+    _signalMatcher.rebuild();
+
+    logger.info("signal-dictionary", `Added manual signal: ${signalId}`, {
+      pattern_type: patternType,
+      confidence: confidence,
+    });
+
+    return {
+      content: [
+        {
+          type: "text",
+          text: JSON.stringify({
+            success: true,
+            signal_id: signalId,
+            message: "Signal added successfully",
+          }),
+        },
+      ],
+    };
+  } catch (error: any) {
+    logger.error("signal-dictionary", "Failed to add signal", error);
+    return {
+      content: [
+        {
+          type: "text",
+          text: JSON.stringify({
+            success: false,
+            error: error.message,
+          }),
+        },
+      ],
+    };
+  }
+}
+
+async function handleUpdateSignalConfidence(args: any) {
+  const signalId = args.signal_id as string;
+  const newConfidence = args.new_confidence as number;
+  const reason = args.reason as string | undefined;
+
+  try {
+    _signalDB.updateSignalConfidence(parseInt(signalId), newConfidence, reason || "manual_update", {
+      reason: reason || "manual_update"
+    });
+
+    // Rebuild signal matcher with updated confidence
+    _signalMatcher.rebuild();
+
+    logger.info("signal-dictionary", `Updated signal confidence: ${signalId}`, {
+      new_confidence: newConfidence,
+      reason: reason,
+    });
+
+    return {
+      content: [
+        {
+          type: "text",
+          text: JSON.stringify({
+            success: true,
+            signal_id: signalId,
+            new_confidence: newConfidence,
+            message: "Signal confidence updated successfully",
+          }),
+        },
+      ],
+    };
+  } catch (error: any) {
+    logger.error("signal-dictionary", "Failed to update signal confidence", error);
+    return {
+      content: [
+        {
+          type: "text",
+          text: JSON.stringify({
+            success: false,
+            error: error.message,
+          }),
+        },
+      ],
+    };
+  }
+}
+
+async function handleExtractSignalsFromSession(args: any) {
+  const sessionFilePath = args.session_file_path as string;
+  const minConfidenceThreshold = (args.min_confidence_threshold as number) || 0.6;
+
+  if (!existsSync(sessionFilePath)) {
+    return {
+      content: [
+        {
+          type: "text",
+          text: JSON.stringify({
+            success: false,
+            error: `Session file not found: ${sessionFilePath}`,
+          }),
+        },
+      ],
+    };
+  }
+
+  try {
+    // Analyze session to get unmatched content
+    const result = await _adaptiveAnalyzer.analyzeSession(sessionFilePath, {
+      incremental: true,
+      enableSignalExtraction: false, // We'll do extraction manually
+      enableClustering: false,
+      enableRuleGeneration: false,
+    });
+
+    // Extract signals from unmatched content (this is simulated for now)
+    const unmatchedCount = result.signal_matches.unmatched_messages;
+
+    logger.info("signal-extraction", `Extracting signals from ${unmatchedCount} unmatched messages`, {
+      session_file: sessionFilePath,
+      min_confidence: minConfidenceThreshold,
+    });
+
+    // For now, return the unmatched message count
+    // In a real implementation, this would call _signalExtractor.extractSignals()
+    return {
+      content: [
+        {
+          type: "text",
+          text: JSON.stringify({
+            success: true,
+            session_file: sessionFilePath,
+            unmatched_messages: unmatchedCount,
+            new_signals_extracted: 0, // Placeholder
+            message: "Signal extraction completed (stub implementation)",
+          }),
+        },
+      ],
+    };
+  } catch (error: any) {
+    logger.error("signal-extraction", "Failed to extract signals", error);
+    return {
+      content: [
+        {
+          type: "text",
+          text: JSON.stringify({
+            success: false,
+            error: error.message,
+          }),
+        },
+      ],
+    };
+  }
+}
+
+async function handleViewLabeledContent(args: any) {
+  const sessionId = args.session_id as string | undefined;
+  const patternType = args.pattern_type as string | undefined;
+
+  try {
+    let labeledContent: any[] = [];
+
+    if (sessionId) {
+      labeledContent = _signalDB.getLabeledContentBySession(sessionId);
+    } else if (patternType) {
+      labeledContent = _signalDB.getLabeledContentByPatternType(patternType);
+    }
+
+    logger.info("labeled-content", `Retrieved ${labeledContent.length} labeled content records`, {
+      session_id: sessionId,
+      pattern_type: patternType,
+    });
+
+    return {
+      content: [
+        {
+          type: "text",
+          text: JSON.stringify({
+            success: true,
+            count: labeledContent.length,
+            labeled_content: labeledContent,
+          }),
+        },
+      ],
+    };
+  } catch (error: any) {
+    logger.error("labeled-content", "Failed to retrieve labeled content", error);
+    return {
+      content: [
+        {
+          type: "text",
+          text: JSON.stringify({
+            success: false,
+            error: error.message,
+          }),
+        },
+      ],
+    };
+  }
+}
+
+async function handleTriggerClustering(args: any) {
+  const sessionId = args.session_id as string;
+  const minClusterSize = (args.min_cluster_size as number) || 2;
+  const minConfidence = (args.min_confidence as number) || 0.6;
+
+  try {
+    // Get labeled content for session
+    const labeledContent = _signalDB.getLabeledContentBySession(sessionId);
+
+    if (labeledContent.length === 0) {
+      return {
+        content: [
+          {
+            type: "text",
+            text: JSON.stringify({
+              success: false,
+              error: `No labeled content found for session: ${sessionId}`,
+            }),
+          },
+        ],
+      };
+    }
+
+    // Filter by confidence
+    const filteredContent = labeledContent.filter(lc => lc.confidence >= minConfidence);
+
+    // Perform clustering
+    const clusters = _patternClusterer.clusterPatterns(filteredContent);
+    const clusterStats = _patternClusterer.getClusterStats(clusters);
+
+    // Filter by minimum cluster size
+    const validClusters = clusters.filter(c => c.total_occurrences >= minClusterSize);
+
+    logger.info("clustering", `Created ${validClusters.length} clusters for session ${sessionId}`, {
+      total_clusters: clusters.length,
+      valid_clusters: validClusters.length,
+      min_cluster_size: minClusterSize,
+    });
+
+    return {
+      content: [
+        {
+          type: "text",
+          text: JSON.stringify({
+            success: true,
+            session_id: sessionId,
+            total_clusters: clusters.length,
+            valid_clusters: validClusters.length,
+            clusters: validClusters,
+            statistics: clusterStats,
+          }),
+        },
+      ],
+    };
+  } catch (error: any) {
+    logger.error("clustering", "Failed to cluster patterns", error);
+    return {
+      content: [
+        {
+          type: "text",
+          text: JSON.stringify({
+            success: false,
+            error: error.message,
+          }),
+        },
+      ],
+    };
+  }
+}
+
+async function handleGenerateRulesFromClusters(args: any) {
+  const sessionId = args.session_id as string;
+  const minClusterQuality = (args.min_cluster_quality as number) || 0.7;
+  const minOccurrences = (args.min_occurrences as number) || 2;
+
+  try {
+    // Get labeled content for session
+    const labeledContent = _signalDB.getLabeledContentBySession(sessionId);
+
+    if (labeledContent.length === 0) {
+      return {
+        content: [
+          {
+            type: "text",
+            text: JSON.stringify({
+              success: false,
+              error: `No labeled content found for session: ${sessionId}`,
+            }),
+          },
+        ],
+      };
+    }
+
+    // Perform clustering
+    const clusters = _patternClusterer.clusterPatterns(labeledContent);
+
+    // Filter high-quality clusters
+    const highQualityClusters = clusters.filter(
+      c => c.avg_confidence >= minClusterQuality && c.total_occurrences >= minOccurrences
+    );
+
+    if (highQualityClusters.length === 0) {
+      return {
+        content: [
+          {
+            type: "text",
+            text: JSON.stringify({
+              success: false,
+              error: `No high-quality clusters found (min_quality=${minClusterQuality}, min_occurrences=${minOccurrences})`,
+            }),
+          },
+        ],
+      };
+    }
+
+    // Generate rules from clusters
+    const nextIdNum = parseInt(indexManager.getNextRuleId().split("-")[1], 10);
+    const generatedRules = await _llmRuleGenerator.batchGenerateRules(highQualityClusters, nextIdNum);
+
+    // Save generated rules to index and content
+    const ruleIds: string[] = [];
+    for (const rule of generatedRules) {
+      // Convert GeneratedRule to storage format
+      const converted = _llmRuleGenerator.convertToStorageFormat(rule);
+
+      indexManager.addRule(converted.indexEntry);
+
+      contentManager.saveContent({
+        id: rule.id,
+        content: converted.content.content,
+        reason: converted.content.reason,
+        metadata: converted.content.metadata,
+      });
+
+      ruleIds.push(rule.id);
+    }
+
+    logger.info("rule-generation", `Generated ${generatedRules.length} rules from ${highQualityClusters.length} clusters`, {
+      session_id: sessionId,
+      rule_ids: ruleIds,
+    });
+
+    return {
+      content: [
+        {
+          type: "text",
+          text: JSON.stringify({
+            success: true,
+            session_id: sessionId,
+            clusters_used: highQualityClusters.length,
+            rules_generated: generatedRules.length,
+            rule_ids: ruleIds,
+          }),
+        },
+      ],
+    };
+  } catch (error: any) {
+    logger.error("rule-generation", "Failed to generate rules from clusters", error);
+    return {
+      content: [
+        {
+          type: "text",
+          text: JSON.stringify({
+            success: false,
+            error: error.message,
+          }),
+        },
+      ],
+    };
+  }
+}
+
+async function handleGetSignalStats() {
+  try {
+    const stats = _signalMatcher.getStats();
+
+    logger.info("signal-stats", "Retrieved signal dictionary statistics", {
+      total_signals: stats.total_patterns,
+    });
+
+    return {
+      content: [
+        {
+          type: "text",
+          text: JSON.stringify({
+            success: true,
+            statistics: stats,
+          }),
+        },
+      ],
+    };
+  } catch (error: any) {
+    logger.error("signal-stats", "Failed to retrieve signal statistics", error);
     return {
       content: [
         {
