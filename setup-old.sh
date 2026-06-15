@@ -65,7 +65,7 @@ echo "-----------------------------------"
 
 # Check if claude CLI is available
 if ! command -v claude &> /dev/null; then
-  echo "❌ Error: claude CLI not found. Please install first."
+  echo "❌ Error: claude CLI not found. Please install Claude Code first."
   echo "   Visit: https://claude.ai/download"
   exit 1
 fi
@@ -191,17 +191,122 @@ fi
 cd "$SCRIPT_DIR"
 
 echo ""
-echo "Step 7: Configuring Claude Code global settings..."
+echo "Step 7: Updating project CLAUDE.md with AutoImprove guidance..."
 echo "-----------------------------------"
 
-# Add AutoImprove guidance to global CLAUDE.md
-GLOBAL_CLAUDE_MD="$CLAUDE_DIR/CLAUDE.md"
+PROJECT_CLAUDE_MD="$SCRIPT_DIR/CLAUDE.md"
 GUIDANCE_TEMPLATE="$TEMPLATES_DIR/claude-guidance-template.md"
 
 if [ ! -f "$GUIDANCE_TEMPLATE" ]; then
   echo "❌ Error: Guidance template not found at $GUIDANCE_TEMPLATE"
   exit 1
 fi
+
+# Check if CLAUDE.md exists
+if [ ! -f "$PROJECT_CLAUDE_MD" ]; then
+  echo "Creating new CLAUDE.md..."
+  cat > "$PROJECT_CLAUDE_MD" << 'EOF'
+# CLAUDE.md
+
+This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+
+EOF
+fi
+
+# Check if AutoImprove section exists (marked by <!-- AUTOIMPROVE_START -->)
+if grep -q "<!-- AUTOIMPROVE_START -->" "$PROJECT_CLAUDE_MD" 2>/dev/null; then
+  echo "Found existing AutoImprove section, updating..."
+
+  # Create backup
+  cp "$PROJECT_CLAUDE_MD" "$PROJECT_CLAUDE_MD.backup"
+
+  # Extract content before, between markers, and after
+  TEMP_OUTPUT=$(mktemp)
+
+  # Use awk to replace content between markers
+  awk -v template="$GUIDANCE_TEMPLATE" '
+    /<!-- AUTOIMPROVE_START -->/ {
+      # Print the template content
+      while ((getline line < template) > 0) {
+        print line
+      }
+      close(template)
+      # Skip until we find the end marker
+      while (getline > 0 && !/<!-- AUTOIMPROVE_END -->/) {}
+      next
+    }
+    { print }
+  ' "$PROJECT_CLAUDE_MD" > "$TEMP_OUTPUT"
+
+  mv "$TEMP_OUTPUT" "$PROJECT_CLAUDE_MD"
+  echo "✓ Updated AutoImprove guidance in $PROJECT_CLAUDE_MD"
+  echo "  (Backup saved to $PROJECT_CLAUDE_MD.backup)"
+
+else
+  echo "No existing AutoImprove section found, adding new section..."
+
+  # Create backup
+  cp "$PROJECT_CLAUDE_MD" "$PROJECT_CLAUDE_MD.backup" 2>/dev/null || true
+
+  TEMP_OUTPUT=$(mktemp)
+
+  # Insert after header, before first ## section (similar to CodeGraph)
+  awk -v template="$GUIDANCE_TEMPLATE" '
+    BEGIN { inserted = 0 }
+    # Match the header pattern
+    /^# CLAUDE\.md$/ && !inserted {
+      print
+      # Read and skip description line if present
+      if (getline > 0) {
+        if ($0 ~ /^$/) {
+          print
+          if (getline > 0) {
+            if ($0 ~ /^This file provides guidance/) {
+              print $0
+            } else {
+              print $0
+              getline  # Skip blank line after description
+            }
+          }
+        } else if ($0 !~ /^This file provides guidance/) {
+          print $0
+        } else {
+          print $0
+          if (getline > 0 && $0 ~ /^$/) {
+            # Skip blank line after description
+          } else {
+            print $0
+          }
+        }
+      }
+
+      # Insert template
+      print ""
+      while ((getline line < template) > 0) {
+        print line
+      }
+      close(template)
+      print ""
+
+      inserted = 1
+      next
+    }
+    { print }
+  ' "$PROJECT_CLAUDE_MD" > "$TEMP_OUTPUT"
+
+  mv "$TEMP_OUTPUT" "$PROJECT_CLAUDE_MD"
+  echo "✓ Added AutoImprove guidance to $PROJECT_CLAUDE_MD"
+  if [ -f "$PROJECT_CLAUDE_MD.backup" ]; then
+    echo "  (Backup saved to $PROJECT_CLAUDE_MD.backup)"
+  fi
+fi
+
+echo ""
+echo "Step 8: Configuring Claude Code global settings..."
+echo "-----------------------------------"
+
+# Add reference to claude-index.md in global CLAUDE.md
+GLOBAL_CLAUDE_MD="$CLAUDE_DIR/CLAUDE.md"
 
 # Ensure .claude directory exists
 mkdir -p "$CLAUDE_DIR"
@@ -217,51 +322,7 @@ This file contains global instructions that apply to all your projects.
 EOF
 fi
 
-# Check if AutoImprove section exists (marked by <!-- AUTOIMPROVE_START -->)
-if grep -q "<!-- AUTOIMPROVE_START -->" "$GLOBAL_CLAUDE_MD" 2>/dev/null; then
-  echo "Found existing AutoImprove section in global CLAUDE.md, updating..."
-
-  # Create backup
-  cp "$GLOBAL_CLAUDE_MD" "$GLOBAL_CLAUDE_MD.backup"
-
-  # Use awk to replace content between markers
-  TEMP_OUTPUT=$(mktemp)
-  awk -v template="$GUIDANCE_TEMPLATE" '
-    /<!-- AUTOIMPROVE_START -->/ {
-      # Print the template content
-      while ((getline line < template) > 0) {
-        print line
-      }
-      close(template)
-      # Skip until we find the end marker
-      while (getline > 0 && !/<!-- AUTOIMPROVE_END -->/) {}
-      next
-    }
-    { print }
-  ' "$GLOBAL_CLAUDE_MD" > "$TEMP_OUTPUT"
-
-  mv "$TEMP_OUTPUT" "$GLOBAL_CLAUDE_MD"
-  echo "✓ Updated AutoImprove guidance in $GLOBAL_CLAUDE_MD"
-  echo "  (Backup saved to $GLOBAL_CLAUDE_MD.backup)"
-
-else
-  echo "No existing AutoImprove section found, adding to global CLAUDE.md..."
-
-  # Create backup
-  cp "$GLOBAL_CLAUDE_MD" "$GLOBAL_CLAUDE_MD.backup" 2>/dev/null || true
-
-  # Append template content to the end of file
-  echo "" >> "$GLOBAL_CLAUDE_MD"
-  cat "$GUIDANCE_TEMPLATE" >> "$GLOBAL_CLAUDE_MD"
-  echo "" >> "$GLOBAL_CLAUDE_MD"
-
-  echo "✓ Added AutoImprove guidance to $GLOBAL_CLAUDE_MD"
-  if [ -f "$GLOBAL_CLAUDE_MD.backup" ]; then
-    echo "  (Backup saved to $GLOBAL_CLAUDE_MD.backup)"
-  fi
-fi
-
-# Check if autoimprove rules reference already exists
+# Check if autoimprove reference already exists
 if grep -q "@.*autoimprove.*rules.*claude-index.md" "$GLOBAL_CLAUDE_MD" 2>/dev/null; then
   echo "✓ AutoImprove rules reference already exists in CLAUDE.md"
 else
@@ -404,7 +465,6 @@ echo "✓ MCP Server installed at: $MCP_SERVER_DIR/dist/index.js"
 echo "✓ Skills installed to: $SKILLS_INSTALL_DIR"
 echo "✓ MCP Server configured via: claude mcp add"
 echo "✓ Storage directory: $AUTOIMPROVE_DIR"
-echo "✓ Global CLAUDE.md updated: $GLOBAL_CLAUDE_MD"
 echo ""
 echo "Verify installation:"
 echo "  claude mcp list"
@@ -420,6 +480,32 @@ echo "  • /autoimprove-status - Check system health"
 echo "  • /autoimprove-summarize - Summarize session patterns"
 echo "  • /autoimprove-rules - Manage knowledge rules"
 echo "  • /autoimprove-lessons - View learned lessons"
+echo ""
+echo "Available MCP Tools:"
+echo "  Core Tools:"
+echo "    • health_check - System status and diagnostics"
+echo "    • analyze_session - Analyze coding patterns"
+echo "    • generate_rules - Generate rules from patterns"
+echo "    • search_knowledge - Search knowledge base"
+echo "    • update_rules - Update existing rules"
+echo "    • list_scenes - List known development scenes"
+echo "  Advanced Tools (v2.0):"
+echo "    • assess_rule_quality - Assess rule quality and clarity"
+echo "    • detect_rule_conflicts - Detect conflicting rules"
+echo "    • get_rule_version_history - View rule version history"
+echo "    • rollback_rule - Rollback rule to previous version"
+echo "    • record_feedback - Record rule feedback for learning"
+echo "    • get_feedback_stats - Get feedback statistics"
+echo "    • detect_scene_enhanced - Enhanced multi-dimensional scene detection"
+echo ""
+echo "New Features in v2.0:"
+echo "  ✨ Intelligent pattern consolidation (--consolidate flag)"
+echo "  ✨ Rule quality assessment and conflict detection"
+echo "  ✨ Rule version control with rollback support"
+echo "  ✨ Adaptive confidence with user feedback learning"
+echo "  ✨ Enhanced multi-dimensional scene detection"
+echo "  ✨ Structured logging system"
+echo "  ✨ Indexed rule matching (10-100x performance improvement)"
 echo ""
 echo "Documentation: $SCRIPT_DIR/README.md"
 echo "Troubleshooting: Check logs at $AUTOIMPROVE_DIR/logs/"
