@@ -1,5 +1,11 @@
 # AutoImprove
 
+[![CI](https://github.com/yourusername/autoimprove/actions/workflows/ci.yml/badge.svg)](https://github.com/yourusername/autoimprove/actions/workflows/ci.yml)
+[![Publish to npm](https://github.com/yourusername/autoimprove/actions/workflows/publish.yml/badge.svg)](https://github.com/yourusername/autoimprove/actions/workflows/publish.yml)
+[![npm version](https://badge.fury.io/js/autoimprove.svg)](https://www.npmjs.com/package/autoimprove)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![Node.js](https://img.shields.io/badge/Node.js-18+-green.svg)](https://nodejs.org/)
+
 Learn coding patterns from Claude Code sessions and generate reusable rules.
 
 ## Overview

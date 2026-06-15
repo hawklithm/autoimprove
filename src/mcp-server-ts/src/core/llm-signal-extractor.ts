@@ -50,8 +50,8 @@ export class LLMSignalExtractor {
       };
     }
 
-    // Batch content for efficiency (max 20 items per LLM call)
-    const batchSize = 20;
+    // Optimize: Batch content for efficiency (max 15 items per LLM call, reduced from 20)
+    const batchSize = 15;
     const batches: string[][] = [];
 
     for (let i = 0; i < unmatchedContent.length; i += batchSize) {
@@ -103,7 +103,7 @@ export class LLMSignalExtractor {
     try {
       const response = await this.anthropic.messages.create({
         model: "claude-haiku-4-5-20251001",
-        max_tokens: 2000,
+        max_tokens: 1500, // Reduced from 2000
         messages: [{
           role: "user",
           content: prompt
@@ -119,48 +119,34 @@ export class LLMSignalExtractor {
   }
 
   /**
-   * Build extraction prompt
+   * Build extraction prompt (optimized for token efficiency)
    */
   private buildExtractionPrompt(content: string[]): string {
-    return `You are analyzing chat messages to identify correction/preference signals that indicate patterns in coding practices.
+    // Truncate long messages to save tokens
+    const truncatedContent = content.map(c =>
+      c.length > 150 ? c.slice(0, 150) + '...' : c
+    );
 
-Task: Extract signal words or short phrases that indicate:
-1. **Corrections**: User pointing out mistakes (e.g., "不对", "should", "fix")
-2. **Preferences**: User stating team/personal preferences (e.g., "我们团队用", "we prefer")
-3. **Anti-patterns**: User identifying bad approaches (e.g., "bug", "错误", "broken")
-4. **Performance**: Performance-related corrections (e.g., "优化", "卡顿", "useMemo")
-5. **Security**: Security concerns (e.g., "注入", "xss", "sanitize")
+    return `Extract correction/preference signals from messages.
+
+Task: Find SHORT signal words/phrases (2-50 chars) indicating:
+1. Corrections: mistakes pointed out ("不对", "should", "fix")
+2. Preferences: team choices ("我们用", "prefer")
+3. Anti-patterns: bad approaches ("bug", "错误")
+4. Performance: optimization ("优化", "useMemo")
+5. Security: concerns ("注入", "xss")
+
+Messages:
+${truncatedContent.map((c, i) => `${i + 1}. ${c}`).join('\n')}
+
+Output JSON:
+{"signals":[{"text":"应该用","pattern_type":"correction","polarity":"positive","confidence":0.7,"context":"Better approach","example_usage":"应该用X而不是Y","language":"zh"}]}
 
 Requirements:
-- Extract SHORT signals (2-50 characters)
-- Each signal should be a distinct, reusable pattern indicator
-- Provide initial confidence (0.5-0.8 for new signals)
-- Classify polarity: positive (good practice), negative (mistake), neutral
-- Detect language: zh, en, or mixed
-
-Messages to analyze:
-${content.map((c, i) => `${i + 1}. ${c}`).join('\n')}
-
-Respond in JSON format:
-{
-  "signals": [
-    {
-      "text": "应该用",
-      "pattern_type": "correction",
-      "polarity": "positive",
-      "confidence": 0.7,
-      "context": "User suggesting better approach",
-      "example_usage": "应该用 useState 而不是 useReducer",
-      "language": "zh"
-    }
-  ]
-}
-
-IMPORTANT:
-- Only extract signals that appear meaningful and reusable
-- Do NOT extract full sentences, only short signal phrases
-- Confidence should reflect how certain you are this is a valid signal (0.5-0.8)
-- Return empty array if no clear signals found`;
+- Extract SHORT signals only (not full sentences)
+- Confidence: 0.5-0.8 for new signals
+- Return [] if no clear signals
+- Be selective, quality over quantity`;
   }
 
   /**

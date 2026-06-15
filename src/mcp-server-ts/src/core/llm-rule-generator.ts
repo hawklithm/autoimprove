@@ -64,10 +64,13 @@ export class LLMRuleGenerator {
 
     const prompt = this.buildRuleGenerationPrompt(cluster, fullContents);
 
+    // Dynamic max_tokens based on complexity
+    const maxTokens = this.calculateMaxTokens(cluster);
+
     try {
       const response = await this.anthropic.messages.create({
         model: "claude-sonnet-4-6-20250514",
-        max_tokens: 1500,
+        max_tokens: maxTokens,
         messages: [{
           role: "user",
           content: prompt
@@ -155,131 +158,40 @@ export class LLMRuleGenerator {
   }
 
   /**
-   * Build prompt for rule generation
+   * Build prompt for rule generation (optimized for token efficiency)
    */
   private buildRuleGenerationPrompt(cluster: PatternCluster, contents: LabeledContent[]): string {
-    const contentExamples = contents
-      .slice(0, 10) // Limit to first 10 examples
+    // Intelligently select 3-5 most representative examples
+    const selectedExamples = this.selectRepresentativeExamples(contents, 5);
+    const contentExamples = selectedExamples
       .map((c, i) => `${i + 1}. ${c.content}`)
       .join('\n');
 
-    return `You are creating a comprehensive coding rule from observed correction/preference patterns.
+    return `Create coding rule from observed patterns.
 
-Pattern Type: ${cluster.pattern_type}
-Total Occurrences: ${cluster.total_occurrences}
-Sessions: ${cluster.session_count}
-Common Signal Words: ${cluster.common_signals.join(', ')}
-Average Confidence: ${(cluster.avg_confidence * 100).toFixed(1)}%
+Type: ${cluster.pattern_type} | Occurrences: ${cluster.total_occurrences} | Sessions: ${cluster.session_count}
+Signals: ${cluster.common_signals.slice(0, 5).join(', ')} | Confidence: ${(cluster.avg_confidence * 100).toFixed(0)}%
 
-Example corrections/preferences from user messages:
+Examples:
 ${contentExamples}
 
-Generate a comprehensive, actionable coding rule with the following structure:
+Output JSON with:
+Output JSON with:
+- title: imperative, 60-80 chars, start with verb
+- description: what to do/avoid, 3-5 sentences, specific and clear
+- rationale: why this matters, 2-4 sentences, concrete benefits/risks
+- how_to_apply: 3-6 actionable steps (array of strings)
+- examples: {bad?, good, explanation} - realistic code (10-20 lines), optional
+- when_to_use: 3-5 specific conditions (array)
+- exceptions: 2-4 edge cases where rule doesn't apply (array, optional)
+- scenes: {tech: array, business: array, generic: boolean}
+  * generic=true only if applies regardless of tech (naming, readability principles)
+  * generic=false for tech-specific (React hooks, SQL, REST)
 
-1. **Title**: Short, actionable title in imperative form (60-80 chars)
-   - Start with a verb (e.g., "Use", "Avoid", "Prefer", "Always", "Never")
-   - Be specific and concrete
-   - Examples: "Use useState for simple state management", "Avoid nested ternary operators"
+Format:
+{"title":"Use X for Y","description":"For Z cases, use X instead of Y. X is better because...","rationale":"X provides A and B. Y causes C problem.","how_to_apply":["Check if condition","Review for pattern"],"examples":{"bad":"// old way","good":"// new way","explanation":"Why better"},"when_to_use":["Condition 1","Condition 2"],"exceptions":["Exception 1"],"scenes":{"tech":["react"],"business":[],"generic":false}}
 
-2. **Description**: What to do OR what to avoid (3-5 sentences)
-   - Be clear and specific about the recommended practice
-   - Explain the correct approach with context
-   - Include what to look for in code reviews
-   - Mention concrete patterns or indicators
-
-3. **Rationale**: Why this rule exists (2-4 sentences)
-   - What specific problems does it prevent?
-   - What concrete benefits does following this provide?
-   - What are the consequences of not following it?
-   - Include performance, security, maintainability, or readability impact
-
-4. **How to Apply**: Step-by-step guidance (3-6 bullet points)
-   - Concrete actions developers should take
-   - What to check during code reviews
-   - Specific refactoring steps if fixing existing code
-   - Tools or lint rules that can help enforce this
-   - Examples:
-     * "When you see a boolean state variable, use useState instead of useReducer"
-     * "Run ESLint with the no-nested-ternary rule"
-     * "During code review, flag any useReducer with only 2-3 simple actions"
-
-5. **Code Examples**: Provide before/after comparison (if applicable to pattern type)
-   - **bad**: Code showing the anti-pattern or incorrect approach (optional)
-   - **good**: Code showing the correct approach
-   - **explanation**: Brief explanation of why the good example is better (1-2 sentences)
-   - Use realistic code snippets (10-20 lines)
-   - Use the actual tech stack from the pattern
-   - Include comments to highlight key differences
-
-6. **When to Use**: Specific scenarios where this rule applies (3-5 bullet points)
-   - Clear conditions or contexts when this rule is relevant
-   - Concrete indicators that trigger this rule
-   - Examples:
-     * "State is a single primitive value (boolean, string, number)"
-     * "State updates don't depend on previous state in complex ways"
-     * "Component has fewer than 3 state variables"
-
-7. **Exceptions**: Notable cases where this rule should NOT be applied (2-4 bullet points, optional)
-   - Legitimate exceptions or edge cases
-   - Situations where breaking this rule is acceptable
-   - Alternative approaches for those cases
-   - Examples:
-     * "When state transitions need to be logged or tracked"
-     * "When building a state machine with many states"
-     * "When the pattern is required by a third-party library"
-
-8. **Scene Tags**: Categorize where this rule applies
-   - **tech**: List specific technologies (e.g., ["react", "typescript", "hooks"])
-   - **business**: List business domains if applicable (e.g., ["e-commerce", "authentication"])
-   - **generic**: Is this a universal principle? (true/false)
-     - Set to true only if it applies regardless of tech stack
-     - Examples of generic: code readability, naming conventions, error handling principles
-     - Examples of NOT generic: React hooks, SQL queries, REST API design
-
-Respond in JSON format:
-{
-  "title": "Use useState for simple state management",
-  "description": "For boolean or simple primitive value state, use useState instead of useReducer. Reserve useReducer for complex state objects with multiple sub-values or complex state transitions. Simple state updates like toggling a boolean, incrementing a counter, or storing a string should use useState for clarity and simplicity.",
-  "rationale": "useState is more readable and requires less boilerplate for simple cases. Using useReducer for basic state adds unnecessary complexity with action types, reducer functions, and dispatch calls, making the code harder to understand and maintain. The overhead of useReducer only pays off when managing complex state logic.",
-  "how_to_apply": [
-    "When creating new state, ask: Is this a single primitive value? If yes, use useState",
-    "During code review, flag useReducer usage where the reducer only has 2-3 simple toggle/set actions",
-    "Refactor existing useReducer to useState: replace dispatch calls with direct setState calls",
-    "Use ESLint plugin 'eslint-plugin-react-hooks' to enforce best practices"
-  ],
-  "examples": {
-    "bad": "const [isOpen, dispatch] = useReducer((state, action) => {\n  switch (action.type) {\n    case 'toggle': return !state;\n    default: return state;\n  }\n}, false);\n\n// Usage\ndispatch({ type: 'toggle' });",
-    "good": "const [isOpen, setIsOpen] = useState(false);\n\n// Usage\nsetIsOpen(!isOpen);\n// or\nsetIsOpen(prev => !prev);",
-    "explanation": "The useState version is more direct and readable. For a simple boolean toggle, the useReducer version adds unnecessary abstraction with action types and reducer logic."
-  },
-  "when_to_use": [
-    "State is a single primitive value (boolean, string, number)",
-    "State updates are simple assignments or toggles",
-    "State transitions don't require validation or side effects",
-    "Component has fewer than 5 independent state variables"
-  ],
-  "exceptions": [
-    "When state transitions need to be logged or audited",
-    "When building a finite state machine with specific valid transitions",
-    "When multiple related state changes must happen atomically",
-    "When the pattern is required by a library (e.g., form state management)"
-  ],
-  "scenes": {
-    "tech": ["react", "hooks"],
-    "business": [],
-    "generic": false
-  }
-}
-
-IMPORTANT:
-- Title must be imperative form (command)
-- Description must be actionable and specific (3-5 sentences minimum)
-- Rationale must explain the "why" with concrete benefits/risks
-- how_to_apply must have 3-6 practical steps
-- examples should show realistic code (prefer including both bad and good)
-- when_to_use should have 3-5 specific conditions
-- exceptions are optional but valuable when applicable
-- Be precise with scene tags - don't over-generalize`;
+Be specific, actionable, concise.`;
   }
 
   /**
@@ -468,6 +380,60 @@ IMPORTANT:
     };
 
     return { indexEntry, content };
+  }
+
+  /**
+   * Calculate dynamic max_tokens based on pattern complexity
+   */
+  private calculateMaxTokens(cluster: PatternCluster): number {
+    // Security and anti-patterns need more detailed explanations
+    if (cluster.pattern_type === "security") {
+      return 1500;
+    }
+
+    // High confidence + many occurrences = important rule, give more tokens
+    if (cluster.avg_confidence >= 0.8 && cluster.total_occurrences >= 5) {
+      return 1200;
+    }
+
+    // Simple preferences with few occurrences = brief explanation sufficient
+    if (cluster.pattern_type === "preference" && cluster.total_occurrences < 3) {
+      return 700;
+    }
+
+    // Default: moderate complexity
+    return 1000;
+  }
+
+  /**
+   * Select representative examples using diversity sampling
+   */
+  private selectRepresentativeExamples(contents: LabeledContent[], maxCount: number): LabeledContent[] {
+    if (contents.length <= maxCount) {
+      return contents;
+    }
+
+    // Strategy: Select diverse examples by content length and keywords
+    const selected: LabeledContent[] = [];
+    const remaining = [...contents];
+
+    // 1. Always include first example (usually most representative)
+    selected.push(remaining.shift()!);
+
+    // 2. Sort by length diversity (mix of short and long)
+    remaining.sort((a, b) => {
+      const avgLen = contents.reduce((sum, c) => sum + c.content.length, 0) / contents.length;
+      const aDiff = Math.abs(a.content.length - avgLen);
+      const bDiff = Math.abs(b.content.length - avgLen);
+      return bDiff - aDiff;
+    });
+
+    // 3. Select remaining based on diversity
+    while (selected.length < maxCount && remaining.length > 0) {
+      selected.push(remaining.shift()!);
+    }
+
+    return selected;
   }
 
   /**

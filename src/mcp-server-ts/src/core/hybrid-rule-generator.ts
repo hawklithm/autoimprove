@@ -146,9 +146,12 @@ export class HybridRuleGenerator {
     // Build enhancement prompt with full pattern context
     const prompt = this.buildEnhancementPrompt(pattern, basicContent);
 
+    // Dynamic max_tokens based on pattern complexity
+    const maxTokens = this.calculateMaxTokens(pattern);
+
     const response = await this.anthropic.messages.create({
       model: "claude-sonnet-4-6-20250514",
-      max_tokens: 2000,
+      max_tokens: maxTokens,
       messages: [{
         role: "user",
         content: prompt
@@ -201,83 +204,38 @@ export class HybridRuleGenerator {
   }
 
   /**
-   * Build enhancement prompt
+   * Build enhancement prompt (optimized for token efficiency)
    */
   private buildEnhancementPrompt(pattern: Pattern, basicContent: RuleContent): string {
-    // Collect user input from occurrences
+    // Collect user input from occurrences (limit to 5 most recent)
     const userInputs = pattern.occurrences
       .filter(o => o.user_input)
+      .slice(-5)  // Last 5 occurrences
       .map((o, i) => `${i + 1}. ${o.user_input}`)
       .join('\n');
 
-    return `You are enhancing a coding rule that was automatically detected from user corrections.
+    return `Enhance coding rule from user corrections.
 
-**Basic Rule**:
-${basicContent.content}
+Basic: ${basicContent.content.slice(0, 200)}...
 
-**Pattern Type**: ${pattern.type}
-**Confidence**: ${(pattern.confidence * 100).toFixed(1)}%
-**Occurrences**: ${pattern.occurrences.length}
+Type: ${pattern.type} | Confidence: ${(pattern.confidence * 100).toFixed(0)}% | Count: ${pattern.occurrences.length}
+Keywords: ${pattern.keywords.slice(0, 5).join(', ')}
 
-**User Corrections/Feedback** (actual messages from sessions):
-${userInputs || "No direct user input captured"}
+User corrections:
+${userInputs || "No direct input"}
 
-**Context Information**:
-- First seen: ${pattern.first_seen}
-- Last seen: ${pattern.last_seen}
-- Keywords: ${pattern.keywords.join(', ')}
+Output JSON:
+- title: imperative, 60-80 chars
+- description: what to do/avoid, 4-6 sentences, specific
+- rationale: why this matters, 3-5 sentences, concrete
+- how_to_apply: 4-6 actionable steps (array)
+- when_to_use: 3-5 conditions (array)
+- exceptions: 2-4 cases (array, optional)
+- related_patterns: related rule names (array, optional)
 
-Please enhance this rule to be more comprehensive and actionable. Generate:
+Format: {"title":"...","description":"...","rationale":"...","how_to_apply":[...],"when_to_use":[...],"exceptions":[...]}
 
-1. **Title**: Improved title in imperative form (60-80 chars)
-   - Clear, specific, actionable
-   - Start with a verb
-
-2. **Description**: Expanded description (4-6 sentences)
-   - What to do or what to avoid
-   - Concrete guidance with context
-   - What to look for in code reviews
-   - Include specific patterns or indicators
-
-3. **Rationale**: Detailed explanation (3-5 sentences)
-   - What specific problems does this prevent?
-   - What concrete benefits does following this provide?
-   - Performance, security, maintainability, or readability impact
-   - Why is this important in practice?
-
-4. **How to Apply**: Practical steps (4-6 bullet points)
-   - Concrete actions developers should take
-   - What to check during code reviews
-   - Refactoring steps if fixing existing code
-   - Tools or lint rules that can help
-
-5. **When to Use**: Specific conditions (3-5 bullet points)
-   - Clear scenarios where this rule applies
-   - Concrete indicators that trigger this rule
-   - Context-specific conditions
-
-6. **Exceptions**: When NOT to apply (2-4 bullet points, optional)
-   - Legitimate exceptions or edge cases
-   - Situations where breaking this rule is acceptable
-   - Alternative approaches for those cases
-
-Respond in JSON format:
-{
-  "title": "...",
-  "description": "...",
-  "rationale": "...",
-  "how_to_apply": ["step 1", "step 2", ...],
-  "when_to_use": ["condition 1", "condition 2", ...],
-  "exceptions": ["exception 1", ...],
-  "related_patterns": ["pattern 1", ...]
-}
-
-IMPORTANT:
-- Be specific and actionable
-- Use insights from the user corrections
-- Provide practical guidance developers can follow
-- Explain the "why" behind recommendations
-- Keep technical accuracy high`;
+Be specific and actionable.`;
   }
 
   /**
@@ -372,5 +330,33 @@ IMPORTANT:
     }
 
     return section;
+  }
+
+  /**
+   * Calculate dynamic max_tokens based on pattern complexity
+   */
+  private calculateMaxTokens(pattern: Pattern): number {
+    // Security patterns need more detailed explanations
+    if (pattern.type === "security") {
+      return 1500;
+    }
+
+    // High confidence + many occurrences = important rule
+    if (pattern.confidence >= 0.8 && pattern.occurrences.length >= 5) {
+      return 1200;
+    }
+
+    // Simple preferences with few occurrences
+    if (pattern.type === "preference" && pattern.occurrences.length < 3) {
+      return 700;
+    }
+
+    // Anti-patterns need good explanations
+    if (pattern.type === "anti-pattern") {
+      return 1200;
+    }
+
+    // Default: moderate complexity
+    return 900;
   }
 }
