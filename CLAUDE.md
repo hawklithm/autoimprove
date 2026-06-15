@@ -2,433 +2,23 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
-<!-- AUTOIMPROVE_START -->
-## AutoImprove
+## Overview
 
-This project has AutoImprove MCP tools (`mcp__autoimprove-core__*`) configured. AutoImprove learns from user corrections and generates reusable coding rules that improve over time.
+AutoImprove is a Claude Code MCP server that learns from user corrections and generates reusable coding rules. It consists of:
 
-### When to use AutoImprove
-
-Use AutoImprove tools **proactively during coding** — not just when explicitly asked. The system learns from patterns and helps you apply learned best practices automatically.
-
-| Scenario | Action |
-|---|---|
-| Starting ANY coding task | Call `search_knowledge` with scene context FIRST |
-| User corrects your approach/code | Note for end-of-session learning |
-| Finishing conversation with corrections | Suggest `/autoimprove-summarize` |
-| Applying a learned rule | Mention which rule you're following |
-| Rule doesn't fit current context | Note why (improves future matching) |
-
-### Rules of thumb
-
-- **Call search_knowledge FIRST** — Before planning or coding, check for learned patterns. It's O(1) indexed (<10ms), no performance penalty.
-- **Trust high-confidence rules** (>0.7) — Auto-apply without asking; they're proven patterns from 3+ confirmations.
-- **Follow priority** — 🔴 Critical (security) are mandatory, 🟠 High (anti-pattern/performance) should be followed unless user explicitly says otherwise.
-- **Mention what you're following** — "Following RULE-008 (JWT validation)" so user knows why.
-- **Learn from corrections** — When user corrects you, suggest `/autoimprove-summarize` at conversation end.
-- **Don't skip the search** — "I don't think there are rules" is wrong; let the system check. Rules auto-load from `~/.autoimprove/rules/claude-index.md`.
-- **Scene detection is automatic** — Tech stack from file paths (`.tsx` → react), functional domain from keywords in user messages.
-- **search_knowledge auto-records feedback** — Every search with matching rules records "used" feedback automatically, so you only need manual `record_feedback` for ignored/corrected cases.
-
-### Integration with coding workflow
-
-**Step 1: BEFORE coding (mandatory)**
-```typescript
-// User: "Add JWT authentication to the API"
-// Call this FIRST:
-
-mcp__autoimprove-core__search_knowledge({
-  scene_json: JSON.stringify({
-    tech: ["typescript", "nodejs"],      // Auto-detect from file paths
-    functional: ["authentication", "api"], // Extract from user message
-    business: []                           // Optional
-  }),
-  keywords: "jwt,token,authentication,validation"
-})
-
-// If rules found with confidence >0.7:
-// → Mention: "Found RULE-008 (JWT best practices, confidence 0.85). I'll follow this pattern."
-// → Implement using the rule
-// → Feedback is auto-recorded when you search
-
-// If no rules found:
-// → Implement normally
-// → If user corrects you later, suggest /autoimprove-summarize at end
-```
-
-**Step 2: DURING coding (when applying rules)**
-```typescript
-// When following a rule from search results or claude-index.md:
-// 1. Mention it: "Following RULE-010: Validate input parameters before database queries"
-// 2. Feedback is auto-recorded by search_knowledge
-// 3. Only manually record if:
-//    - Rule from claude-index.md (wasn't searched, just auto-loaded)
-//    - Rule doesn't fit ("ignored")
-//    - User corrects your application ("corrected")
-
-// Example: Rule doesn't fit
-// "RULE-015 suggests transactions, but this is read-only."
-mcp__autoimprove-core__record_feedback({
-  rule_id: "RULE-015",
-  feedback_type: "ignored",
-  context: "read-only-query:no-mutation-needed"
-})
-```
-
-**Step 3: AFTER user correction (end of conversation)**
-```typescript
-// User corrected your approach during the session?
-// Suggest at conversation end:
-
-"I notice you corrected my approach to [X]. Want me to run /autoimprove-summarize 
-to analyze this session and learn this pattern for next time?"
-
-// If user agrees → Run /autoimprove-summarize
-// Next session will have this knowledge automatically
-```
-
-### Common anti-patterns to avoid
-
-❌ **Wrong**: User asks for auth → directly start implementing  
-✅ **Right**: User asks for auth → `search_knowledge` first → check for learned auth patterns → then implement
-
-❌ **Wrong**: User corrects you → just fix it → move on  
-✅ **Right**: User corrects you → fix it → note correction → suggest `/autoimprove-summarize` at end
-
-❌ **Wrong**: "I think pattern X is best" (guessing from training data)  
-✅ **Right**: "Let me check learned patterns first" → `search_knowledge`
-
-❌ **Wrong**: Apply rule silently  
-✅ **Right**: "Following RULE-008 (JWT best practices)" → user knows why
-
-### Example workflow
-
-```
-User: "Add input validation to user registration endpoint"
-
-Claude: Let me check for learned validation patterns first.
-[calls search_knowledge with scene: {tech: ["typescript"], functional: ["validation", "api"]}]
-
-Claude: Found RULE-012 (confidence 0.85): "Use Zod schemas for API input validation"
-This is a proven pattern. I'll follow it.
-
-[implements using Zod]
-
-User: Looks good!
-
-Claude: ✓ (Feedback auto-recorded by search_knowledge)
-```
-
-### Available tools quick reference
-
-**Core workflow** (use these actively):
-- `search_knowledge` → **Call FIRST** before implementing (finds rules, auto-records feedback)
-- `record_feedback` → Manually record when rule ignored/corrected
-- `/autoimprove-summarize` → **Suggest at end** if user corrected you
-
-**Optional inspection**:
-- `health_check` → System status
-- `/autoimprove-rules` → Browse all rules
-- `get_feedback_stats` → Rule usage statistics
-- `list_scenes` → Known tech stacks/domains
-
-**Advanced** (rarely needed):
-- `analyze_session` → Manual analysis
-- `update_rules` → Modify rules
-- `assess_rule_quality` → Quality metrics
-- `get_rule_usage_stats` → Detailed analytics
-
-### Performance notes
-
-- `search_knowledge` is **O(1) indexed** — no performance cost, always call it
-- Top rules (~400 tokens) auto-load from `~/.autoimprove/rules/claude-index.md` into every session
-- Feedback recording is **async** — doesn't block responses
-- Session analysis is **incremental** — only analyzes new sessions
-
-### If `~/.autoimprove/` doesn't exist
-
-The storage directory is created by `setup.sh`. If tools return initialization errors:
-
-```bash
-./setup.sh  # Run from project root
-```
-
-Or check manually:
-```bash
-claude mcp list  # Should show "autoimprove-core: Connected"
-claude mcp restart autoimprove-core  # If needed
-```
-<!-- AUTOIMPROVE_END -->
-
-
-## AutoImprove MCP Tools
-
-This project has AutoImprove MCP tools (`mcp__autoimprove-core__*`) configured. AutoImprove learns from user corrections and generates reusable coding rules.
-
-### When to use AutoImprove
-
-Use AutoImprove tools **proactively during coding** — not just when explicitly asked. The system learns from patterns and helps you apply learned best practices automatically.
-
-| Scenario | Tool |
-|---|---|
-| Starting a new task in a familiar area | `search_knowledge` with scene context |
-| User corrects your approach/code | Record the pattern for future learning |
-| Finishing a conversation with corrections | Suggest running `/autoimprove-summarize` |
-| Applying a learned rule | `record_feedback` with type "used" |
-| Rule doesn't fit current context | `record_feedback` with type "ignored" |
-| Checking system health | `health_check` |
-| Viewing all learned patterns | `/autoimprove-rules` skill |
-| Analyzing session for patterns | `analyze_session` + `generate_rules` |
-
-### Integration with coding workflow
-
-**At task start**: Check for applicable rules by calling `search_knowledge` with the current scene (file types + task description). Example:
-```typescript
-mcp__autoimprove-core__search_knowledge({
-  scene_json: JSON.stringify({
-    tech: ["typescript", "react"],
-    functional: ["authentication"],
-    business: []
-  }n  keywords: "jwt,token,validation"
-})
-```
-
-**During coding**: When you apply a rule from `~/.autoimprove/rules/claude-index.md` or from search results:
-- Mention which rule you're following (e.g., "Following RULE-010 for parameter validation")
-- After user confirms it worked, record feedback:
-```typescript
-mcp__autoimprove-core__record_feedback({
-  rule_id: "RULE-010",
-  feedback_type: "used",
-  user_rating: 5,
-  context: "form-validation:user_accepted"
-})
-```
-
-**When user corrects you**: This is valuable learning data. After the conversation, sugge"I notice you corrected my approach to X. Want me to analyze this session to learn from it? I can run `/autoimprove-summarize`"*
-
-### Rules of thumb
-
-- **Auto-apply high-priority rules** (🔴 Critical, 🟠 High) without asking — these are learned from repeated patterns
-- **Record feedback immediately** after applying rules, don't wait until conversation ends
-- **search_knowledge auto-records** — every search with matching rules records "used" feedback automatically, so you only need manual `record_feedback` for ignored/corrected/disabled cases
-- **Don't over-analyze** — only suggest `/autoimprove-summarize` when there were actual corrections/patterns, not for simple Q&A
-- **Trust the confidence scores** — rules with confidence >0.7 are based on multiple confirmations
-- **Scene matching is automatic** — the system detects tech stack from file paths and functional domain from keywords
-
-### Common patterns
-
-**Pattern 1: Proactive rule application**
-```
-User: "Add user authentication"
-Claude: [calls search_knowledge with scene: {tech: ["typescript"], functional: ["authentication"]}]
-Claude: "I found RULE-008 about token validation. I'll apply that pattern..."
-[after implementation]
-Claude: [calls record_feedback with "used" if user accepts]
-```
-
-**Pattern 2: Learning from corrections**
-```
-User: "No, use useState instead of useReducer here"
-Claude: "Got it, I'll use useState for this simple case."
-[at conversation end]
-Claude: "I notice you preferred useState over useReducer for simple state. Want me to run /autoimprove-summarize to learn this pattern?"
-```
-
-**Pattern 3: Handling inapplicable rules**
-```
-Claude: [searches knowledge, finds RULE-015 about database transactions]
-Claude: "RULE-015 suggests using transactions, but this is a read-only query."
-Claude: [calls record_feedback with "ignored", context: "read-only-query:no-mutation"]
-```
-
-### Available tools quick reference
-
-**Core workflow**:
-- `health_check` → verify system status
-- `search_knowledge` → find applicable rules (auto-records feedback)
-- `record_feedback` → manually record usage feedback
-- `analyze_session` → detect patterns from session JSONL
-- `generate_rules` → convert patterns to rules
-- `export_rules_to_claude_md` → update global rule index
-
-**Rule management**:
-- `update_rules` → modify existing rules
-- `assess_rule_quality` → check rule clarity/specificity
-- `detect_rule_conflicts` → find conflicting rules
-- `get_rule_version_history` → view rule changes
-- `rollback_rule` → revert to previous version
-
-**Statistics**:
-- `get_feedback_stats` → rule usage statistics
-- `get_rule_usage_stats` → multi-dimensional analytics
-- `list_scenes` → known tech/functional/business scenes
-
-**Adaptive learning** (v2.2+):
-- Signal-based pattern recognition with LLM extraction
-- Bayesian confidence updates from feedback
-- Pattustering for semantic grouping
-- See "Adaptive Pattern Recognition System" section below
-
-### Performance notes
-
-- `search_knowledge` with scene matching is fast (indexed, O(1) lookups)
-- Auto-exported rules in `~/.autoimprove/rules/claude-index.md` are loaded into every session (keep under 500 tokens)
-- Feedback recording is async and doesn't block responses
-- Session analysis is incremental (only analyzes new sessions)
-
-### If `~/.autoimprove/` doesn't exist
-
-The storage directory is created by `setup.sh`. If tools return initialization errors, tell the user: *"AutoImprove storage isn't initialized. Run `./setup.sh` to set it up."*
-
-## Adaptive Pattern Recognition System
-
-### Overview
-
-AutoImprove v2.2+ includes an adaptive learning system that continuously improves pattern detection through:
-- **Signal Dictionary**: Pre-built patterns (regex, keywords, semantic structures) for fast matching
-- **LLM Extraction**: Extract new signals from unmatched user messages
-- **Bayesian Updates**: Confidence scores evolve based on match outcomes and feedback
-- **Pattern Clustering**: Group similar patterns to reduce redundancy
-
-### Workflow
-
-```
-User Session → Signal Matching → [Matched] → Generate Rules
-                       ↓
-                  [Unmatched] → LLM Signal Extraction → Add to Dictionary
-                       ↓
-            Bayesian Confidence Update ← Feedback (TP/FP)
-                       ↓
-              Pattern Clustering → Semantic Grouping → Rule Generation
-```
-
-### Key Components
-
-**Signal Dictionary** (`~/.autoimprove/signal_dictionary/signals.db`):
-- SQLite database of 500+ seed signals (English, Chinese, mixed)
-- Each signal has: pattern type, confidence, match count, precision metrics
-- Fast Aho-Corasick multi-pattern matching (O(n+m) complexity)
-
-**LLM Signal Extractor**:
-- Analyzes unmatched user messages to find actionable patterns
-- Extracts: pattern type, polarity, confidence, keywords, related patterns
-- Validates quality (min length, actionability, semantic coherence)
-- Auto-adds high-quality signals to dictionary
-
-**Bayesian Confidence Updater**:
-- Updates signal confidence based on:
-  - Match outcomes (true positive / false positive)
-  - Co-occurrence with other high-confidence signals
-  - Time decay (older signals lose confidence without recent matches)
-  - User feedback (explicit ratings)
-- Formula: `P(signal valid | evidence) = P(evidence | valid) * P(valid) / P(evidence)`
-
-**Pattern Clusterer**:
-- Groups semantically similar patterns using cosine similarity
-- Feature extraction: TF-IDF on keywords + pattern type + polarity
-- Reduces duplicate rules, improves semantic coverage
-- Configurable similarity threshold (default: 0.75)
-
-### Usage Examples
-
-**Automatic signal matching** (default in analyze_session):
-```typescript
-// Signal matching happens automatically during session analysis
-// Matched messages → immediate rule generation
-// Unmatched messages → queued for LLM extraction
-```
-
-**LLM extraction for unmatched content**:
-```typescript
-// Triged automatically when match_rate < 40% and unmatched_count > 10
-// Or manually enable: enableSignalExtraction: true in options
-```
-
-**Bayesian confidence updates**:
-```typescript
-// Automatic after each session analysis:
-// - True positives: confidence ↑
-// - False positives: confidence ↓
-// - Time decay applied to stale signals
-```
-
-**Pattern clustering**:
-```typescript
-// Enable with: enableClustering: true
-// Groups similar patterns before rule generation
-// Reduces rules by 30-50% while maintaining coverage
-```
-
-### Performance Characteristics
-
-| Component | Throughput | Token Cost | Lncy |
-|-----------|-----------|------------|---------|
-| Signal Matching | 10K msg/s | 0 tokens | <100ms |
-| LLM Extraction | ~200 msg/batch | ~2K tokens/batch | 2-5s |
-| Bayesian Update | 1K signals/s | 0 tokens | <50ms |
-| Clustering | ~500 patterns/s | 0 tokens | <200ms |
-
-**Cost optimization**:
-- Signal matching is free (dictionary-based)
-- LLM extraction only on unmatched content (typically <20% of messages)
-- Batching reduces token costs by 60%
-- Incremental analysis reuses cached results
-
-### Configuration
-
-In `~/.autoimprove/config.json`:
-```json
-{
-  "adaptive_learning": {
-    "enable_signal_extraction": true,
-    "extraction_threshold": 0.4,  // Match rate below this triggers extraction
-    "min_unmatched_count": 10,
-    "enable_clustering": false,    // Enable for large pattern sets
-    "cluster_similarity": 0.75,
-    "bayesian_update_interval": "per_session",
-    "time_decay_days": 90,
-    "min_confidence_threshold": 0.3,
-    "max_signals": 5000
-  }
-}
-```
-
-### Integration with Existing Workflow
-
-The adaptive system enhances the standard workflow:
-
-1. **Session Analysis**: `analyze_session` now uses signal matching first
-2. **Rule Generation**: `generate_rules` uses clustered patterns for better quality
-3. **Feedback Loop**: `record_feedback` updates both rules AND signals
-4. **Statistics**: `get_rule_usage_stats` includes signal match metrics
-
-**No changes required to existing skills** - adaptive features are opt-in through configuration.
-
-## Project Overview
-
-AutoImprove is a Claude Code session pattern analyzer that learns from user corrections and generates reusable rules. It consists of:
-
-1. **MCP Server** (`src/mcp-server-ts`): TypeScript-based MCP server providing tools and resources
+1. **MCP Server** (`src/mcp-server-ts`): TypeScript-based server with pattern detection and rule generation
 2. **Skills** (`src/skills-ts`): User-facing slash commands (`/autoimprove-*`)
 3. **Storage System** (`~/.autoimprove/`): User-level rule database with indexed search
 
-## Build Commands
+## Common Commands
 
 ### Build Everything
 ```bash
-# Quick setup (recommended for first-time setup)
-./setup.sh
+./setup.sh                    # Quick setup (recommended for first-time)
 
-# Manual build - MCP Server
-cd src/mcp-server-ts
-npm install
-npm run build
-
-# Manual build - Skills
-cd src/skills-ts
-npm install
-npm run build
+# Manual build
+cd src/mcp-server-ts && npm install && npm run build
+cd src/skills-ts && npm install && npm run build
 ```
 
 ### Development
@@ -436,31 +26,19 @@ npm run build
 # MCP Server
 cd src/mcp-server-ts
 npm run dev          # Run with tsx (hot reload)
-npm run typecheck    # Type check without emitting
-npm run lint         # ESLint
-
-# Run tests
-npm test             # Run once
+npm test             # Run tests once
 npm run test:watch   # Watch mode
 npm run test:ui      # Vitest UI
 
-# Skills (no dev mode - rebuild after changes)
-cd src/skills-ts
-npm run build:watch  # Watch mode
-```
-
-### After Code Changes
-
-**Critical**: After modifying MCP server code, restart the server:
-```bash
-cd src/mcp-server-ts && npm run build
+# After code changes - restart MCP server
+npm run build
 claude mcp restart autoimprove-core
 ```
 
-Skills require reinstallation:
+### Run Specific Test
 ```bash
-cd src/skills-ts && npm run build
-cp -r src/autoimprove-* ~/.claude/skills/
+cd src/mcp-server-ts
+npm test -- tests/scene-detection.test.ts
 ```
 
 ## Architecture
@@ -471,165 +49,85 @@ cp -r src/autoimprove-* ~/.claude/skills/
 Skills (UI) → MCP Server (Logic) → Storage (~/.autoimprove/)
 ```
 
-**Skills**: Thin wrappers that call MCP tools via `mcp-client.ts`. Each skill (status, summarize, rules, lessons) corresponds to MCP tool calls.
+**Skills**: Thin wrappers calling MCP tools. Located in `src/skills-ts/src/`, each skill has a `SKILL.md` that defines its behavior.
 
 **MCP Server**: Core business logic in `src/mcp-server-ts/src/`:
 - `core/`: Pattern detection, rule generation, matching, statistics
+  - `session-analyzer.ts`: Detects 5 pattern types (correction, anti-pattern, preference, performance, security)
+  - `rule-generator.ts`: Converts patterns to rules with confidence scoring
+  - `indexed-rule-matcher.ts`: O(1) scene-based rule lookups
+  - `llm-rule-generator.ts`: LLM-enhanced rule generation with structured 6-section output
+  - `hybrid-rule-generator.ts`: Orchestrates 4-phase generation (basic detection → LLM enhancement → code extraction → structured storage)
 - `storage/`: Rule index, content management, versioning, feedback tracking
-- `tools/`: Claude index export
-- `index.ts`: MCP tool/resource handlers
+  - `rule-index.ts`: In-memory indexed metadata
+  - `session-analysis-tracker.ts`: Prevents redundant analysis
+- `index.ts`: MCP tool/resource handlers (1200+ lines)
 
-**Storage**: User-level at `~/.autoimprove/`:
+**Storage** (`~/.autoimprove/`):
 - `rules/index.json`: Fast in-memory rule metadata
 - `rules/content/*.md`: Full rule content (lazy-loaded)
 - `feedback_history.jsonl`: Rule usage feedback (append-only)
 - `sessions/*.json`: Analyzed session metadata
 - `rules/claude-index.md`: Auto-exported top rules (loaded into every Claude session)
-- `signal_dictionary/signals.db`: SQLite database of signal patterns (v2.2+)
+- `signal_dictionary/signals.db`: SQLite signal patterns (v2.2+)
 
 ### Key Components
 
-**Session Analysis** (`core/session-analyzer.ts`, `core/adaptive-session-analyzer.ts`):
-- Parses Claude Code session JSONL files
-- Detects 5 pattern types: repeated-correction, anti-pattern, preference, performance, security
-- Extracts meaningful descriptions with 8-class noise filtering
-- Implements incremental analysis (only analyzes new sessions)
-- **v2.2+**: Signal-based pattern recognition with LLM extraction
+**Session Analysis**: Parses Claude Code session JSONL files, extracts user corrections using 8-class noise filtering. Incremental analysis tracks processed sessions.
 
-**Rule Generation** (`core/rule-generator.ts`, `core/llm-rule-generator.ts`):
-- Converts patterns → rules with confidence scoring
-- Uses adaptive confidence (frequency 30%, time span 10%, user behavior 40%, validation 20%)
-- Assigns priority: critical (security), high (anti-pattern/performance), medium (correction), low (preference)
-- **v2.2+**: LLM-powered rule generation from clustered patterns
+**Rule Generation** (4-phase hybrid):
+1. **Basic detection**: Regex + heuristics for fast pattern recognition
+2. **LLM enhancement**: Extracts actionable descriptions from noisy messages (token-optimized prompts)
+3. **Code extraction**: Mines before/after code from Read/Edit/Write tool calls
+4. **Structured storage**: 6-section format (description, rationale, how-to, examples, when-to-use, exceptions)
 
-**Rule Matching** (`core/rule-matcher.ts`, `core/indexed-rule-matcher.ts`):
-- 3D scene matching: tech stack + functional dain + business domain
-- Keyword-based search with relevance scoring
-- Indexed search for O(1) lookups by scene/keyword
+**Rule Matching**: 3D scene model (tech stack + functional domain + business domain). Uses indexed lookups for O(1) performance. Scene detection is automatic from file extensions and user message keywords.
 
-**Signal System** (v2.2+):
-- **Signal Dictionary** (`storage/signal-dictionary-db.ts`): SQLite-based pattern storage
-- **Signal Matcher** (`core/signal-matcher.ts`): Aho-Corasick multi-pattern matching
-- **LLM Extractor** (`core/llm-signal-extractor.ts`): Extract patterns from unmatched messages
-- **Bayesian Updater** (`core/bayesian-confidence-updater.ts`): Adaptive confidence scoring
-- **Pattern Clusterer** (`core/pattern-clusterer.ts`): Semantic grouping with TF-IDF
+**Confidence Scoring**: Weighted formula (frequency 30%, time span 10%, user behavior 40%, validation 20%). Higher confidence = more reliable rule.
 
-**Feedback System** (v2.1):
-- **Auto-recsearch_knowledge` tool auto-records "used" feedback when rules match
-- **Manual recording**: Claude actively calls `record_feedback` with context and ratings
-- **Statistics**: Multi-dimensional analysis via `rule-usage-stats.ts`
+**Feedback System** (dual-track):
+- **Automatic**: `search_knowledge` auto-records "used" when rules match
+- **Manual**: Claude calls `record_feedback` for ignored/corrected/disabled cases
 
-**Quality Control** (`core/rule-quality.ts`):
-- Assesses rule clarity, specificity, actionability
-- Detects conflicts between rules
-- Version history with rollback support
+**Token Optimization** (v2.1): 
+- Compressed LLM prompts (2800 → 900 tokens, 67% reduction)
+- Smart example selection (TF-IDF diversity sampling, 10 → 5 examples)
+- Dynamic max_tokens allocation (700-1500 based on pattern complexity)
+- Expected savings: 12800 → ~4100 tokens per analysis (68% reduction)
 
 ### Scene Detection
 
-3-dimensional model implemented in `core/enhanced-scene-detector.ts`:
+3-dimensional model in `core/enhanced-scene-detector.ts`:
+1. **Tech scene**: File extensions (`.tsx` → react, `.py` → python)
+2. **Functional scene**: Keywords in user messages (aut database)
+3. **Business scene**: Directory patterns from config
 
-1. **Tech scene**: Detected from file paths (`.tsx` → react, `.py` → python) and imports
-2. **Functional scene**: Keywords in user messages (auth, api, database, testing)
-3. **Business scene**: Directory patterns from config (e.g., `src/shop` → e-commerce)
+Scene matching uses overlap scoring: more dimensions matched = higher relevance.
 
-Scene matching uses overlap scoring: more scene dimensions matched = higher relevance.
+## Development Workflow
 
-## Testing
+### Adding New Pattern Type
 
-Tests use Vitest and are located in `src/mcp-server-ts/tests/`:
-- `core.test.ts`: Pattern detection and rule generation
-- `scene-detection.test.ts`: Scene detector logic
-- `storage.test.ts`: Storage layer operations
-- `optimization.test.ts`: Performance benchmarks
+1. Add to `PatternType` enum in `core/models.ts`
+2. Implement `detect*Patterns()` in `core/session-analyzer.ts`
+3. Add confidence threshold to `storage/init.ts` default config
+4. Update priority logic in `core/rule-generator.ts`
+5. Add tests in `tests/core.test.ts`
 
-Run specific test file:
-```bash
-cd src/mcp-server-ts
-npm test -- tests/scene-detection.test.ts
-```
+### Adding New MCP Tool
 
-## MCP Tools
+1. Add schema to `ListToolsRequestSchema` handler in `index.ts`
+2. Implement handler function
+3. Add case to `CallToolRequestSchema` switch
+4. Update `docs/MCP_TOOLS_API.md`
+5. Add skill wrapper if user-facing
 
-Available tools (call via Claude or skills):
+### Modifying Rule Matching
 
-**Core analysis**:
-- `analyze_session`: Parse session JSONL, detect patterns (supports `--enhance` for AI-powered analysis, adaptive signal matching in v2.2+)
-- `generate_rules`: Convert patterns → rules with confidence scoring
-
-**Knowledge search**:
-- `search_knowledge`: Find rules by scene/keywords/ID (auto-records feedback unless `skip_feedback: true`)
-
-**Feedback & statistics**:
-- `record_feedback`: Manually record rule usage feedback (used/ignored/corrected/disabled)
-- `get_feedback_stats`: Get feedback statistics for rules
-- `get_rule_usage_stats`: Multi-dimensional usage statistics (by category/scene/priority/time)
-
-**Rule management**:
-- `update_rules`: Modify existing rules (creates version history)
-- `assess_rule_quality`: Check rule clarity/specificity/actionability
-- `detect_rule_conflicts`: Find conflicting rules
-- `get_rule_version_history`: View rule change history
-- `rollback_rule`: Revert to previous version
-
-**Export & utilities**:
-- `export_rules_to_claude_md`: Export top rules to `~/.autoimprove/rules/claude-index.md`
-- `list_scenes`: Show all known tech/functional/business scenes
-- `health_check`: Verify storage initialization
-
-**Adaptive learning** (v2.2+, currently internal - MCP tools planned):
-- Signal matching: Automatic during `analyze_session`
-- LLM extraction: Triggered when match rate < 40%
-- Bayesian updates: Automatic after each session
-- Pattern clustering: Opt-in via configuration
-
-## Important Implementation Details
-
-### Rule Confidence Formula (v2.0)
-
-```typescript
-confidence = 
-  frequency_score * 0.3 +
-  time_span_score * 0.1 +
-  behavior_score * 0.4 +
-  validation_score * 0.2
-```
-
-Higher confidence = more reliable rule. Thresholds vary by pattern type (see `~/.autoimprove/config.json`).
-
-### Feedback Recording (Dual-Track)
-
-1. **Automatic** (implemented in `index.ts` `handleSearchKnowledge()`):
-   - Records "used" when rule queried by ID
-   - Records "used" for all scene-matched rules with relevance scores
-   - Stored with context: `scene_context:relevance:X.XX`
-
-2. **Manual** (via Claude instructions in `~/.claude/autoimprove-feedback-instructions.md`):
-   - Claude actively calls `record_feedback` with ratings and detailed context
-   - Used when user explicitly approves/rejects/corrects rules
-
-### Session Analysis Tracking
-
-`SessionAnalysisTracker` (`storage/session-analysis-tracker.ts`) prevents redundant analysis:
-- Tracks analyzed session IDs with metadata (patterns found, rules generated)
-- Uses file modification time to detect stale cache
-- CLI flag `--force` bypasses cache
-
-### Agent Enhancement (--enhance flag)
-
-The `autoimprove-summarize` skill supports `--enhance` mode:
-- Simulates AI agent analysis (current implementation uses regex patterns + heuristics)
-- Extracts actionable descriptions from noisy user messages
-- Auto-extracts keywords and adjusts confidence
-- **Note**: Current "agent" is simulated; v2.2 will integrate real Claude Code Agent tool
-
-### Statistics CLI Script
-
-`scripts/rule-usage-stats.ts` provides standalone statistics:
-```bash
-npx tsx scripts/rule-usage-stats.ts --format markdown --last 30days --top 20
-```
-
-Supports time filters, category filters, multiple output formats (JSON/Markdown/Summary).
+Performance-critical (called on every session start):
+- Use `IndexedRuleMatcher` for O(1) lookups, not O(n) iteration
+- Cache computed relevance scores
+- Keep `claude-index.md` under 500 tokens (~400 for top 10 rules)
 
 ## Storage Schema
 
@@ -655,68 +153,46 @@ Supports time filters, category filters, multiple output formats (JSON/Markdown/
 {"rule_id":"rule-002","timestamp":"2026-06-06T11:00:00Z","feedback_type":"ignored","context":"Not applicable","user_rating":2}
 ```
 
-## Development Workflow
-
-### Adding New Pattern Type
-
-1. Add type to `PatternType` enum in `core/models.ts`
-2. Implement `detect*Patterns()` method in `core/session-analyzer.ts`
-3. Add confidence threshold to default config in `storage/init.ts`
-4. Update rule generator priority logic in `core/rule-generator.ts`
-5. Add tests in `tests/core.test.ts`
-
-### Adding New MCP Tool
-
-1. Add tool schema to `ListToolsRequestSchema` handler in `index.ts`
-2. Implement handler function (e.g., `handleNewTool()`)
-3. Add case to `CallToolRequestSchema` switch statement
-4. Update `docs/MCP_TOOLS_API.md`
-5. Add corresponding skill wrapper if user-facing
-
-### Modifying Rule Matching Logic
-
-Rule matching is performance-critical (called on every Claude session start when loading auto-exported rules):
-- Use `IndexedRuleMatcher` for O(1) scene lookups (not O(n) iteration)
-- Cache computed relevance scores
-- Keep `claude-index.md` under 500 tokens (currently ~400 for top 10 rules)
-
 ## Configuration
 
 User config at `~/.autoimprove/config.json`:
 - `confidence_thresholds`: Min confidence by pattern type
-- `confidence_weights`: Formula component weights
+- `confidence_weights`: Formula component weights (frequency, time span, behavior, validation)
 - `rule_matching.max_results`: Max rules returned by search
 - `business_domain_mappings`: Directory → business scene mapping
 
 ## Common Issues
 
-**Build fails after git pull**: Clean and rebuild
+**Build fails after git pull**:
 ```bash
 cd src/mcp-server-ts && rm -rf dist node_modules && npm install && npm run build
 ```
 
-**Skills not working**: MCP server must be running and connected
+**Skills not working**:
 ```bash
 claude mcp list  # Should show autoimprove-core as Connected
 claude mcp restart autoimprove-core
 ```
 
-**No patterns detected**: Check session file exists and contains user corrections. Enable debug logging:
+**No patterns detected**: Check session file contains user corrections. Enable debug logging:
 ```bash
 # Edit src/mcp-server-ts/src/core/logger.ts and set LOG_LEVEL = "debug"
 ```
 
-**Rules not auto-loading**: Verify `~/.claude/CLAUDE.md` contains reference to `~/.autoimprove/rules/claude-index.md`. Re-run setup:
+**Rules not auto-loading**: Verify `~/.claude/CLAUDE.md` references `~/.autoimprove/rules/claude-index.md`:
 ```bash
-./setup.sh
+./setup.sh  # Re-run setup to fix
 ```
 
 ## Key Files Reference
 
-- `src/mcp-server-ts/src/index.ts`: Main MCP server, tool handlers (1200+ lines)
+- `src/mcp-server-ts/src/index.ts`: MCP server entry point, tool handlers
 - `src/mcp-server-ts/src/core/session-analyzer.ts`: Pattern detection core
-- `src/mcp-server-ts/src/core/rule-usage-stats.ts`: Multi-dimensional statistics engine
-- `src/mcp-server-ts/src/storage/rule-index.ts`: In-memory indexed rule storage
-- `src/skills-ts/src/autoimprove-summarize/skill.ts`: Primary user workflow (analyze → generate → export)
-- `setup.sh`: Automated installation and configuration
+- `src/mcp-server-ts/src/core/hybrid-rule-generator.ts`: 4-phase rule generation orchestrator
+- `src/mcp-server-ts/src/core/llm-rule-generator.ts`: Token-optimized LLM prompts
+- `src/mcp-server-ts/src/storage/rule-index.ts`: Indexed rule storage
+- `src/skills-ts/src/autoimprove-summarize/skill.ts`: Primary workflow (analyze → generate → export)
+- `setup.sh`: Automated installation (updates `~/.claude/CLAUDE.md` with guidance)
 - `docs/COMPLETE_SUMMARY.md`: Comprehensive feature documentation
+- `docs/HYBRID_RULE_GENERATION.md`: 4-phase generation implementation
+- `docs/TOKEN_OPTIMIZATION_ANALYSIS.md`: Token reduction strategy
