@@ -12,6 +12,15 @@ export interface GeneratedRule {
   title: string;
   description: string;
   rationale: string;
+  how_to_apply: string[];
+  examples?: {
+    bad?: string;
+    good: string;
+    explanation: string;
+  };
+  when_to_use: string[];
+  exceptions?: string[];
+  related_patterns?: string[];
   source_cluster_id: string;
   source_signals: string[];
   source_sessions: string[];
@@ -78,6 +87,11 @@ export class LLMRuleGenerator {
         title: parsed.title,
         description: parsed.description,
         rationale: parsed.rationale,
+        how_to_apply: parsed.how_to_apply,
+        examples: parsed.examples,
+        when_to_use: parsed.when_to_use,
+        exceptions: parsed.exceptions,
+        related_patterns: parsed.related_patterns,
         source_cluster_id: cluster.cluster_id,
         source_signals: cluster.common_signals,
         source_sessions: Array.from(sessionIds),
@@ -149,7 +163,7 @@ export class LLMRuleGenerator {
       .map((c, i) => `${i + 1}. ${c.content}`)
       .join('\n');
 
-    return `You are creating a coding rule from observed correction/preference patterns.
+    return `You are creating a comprehensive coding rule from observed correction/preference patterns.
 
 Pattern Type: ${cluster.pattern_type}
 Total Occurrences: ${cluster.total_occurrences}
@@ -160,24 +174,61 @@ Average Confidence: ${(cluster.avg_confidence * 100).toFixed(1)}%
 Example corrections/preferences from user messages:
 ${contentExamples}
 
-Generate a clear, actionable coding rule with:
+Generate a comprehensive, actionable coding rule with the following structure:
 
-1. **Title**: Short, actionable title in imperative form (e.g., "Use useState for simple state management")
-   - Start with a verb
+1. **Title**: Short, actionable title in imperative form (60-80 chars)
+   - Start with a verb (e.g., "Use", "Avoid", "Prefer", "Always", "Never")
    - Be specific and concrete
-   - Keep under 80 characters
+   - Examples: "Use useState for simple state management", "Avoid nested ternary operators"
 
-2. **Description**: What to do OR what to avoid (2-3 sentences)
-   - Be clear and specific
-   - Include concrete examples when possible
-   - Explain the correct approach
+2. **Description**: What to do OR what to avoid (3-5 sentences)
+   - Be clear and specific about the recommended practice
+   - Explain the correct approach with context
+   - Include what to look for in code reviews
+   - Mention concrete patterns or indicators
 
-3. **Rationale**: Why this rule exists (1-2 sentences)
-   - What benefits does following this provide?
-   - What problems does it prevent?
-   - Why is this important?
+3. **Rationale**: Why this rule exists (2-4 sentences)
+   - What specific problems does it prevent?
+   - What concrete benefits does following this provide?
+   - What are the consequences of not following it?
+   - Include performance, security, maintainability, or readability impact
 
-4. **Scene Tags**: Categorize where this rule applies
+4. **How to Apply**: Step-by-step guidance (3-6 bullet points)
+   - Concrete actions developers should take
+   - What to check during code reviews
+   - Specific refactoring steps if fixing existing code
+   - Tools or lint rules that can help enforce this
+   - Examples:
+     * "When you see a boolean state variable, use useState instead of useReducer"
+     * "Run ESLint with the no-nested-ternary rule"
+     * "During code review, flag any useReducer with only 2-3 simple actions"
+
+5. **Code Examples**: Provide before/after comparison (if applicable to pattern type)
+   - **bad**: Code showing the anti-pattern or incorrect approach (optional)
+   - **good**: Code showing the correct approach
+   - **explanation**: Brief explanation of why the good example is better (1-2 sentences)
+   - Use realistic code snippets (10-20 lines)
+   - Use the actual tech stack from the pattern
+   - Include comments to highlight key differences
+
+6. **When to Use**: Specific scenarios where this rule applies (3-5 bullet points)
+   - Clear conditions or contexts when this rule is relevant
+   - Concrete indicators that trigger this rule
+   - Examples:
+     * "State is a single primitive value (boolean, string, number)"
+     * "State updates don't depend on previous state in complex ways"
+     * "Component has fewer than 3 state variables"
+
+7. **Exceptions**: Notable cases where this rule should NOT be applied (2-4 bullet points, optional)
+   - Legitimate exceptions or edge cases
+   - Situations where breaking this rule is acceptable
+   - Alternative approaches for those cases
+   - Examples:
+     * "When state transitions need to be logged or tracked"
+     * "When building a state machine with many states"
+     * "When the pattern is required by a third-party library"
+
+8. **Scene Tags**: Categorize where this rule applies
    - **tech**: List specific technologies (e.g., ["react", "typescript", "hooks"])
    - **business**: List business domains if applicable (e.g., ["e-commerce", "authentication"])
    - **generic**: Is this a universal principle? (true/false)
@@ -188,8 +239,31 @@ Generate a clear, actionable coding rule with:
 Respond in JSON format:
 {
   "title": "Use useState for simple state management",
-  "description": "For boolean or simple value state, use useState instead of useReducer. Reserve useReducer for complex state with multiple sub-values or complex state transitions. Simple state updates like toggling a boolean or incrementing a counter should use useState.",
-  "rationale": "useState is simpler and more readable for basic cases. Using useReducer adds unnecessary complexity and boilerplate for simple state, making the code harder to understand and maintain.",
+  "description": "For boolean or simple primitive value state, use useState instead of useReducer. Reserve useReducer for complex state objects with multiple sub-values or complex state transitions. Simple state updates like toggling a boolean, incrementing a counter, or storing a string should use useState for clarity and simplicity.",
+  "rationale": "useState is more readable and requires less boilerplate for simple cases. Using useReducer for basic state adds unnecessary complexity with action types, reducer functions, and dispatch calls, making the code harder to understand and maintain. The overhead of useReducer only pays off when managing complex state logic.",
+  "how_to_apply": [
+    "When creating new state, ask: Is this a single primitive value? If yes, use useState",
+    "During code review, flag useReducer usage where the reducer only has 2-3 simple toggle/set actions",
+    "Refactor existing useReducer to useState: replace dispatch calls with direct setState calls",
+    "Use ESLint plugin 'eslint-plugin-react-hooks' to enforce best practices"
+  ],
+  "examples": {
+    "bad": "const [isOpen, dispatch] = useReducer((state, action) => {\n  switch (action.type) {\n    case 'toggle': return !state;\n    default: return state;\n  }\n}, false);\n\n// Usage\ndispatch({ type: 'toggle' });",
+    "good": "const [isOpen, setIsOpen] = useState(false);\n\n// Usage\nsetIsOpen(!isOpen);\n// or\nsetIsOpen(prev => !prev);",
+    "explanation": "The useState version is more direct and readable. For a simple boolean toggle, the useReducer version adds unnecessary abstraction with action types and reducer logic."
+  },
+  "when_to_use": [
+    "State is a single primitive value (boolean, string, number)",
+    "State updates are simple assignments or toggles",
+    "State transitions don't require validation or side effects",
+    "Component has fewer than 5 independent state variables"
+  ],
+  "exceptions": [
+    "When state transitions need to be logged or audited",
+    "When building a finite state machine with specific valid transitions",
+    "When multiple related state changes must happen atomically",
+    "When the pattern is required by a library (e.g., form state management)"
+  ],
   "scenes": {
     "tech": ["react", "hooks"],
     "business": [],
@@ -199,8 +273,12 @@ Respond in JSON format:
 
 IMPORTANT:
 - Title must be imperative form (command)
-- Description must be actionable and specific
-- Rationale must explain the "why"
+- Description must be actionable and specific (3-5 sentences minimum)
+- Rationale must explain the "why" with concrete benefits/risks
+- how_to_apply must have 3-6 practical steps
+- examples should show realistic code (prefer including both bad and good)
+- when_to_use should have 3-5 specific conditions
+- exceptions are optional but valuable when applicable
 - Be precise with scene tags - don't over-generalize`;
   }
 
@@ -211,6 +289,11 @@ IMPORTANT:
     title: string;
     description: string;
     rationale: string;
+    how_to_apply: string[];
+    examples?: { bad?: string; good: string; explanation: string };
+    when_to_use: string[];
+    exceptions?: string[];
+    related_patterns?: string[];
     scenes: { tech: string[]; business: string[]; generic: boolean };
   } {
     try {
@@ -233,10 +316,23 @@ IMPORTANT:
         parsed.scenes = { tech: [], business: [], generic: false };
       }
 
+      // Ensure arrays exist
+      if (!parsed.how_to_apply || !Array.isArray(parsed.how_to_apply)) {
+        parsed.how_to_apply = [];
+      }
+      if (!parsed.when_to_use || !Array.isArray(parsed.when_to_use)) {
+        parsed.when_to_use = [];
+      }
+
       return {
         title: parsed.title,
         description: parsed.description,
         rationale: parsed.rationale,
+        how_to_apply: parsed.how_to_apply,
+        examples: parsed.examples,
+        when_to_use: parsed.when_to_use,
+        exceptions: parsed.exceptions,
+        related_patterns: parsed.related_patterns,
         scenes: {
           tech: parsed.scenes.tech || [],
           business: parsed.scenes.business || [],
@@ -296,10 +392,67 @@ IMPORTANT:
       updated_at: rule.last_validated
     };
 
+    // Build structured content (Phase 4)
+    let formattedContent = `# ${rule.title}\n\n`;
+    formattedContent += `## Description\n\n${rule.description}\n\n`;
+    formattedContent += `## Rationale\n\n${rule.rationale}\n\n`;
+
+    // How to apply
+    if (rule.how_to_apply && rule.how_to_apply.length > 0) {
+      formattedContent += `## How to Apply\n\n`;
+      for (const step of rule.how_to_apply) {
+        formattedContent += `- ${step}\n`;
+      }
+      formattedContent += `\n`;
+    }
+
+    // Code examples
+    if (rule.examples) {
+      formattedContent += `## Examples\n\n`;
+      if (rule.examples.bad) {
+        formattedContent += `### ❌ Avoid\n\n\`\`\`typescript\n${rule.examples.bad}\n\`\`\`\n\n`;
+      }
+      formattedContent += `### ✅ Prefer\n\n\`\`\`typescript\n${rule.examples.good}\n\`\`\`\n\n`;
+      formattedContent += `**Why**: ${rule.examples.explanation}\n\n`;
+    }
+
+    // When to use
+    if (rule.when_to_use && rule.when_to_use.length > 0) {
+      formattedContent += `## When to Use\n\n`;
+      for (const condition of rule.when_to_use) {
+        formattedContent += `- ${condition}\n`;
+      }
+      formattedContent += `\n`;
+    }
+
+    // Exceptions
+    if (rule.exceptions && rule.exceptions.length > 0) {
+      formattedContent += `## Exceptions\n\n`;
+      for (const exception of rule.exceptions) {
+        formattedContent += `- ${exception}\n`;
+      }
+      formattedContent += `\n`;
+    }
+
     const content: RuleContent = {
       id: rule.id,
-      content: `# ${rule.title}\n\n${rule.description}`,
+      content: formattedContent,
+
+      // Structured fields (Phase 4)
+      title: rule.title,
+      description: rule.description,
       reason: rule.rationale,
+      how_to_apply: rule.how_to_apply,
+      examples: rule.examples ? [{
+        bad: rule.examples.bad,
+        good: rule.examples.good,
+        explanation: rule.examples.explanation,
+        language: "typescript"
+      }] : undefined,
+      when_to_use: rule.when_to_use,
+      exceptions: rule.exceptions,
+      related_rules: rule.related_patterns,
+
       metadata: {
         type: indexEntry.type,
         priority: rule.priority,

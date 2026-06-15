@@ -21,6 +21,7 @@ import { RuleVersionControl } from "./storage/rule-version.js";
 import { SessionAnalysisTracker } from "./storage/session-analysis-tracker.js";
 import { SessionAnalyzer } from "./core/session-analyzer.js";
 import { RuleGenerator } from "./core/rule-generator.js";
+import { HybridRuleGenerator } from "./core/hybrid-rule-generator.js";
 import { RuleMatcher } from "./core/rule-matcher.js";
 import { RuleQualityController } from "./core/rule-quality.js";
 import { AdaptiveConfidenceCalculator } from "./core/adaptive-confidence.js";
@@ -48,6 +49,7 @@ let versionControl: RuleVersionControl;
 let analysisTracker: SessionAnalysisTracker;
 let analyzer: SessionAnalyzer;
 let generator: RuleGenerator;
+let hybridGenerator: HybridRuleGenerator;
 let matcher: RuleMatcher;
 let qualityController: RuleQualityController;
 let adaptiveConfidence: AdaptiveConfidenceCalculator;
@@ -77,6 +79,7 @@ function ensureInitialized() {
     analysisTracker = new SessionAnalysisTracker();
     analyzer = new SessionAnalyzer();
     generator = new RuleGenerator();
+    hybridGenerator = new HybridRuleGenerator();
     matcher = new RuleMatcher(indexManager, config.rule_matching.max_results, config.rule_matching.min_confidence);
     qualityController = new RuleQualityController();
     adaptiveConfidence = new AdaptiveConfidenceCalculator();
@@ -145,7 +148,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
       },
       {
         name: "generate_rules",
-        description: "Generate rules from detected patterns",
+        description: "Generate rules from detected patterns (supports basic and enhanced generation)",
         inputSchema: {
           type: "object",
           properties: {
@@ -156,6 +159,22 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
             scene_json: {
               type: "string",
               description: "Optional JSON string of scene context",
+            },
+            use_llm_enhancement: {
+              type: "boolean",
+              description: "Enable LLM-based content enhancement (Phase 2) - requires ANTHROPIC_API_KEY",
+            },
+            extract_code_examples: {
+              type: "boolean",
+              description: "Extract code examples from session tool calls (Phase 3)",
+            },
+            session_dir: {
+              type: "string",
+              description: "Path to session files directory (default: ~/.claude/sessions)",
+            },
+            max_examples: {
+              type: "number",
+              description: "Maximum number of code examples per rule (default: 3)",
             },
           },
           required: ["patterns_json"],
@@ -914,6 +933,10 @@ async function handleAnalyzeSession(args: any) {
 async function handleGenerateRules(args: any) {
   const patternsJson = args.patterns_json as string;
   const sceneJson = args.scene_json as string | undefined;
+  const useLLMEnhancement = args.use_llm_enhancement === true;
+  const extractCodeExamples = args.extract_code_examples !== false; // Default true
+  const sessionDir = args.session_dir as string | undefined;
+  const maxExamples = args.max_examples as number | undefined;
 
   // Validate input
   if (!patternsJson || patternsJson === "undefined") {
@@ -976,7 +999,31 @@ async function handleGenerateRules(args: any) {
   const scene = sceneJson ? JSON.parse(sceneJson) : undefined;
 
   const nextIdNum = parseInt(indexManager.getNextRuleId().split("-")[1], 10);
-  const rules = generator.batchGenerateRules(patterns, nextIdNum, scene);
+
+  // Choose generation strategy based on options
+  const useEnhanced = useLLMEnhancement || extractCodeExamples;
+  let rules: Array<{ indexEntry: any; content: any }>;
+
+  if (useEnhanced) {
+    // Use hybrid generator (Phase 2-4)
+    logger.info("generate_rules", `Using enhanced generation: LLM=${useLLMEnhancement}, CodeExamples=${extractCodeExamples}`);
+
+    rules = await hybridGenerator.batchGenerateEnhancedRules(
+      patterns,
+      nextIdNum,
+      scene,
+      {
+        useLLMEnhancement,
+        extractCodeExamples,
+        sessionDir,
+        maxExamples,
+      }
+    );
+  } else {
+    // Use basic generator (Phase 1 only - backward compatibility)
+    logger.info("generate_rules", "Using basic generation (fast mode)");
+    rules = generator.batchGenerateRules(patterns, nextIdNum, scene);
+  }
 
   const generatedIds: string[] = [];
   for (const { indexEntry, content } of rules) {
@@ -993,6 +1040,9 @@ async function handleGenerateRules(args: any) {
           success: true,
           rules_count: generatedIds.length,
           rule_ids: generatedIds,
+          generation_mode: useEnhanced ? "enhanced" : "basic",
+          llm_enhancement: useLLMEnhancement,
+          code_examples_extracted: extractCodeExamples,
         }),
       },
     ],

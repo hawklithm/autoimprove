@@ -88,10 +88,27 @@ export interface RuleIndex {
   rules: RuleIndexEntry[];
 }
 
+export interface CodeExample {
+  bad?: string;
+  good: string;
+  explanation: string;
+  language?: string;
+}
+
 export interface RuleContent {
   id: string;
-  content: string;
+  content: string; // Backward compatibility: full formatted content
+
+  // Structured content (Phase 4)
+  title?: string;
+  description?: string;
   reason: string;
+  how_to_apply?: string[];
+  examples?: CodeExample[];
+  when_to_use?: string[];
+  exceptions?: string[];
+  related_rules?: string[];
+
   metadata: Record<string, any>;
 }
 
