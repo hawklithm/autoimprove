@@ -191,80 +191,110 @@ fi
 cd "$SCRIPT_DIR"
 
 echo ""
-echo "Step 7: Initializing project CLAUDE.md with AutoImprove guidance..."
+echo "Step 7: Updating project CLAUDE.md with AutoImprove guidance..."
 echo "-----------------------------------"
 
 PROJECT_CLAUDE_MD="$SCRIPT_DIR/CLAUDE.md"
+GUIDANCE_TEMPLATE="$TEMPLATES_DIR/claude-guidance-template.md"
 
-# Check if AutoImprove MCP Tools section already exists
-if grep -q "## AutoImprove MCP Tools" "$PROJECT_CLAUDE_MD" 2>/dev/null; then
-  echo "✓ AutoImprove guidance already exists in project CLAUDE.md"
-  echo "  (Skipping to avoid duplication)"
-else
-  echo "Adding AutoImprove tool usage guidance to project CLAUDE.md..."
+if [ ! -f "$GUIDANCE_TEMPLATE" ]; then
+  echo "❌ Error: Guidance template not found at $GUIDANCE_TEMPLATE"
+  exit 1
+fi
 
-  # Create backup before modification
-  cp "$PROJECT_CLAUDE_MD" "$PROJECT_CLAUDE_MD.backup" 2>/dev/null || true
+# Check if CLAUDE.md exists
+if [ ! -f "$PROJECT_CLAUDE_MD" ]; then
+  echo "Creating new CLAUDE.md..."
+  cat > "$PROJECT_CLAUDE_MD" << 'EOF'
+# CLAUDE.md
 
-  # Use enhanced AutoImprove guidance template
-  GUIDANCE_TEMPLATE="$TEMPLATES_DIR/claude-guidance-template.md"
+This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
-  if [ ! -f "$GUIDANCE_TEMPLATE" ]; then
-    echo "❌ Error: Guidance template not found at $GUIDANCE_TEMPLATE"
-    exit 1
-  fi
+EOF
+fi
 
-  TEMP_GUIDANCE=$(mktemp)
-  cat "$GUIDANCE_TEMPLATE" > "$TEMP_GUIDANCE"
+# Check if AutoImprove section exists (marked by <!-- AUTOIMPROVE_START -->)
+if grep -q "<!-- AUTOIMPROVE_START -->" "$PROJECT_CLAUDE_MD" 2>/dev/null; then
+  echo "Found existing AutoImprove section, updating..."
 
+  # Create backup
+  cp "$PROJECT_CLAUDE_MD" "$PROJECT_CLAUDE_MD.backup"
 
-  # Insert guidance after header, before first ## section
+  # Extract content before, between markers, and after
   TEMP_OUTPUT=$(mktemp)
-  awk -v guidance_file="$TEMP_GUIDANCE" '
-    BEGIN { inserted = 0 }
-    # First line matching "# CLAUDE.md" - print it and prepare to insert
-    /^# CLAUDE\.md$/ && !inserted {
-      print
-      # Skip blank line if present
-      if (getline > 0) {
-        if ($0 ~ /^$/) {
-          print
-        } else {
-          # Not a blank line, save it for later
-          saved_line = $0
-          has_saved = 1
-        }
-      }
-      # Skip "This file provides guidance..." line if present
-      if (getline > 0) {
-        if ($0 !~ /^This file provides guidance/) {
-          if (has_saved) {
-            print saved_line
-            has_saved = 0
-          }
-          print $0
-        }
-      }
-      # Print standard header
-      print ""
-      print "This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository."
-      print ""
-      # Insert AutoImprove guidance
-      while ((getline line < guidance_file) > 0) {
+
+  # Use awk to replace content between markers
+  awk -v template="$GUIDANCE_TEMPLATE" '
+    /<!-- AUTOIMPROVE_START -->/ {
+      # Print the template content
+      while ((getline line < template) > 0) {
         print line
       }
-      close(guidance_file)
-      inserted = 1
+      close(template)
+      # Skip until we find the end marker
+      while (getline > 0 && !/<!-- AUTOIMPROVE_END -->/) {}
       next
     }
-    # Print all other lines
     { print }
   ' "$PROJECT_CLAUDE_MD" > "$TEMP_OUTPUT"
 
-  # Replace original with modified version
   mv "$TEMP_OUTPUT" "$PROJECT_CLAUDE_MD"
-  rm -f "$TEMP_GUIDANCE"
+  echo "✓ Updated AutoImprove guidance in $PROJECT_CLAUDE_MD"
+  echo "  (Backup saved to $PROJECT_CLAUDE_MD.backup)"
 
+else
+  echo "No existing AutoImprove section found, adding new section..."
+
+  # Create backup
+  cp "$PROJECT_CLAUDE_MD" "$PROJECT_CLAUDE_MD.backup" 2>/dev/null || true
+
+  TEMP_OUTPUT=$(mktemp)
+
+  # Insert after header, before first ## section (similar to CodeGraph)
+  awk -v template="$GUIDANCE_TEMPLATE" '
+    BEGIN { inserted = 0 }
+    # Match the header pattern
+    /^# CLAUDE\.md$/ && !inserted {
+      print
+      # Read and skip description line if present
+      if (getline > 0) {
+        if ($0 ~ /^$/) {
+          print
+          if (getline > 0) {
+            if ($0 ~ /^This file provides guidance/) {
+              print $0
+            } else {
+              print $0
+              getline  # Skip blank line after description
+            }
+          }
+        } else if ($0 !~ /^This file provides guidance/) {
+          print $0
+        } else {
+          print $0
+          if (getline > 0 && $0 ~ /^$/) {
+            # Skip blank line after description
+          } else {
+            print $0
+          }
+        }
+      }
+
+      # Insert template
+      print ""
+      while ((getline line < template) > 0) {
+        print line
+      }
+      close(template)
+      print ""
+
+      inserted = 1
+      next
+    }
+    { print }
+  ' "$PROJECT_CLAUDE_MD" > "$TEMP_OUTPUT"
+
+  mv "$TEMP_OUTPUT" "$PROJECT_CLAUDE_MD"
   echo "✓ Added AutoImprove guidance to $PROJECT_CLAUDE_MD"
   if [ -f "$PROJECT_CLAUDE_MD.backup" ]; then
     echo "  (Backup saved to $PROJECT_CLAUDE_MD.backup)"
