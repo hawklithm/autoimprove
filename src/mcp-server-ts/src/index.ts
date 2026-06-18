@@ -38,6 +38,7 @@ import { AdaptiveSessionAnalyzer } from "./core/adaptive-session-analyzer.js";
 import { logger } from "./core/logger.js";
 import { createScene, PatternType } from "./core/models.js";
 import { existsSync } from "fs";
+import { SERVER_INSTRUCTIONS, SERVER_INSTRUCTIONS_NO_STORAGE } from "./mcp-instructions.js";
 
 // ============================================================================
 // Initialization
@@ -116,6 +117,24 @@ const server = new Server(
     },
   }
 );
+
+// Add server instructions that get injected into Claude's context every session
+// Check if storage is initialized to determine which instructions to send
+const storageInitialized = existsSync(process.env.HOME + "/.autoimprove/rules/index.json");
+server.setRequestHandler("initialize" as any, async (request: any) => {
+  return {
+    protocolVersion: "2024-11-05",
+    capabilities: {
+      tools: {},
+      resources: {},
+    },
+    serverInfo: {
+      name: "autoimprove-core",
+      version: "0.1.0",
+    },
+    instructions: storageInitialized ? SERVER_INSTRUCTIONS : SERVER_INSTRUCTIONS_NO_STORAGE,
+  };
+});
 
 // ============================================================================
 // Tools
