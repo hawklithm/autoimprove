@@ -105,6 +105,9 @@ function ensureInitialized() {
 // MCP Server Setup
 // ============================================================================
 
+// Check if storage is initialized to determine which instructions to send
+const storageInitialized = existsSync(process.env.HOME + "/.autoimprove/rules/index.json");
+
 const server = new Server(
   {
     name: "autoimprove-core",
@@ -115,26 +118,10 @@ const server = new Server(
       tools: {},
       resources: {},
     },
+    // Instructions are automatically sent in the initialize response by the SDK
+    instructions: storageInitialized ? SERVER_INSTRUCTIONS : SERVER_INSTRUCTIONS_NO_STORAGE,
   }
 );
-
-// Add server instructions that get injected into Claude's context every session
-// Check if storage is initialized to determine which instructions to send
-const storageInitialized = existsSync(process.env.HOME + "/.autoimprove/rules/index.json");
-server.setRequestHandler("initialize" as any, async (request: any) => {
-  return {
-    protocolVersion: "2024-11-05",
-    capabilities: {
-      tools: {},
-      resources: {},
-    },
-    serverInfo: {
-      name: "autoimprove-core",
-      version: "0.1.0",
-    },
-    instructions: storageInitialized ? SERVER_INSTRUCTIONS : SERVER_INSTRUCTIONS_NO_STORAGE,
-  };
-});
 
 // ============================================================================
 // Tools
