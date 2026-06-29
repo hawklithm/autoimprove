@@ -38,7 +38,8 @@ import { AdaptiveSessionAnalyzer } from "./core/adaptive-session-analyzer.js";
 import { logger } from "./core/logger.js";
 import { createScene, PatternType } from "./core/models.js";
 import { existsSync } from "fs";
-import { SERVER_INSTRUCTIONS, SERVER_INSTRUCTIONS_NO_STORAGE } from "./mcp-instructions.js";
+import { SERVER_INSTRUCTIONS, SERVER_INSTRUCTIONS_NO_STORAGE, SERVER_INSTRUCTIONS_RICH, SERVER_INSTRUCTIONS_BASIC, SERVER_INSTRUCTIONS_EMPTY } from "./mcp-instructions.js";
+import { ProactiveRuleResourceProvider } from "./resources/proactive-rules.js";
 
 // ============================================================================
 // Initialization
@@ -48,6 +49,7 @@ let indexManager: RuleIndexManager;
 let contentManager: RuleContentManager;
 let versionControl: RuleVersionControl;
 let analysisTracker: SessionAnalysisTracker;
+let proactiveRuleProvider: ProactiveRuleResourceProvider;
 let analyzer: SessionAnalyzer;
 let generator: RuleGenerator;
 let hybridGenerator: HybridRuleGenerator;
@@ -87,6 +89,7 @@ function ensureInitialized() {
     sceneDetector = new EnhancedSceneDetector();
     claudeIndexExporter = new ClaudeIndexExporter(indexManager, contentManager);
     statsAnalyzer = new RuleUsageStatsAnalyzer(indexManager, contentManager, adaptiveConfidence);
+    proactiveRuleProvider = new ProactiveRuleResourceProvider(indexManager, contentManager, sceneDetector);
 
     // Initialize adaptive pattern recognition components
     _signalDB = new SignalDictionaryDB();
@@ -105,8 +108,38 @@ function ensureInitialized() {
 // MCP Server Setup
 // ============================================================================
 
-// Check if storage is initialized to determine which instructions to send
-const storageInitialized = existsSync(process.env.HOME + "/.autoimprove/rules/index.json");
+/**
+ * Select appropriate instructions based on rule quality.
+ * Learned from CodeGraph's dynamic instruction pattern.
+ */
+function selectInstructions(): string {
+  const homeDir = process.env.HOME || process.env.USERPROFILE;
+  if (!homeDir) return SERVER_INSTRUCTIONS_EMPTY;
+
+  const indexPath = `${homeDir}/.autoimprove/rules/index.json`;
+  if (!existsSync(indexPath)) {
+    return SERVER_INSTRUCTIONS_EMPTY;
+  }
+
+  try {
+    // Lazy initialize to check rule quality
+    ensureInitialized();
+
+    const allRules = indexManager.listRules();
+    const highConfidenceRules = allRules.filter(r => r.confidence >= 0.7);
+
+    if (highConfidenceRules.length >= 5) {
+      return SERVER_INSTRUCTIONS_RICH;
+    } else if (allRules.length > 0) {
+      return SERVER_INSTRUCTIONS_BASIC;
+    } else {
+      return SERVER_INSTRUCTIONS_EMPTY;
+    }
+  } catch (error) {
+    logger.warn("instruction-selection", `Failed to select instructions: ${error}`);
+    return SERVER_INSTRUCTIONS_BASIC; // Fallback to basic
+  }
+}
 
 const server = new Server(
   {
@@ -118,8 +151,8 @@ const server = new Server(
       tools: {},
       resources: {},
     },
-    // Instructions are automatically sent in the initialize response by the SDK
-    instructions: storageInitialized ? SERVER_INSTRUCTIONS : SERVER_INSTRUCTIONS_NO_STORAGE,
+    // Dynamic instructions based on rule quality
+    instructions: selectInstructions(),
   }
 );
 
@@ -2642,8 +2675,14 @@ async function handleGetSignalStats() {
 // ============================================================================
 
 server.setRequestHandler(ListResourcesRequestSchema, async () => {
+  ensureInitialized();
+
+  // Get proactive rule resources (scene-specific bundles)
+  const proactiveResources = proactiveRuleProvider.listResources();
+
   return {
     resources: [
+      // Existing knowledge resources (manual lookup)
       {
         uri: "knowledge://rules/{rule_id}",
         name: "Get rule content",
@@ -2656,6 +2695,13 @@ server.setRequestHandler(ListResourcesRequestSchema, async () => {
         description: "Get all rules applicable to a scene",
         mimeType: "text/markdown",
       },
+      // NEW: Proactive rule resources (auto-loaded by Claude Code)
+      ...proactiveResources.map(r => ({
+        uri: r.uri,
+        name: r.name,
+        description: r.description,
+        mimeType: r.mimeType,
+      })),
     ],
   };
 });
@@ -2664,6 +2710,29 @@ server.setRequestHandler(ReadResourceRequestSchema, async (request) => {
   ensureInitialized();
 
   const uri = request.params.uri;
+
+  // Handle proactive rule resources (auto-loaded)
+  if (uri.startsWith("autoimprove://rules/proactive/")) {
+    try {
+      const content = await proactiveRuleProvider.readResource(uri);
+      return {
+        contents: [{
+          uri,
+          mimeType: "text/markdown",
+          text: content,
+        }],
+      };
+    } catch (error: any) {
+      logger.error("proactive-rules", `Failed to read resource ${uri}`, error);
+      return {
+        contents: [{
+          uri,
+          mimeType: "text/markdown",
+          text: `# Error loading rules\n\n${error.message}`,
+        }],
+      };
+    }
+  }
 
   if (uri.startsWith("knowledge://rules/")) {
     const ruleId = uri.replace("knowledge://rules/", "");

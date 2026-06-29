@@ -5,74 +5,119 @@
  * automatically injected into Claude Code's system prompt at the start
  * of every session.
  *
- * Design goals:
- * - Proactive rule checking (call search_knowledge BEFORE implementing)
- * - Clear tool selection by scenario
- * - Encourage feedback recording for rule quality improvement
+ * Design goals (learned from CodeGraph):
+ * - TIGHT (~800 tokens) — agent reads this every session
+ * - Proactive guidance — use rules BEFORE/DURING coding, not just when asked
+ * - Clear anti-patterns — what NOT to do
+ * - Dynamic content — different instructions based on rule availability
  *
- * Keep this concise - the agent reads it every session.
+ * Keep this concise. The agent reads it every session.
  */
 
-export const SERVER_INSTRUCTIONS = `# AutoImprove — learned coding rules from your corrections
+/**
+ * Instructions when high-quality rules exist (>5 rules with confidence >0.7)
+ */
+export const SERVER_INSTRUCTIONS_RICH = `# AutoImprove — learned coding rules auto-loaded
 
-AutoImprove learns from user corrections and generates reusable coding rules that improve over time. It maintains a knowledge base at ~/.autoimprove/ with indexed rules automatically loaded from ~/.autoimprove/rules/claude-index.md.
+AutoImprove learns from your corrections and generates reusable rules. High-priority rules matching the current tech stack are **automatically loaded into this session** — you don't need to search for them explicitly. Apply them when relevant.
 
-## Use AutoImprove BEFORE implementing — not just when asked
+## Automatically loaded rules
 
-**Call \`search_knowledge\` at the START of every coding task** to check for learned patterns that apply to the current scenario. It's O(1) indexed (<10ms) with automatic scene detection from file paths and user messages, so there's no performance cost.
+Rules are pre-filtered by scene (tech stack + functional domain) and loaded as resources at session start. When a rule applies to the current task:
 
-### When to call search_knowledge
+1. **Auto-apply high-confidence rules (>70%)** without asking
+2. **Mention the rule ID** when applying ("Following RULE-010...")
+3. **Record feedback** if it doesn't fit: \`record_feedback\` with feedback_type="ignored"
 
-- ✅ **Before planning ANY implementation** — check for learned patterns first
-- ✅ **User mentions a technology/domain** — check for rules in that scene
-- ✅ **Starting to write code** — see if there are applicable patterns
-- ✅ **User corrects your approach** — note for end-of-session learning
+## Rule priority
 
-### Tool selection
+- **🔴 Critical** — Security rules (MANDATORY to follow, no exceptions)
+- **🟠 High** — Anti-patterns and performance (follow unless user explicitly overrides)
+- **🟡 Medium/Low** — Preferences (mention as suggestions)
 
-- **Before implementing** → \`search_knowledge\` with current scene (tech stack + functional domain). Scene detection is automatic from file extensions (.tsx → react) and keywords in user messages.
-- **After applying a rule** → Mention which rule you followed ("Following RULE-008...")
-- **Rule doesn't fit** → \`record_feedback\` with feedback_type="ignored"
-- **User corrects your approach** → Note for /autoimprove-summarize at conversation end
-- **Session with corrections** → Suggest \`/autoimprove-summarize\` to learn patterns
+## When to call search_knowledge
 
-### Rule confidence and priority
+Most relevant rules are already loaded, but call \`search_knowledge\` when:
+- User asks about a **different tech stack** than current files
+- You need rules for a **specific functional domain** (e.g., "authentication", "payment")
+- Checking for rules **after user corrects** your approach
 
-- **>0.7 confidence** — Proven patterns from 3+ confirmations, auto-apply without asking
-- **🔴 Critical priority** — Security rules (MANDATORY to follow)
-- **🟠 High priority** — Anti-patterns and performance (follow unless user explicitly says otherwise)
-- **🟡 Medium/Low priority** — Preferences and suggestions (mention as options)
+## Feedback and learning
 
-### Feedback loop
+- \`search_knowledge\` **auto-records "used" feedback** when called (skip with \`skip_feedback: true\`)
+- Manually call \`record_feedback\` for: **ignored** (doesn't apply), **corrected** (needs adjustment), **disabled** (caused bad advice)
+- When user corrects you repeatedly → suggest \`/autoimprove-summarize\` at conversation end to learn new patterns
 
-\`search_knowledge\` **auto-records "used" feedback** when rules match, so you only need manual \`record_feedback\` for:
-- **ignored** — Rule doesn't apply to current scenario
-- **corrected** — Rule needs adjustment based on user feedback
-- **disabled** — Rule caused incorrect advice (use cautiously)
+## Anti-patterns
 
-Add \`skip_feedback: true\` to search_knowledge if just browsing without applying.
-
-### Learning workflow
-
-1. User corrects you during session → note the pattern
-2. At conversation end → suggest \`/autoimprove-summarize\` to analyze session
-3. AutoImprove detects patterns → generates/updates rules
-4. Rules export to claude-index.md → automatically loaded next session
-5. Next similar task → rules appear in search_knowledge → you apply them
-
-### Anti-patterns
-
-- **Don't skip the search** — "I don't think there are rules" is wrong; let the system check (rules auto-load from claude-index.md)
-- **Don't ask to search** — Just call search_knowledge proactively; it's fast enough to call on every task
-- **Don't only search when asked** — Check for rules BEFORE implementing, even if user didn't mention AutoImprove
+- **Don't ignore loaded rules** — they're proven patterns from 3+ confirmations
+- **Don't ask whether to apply Critical (🔴) rules** — they're mandatory (security/correctness)
+- **Don't search redundantly** — rules for the current scene are already loaded
 
 ## Limitations
 
+- Rules lag by one session (learned patterns appear next session after \`/autoimprove-summarize\`)
+- Scene detection is heuristic (file extensions + keywords)
 - Storage is user-level (~/.autoimprove/), not project-specific
-- Rules requir+ occurrences to reach confidence >0.6
-- LLM-enhanced generation requires ANTHROPIC_API_KEY
-- Scene detection is heuristic-based (file extensions + keyword matching)
 `;
+
+/**
+ * Instructions when some rules exist but quality is low (<5 high-confidence rules)
+ */
+export const SERVER_INSTRUCTIONS_BASIC = `# AutoImprove — learned coding rules available
+
+AutoImprove learns from your corrections. Some rules exist but quality is still building. Call \`search_knowledge\` BEFORE implementing to check for applicable patterns.
+
+## Usage
+
+- **Before planning** → \`search_knowledge\` with current scene (auto-detected from file paths)
+- **After applying a rule** → Mention rule ID ("Following RULE-005...")
+- **Rule doesn't fit** → \`record_feedback\` with feedback_type="ignored"
+- **User corrects you** → Note pattern, suggest \`/autoimprove-summarize\` at conversation end
+
+## Rule priority
+
+- **🔴 Critical** — Security (MANDATORY)
+- **🟠 High** — Anti-patterns/performance (follow unless user says otherwise)
+- **🟡 Medium/Low** — Preferences (suggestions)
+
+## Building quality
+
+Current rules have <5 high-confidence patterns. Quality improves as:
+1. You apply rules → auto-records "used" feedback
+2. User corrects you → run \`/autoimprove-summarize\` to learn
+3. Rules gain confirmations → confidence increases → auto-loaded in future sessions
+
+\`search_knowledge\` is O(1) indexed (<10ms), so check proactively on every coding task.
+`;
+
+/**
+ * Instructions when no rules exist yet
+ */
+export const SERVER_INSTRUCTIONS_EMPTY = `# AutoImprove — setup required
+
+AutoImprove learns coding rules from your corrections, but storage isn't initialized. To enable:
+
+\`\`\`bash
+cd /path/to/autoimprove
+./setup.sh
+\`\`\`
+
+Or manually: \`claude mcp install src/mcp-server-ts\`
+
+Once initialized, AutoImprove will:
+1. Learn patterns when you correct Claude's code
+2. Generate reusable rules via \`/autoimprove-summarize\`
+3. Auto-load high-priority rules in future sessions
+
+Work normally with built-in tools for now. Mention the setup command if the user asks about AutoImprove.
+`;
+
+/**
+ * Legacy export for backward compatibility (before dynamic selection)
+ * Note: SERVER_INSTRUCTIONS_NO_STORAGE is now an alias for SERVER_INSTRUCTIONS_EMPTY
+ */
+export const SERVER_INSTRUCTIONS = SERVER_INSTRUCTIONS_BASIC;
 
 export const SERVER_INSTRUCTIONS_NO_STORAGE = `# AutoImprove — inactive (storage not initialized)
 
