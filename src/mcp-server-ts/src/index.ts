@@ -1144,7 +1144,8 @@ async function handleSearchKnowledge(args: any) {
 
   // Search by scene
   if (sceneJson) {
-    const scene = JSON.parse(sceneJson);
+    const parsedScene = JSON.parse(sceneJson);
+    const scene = createScene(parsedScene); // Normalize to ensure all fields exist
     const kwList = keywords ? keywords.split(",") : undefined;
     const matches = matcher.matchRules(scene, kwList);
 
