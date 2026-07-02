@@ -261,19 +261,14 @@ else
   fi
 fi
 
-# Check if autoimprove rules reference already exists
+# Remove claude-index.md auto-loading if it exists (rules fetched via search_knowledge)
 if grep -q "@.*autoimprove.*rules.*claude-index.md" "$GLOBAL_CLAUDE_MD" 2>/dev/null; then
-  echo "✓ AutoImprove rules reference already exists in CLAUDE.md"
-else
-  echo "Adding AutoImprove rules reference to CLAUDE.md..."
-  cat >> "$GLOBAL_CLAUDE_MD" << 'EOF'
-
-## AutoImprove Learned Rules
-
-@~/.autoimprove/rules/claude-index.md
-
-EOF
-  echo "✓ Added AutoImprove rules reference to $GLOBAL_CLAUDE_MD"
+  echo "Removing obsolete claude-index.md auto-loading from CLAUDE.md..."
+  # Create temp file without the AutoImprove Learned Rules section
+  grep -v "@.*autoimprove.*rules.*claude-index.md" "$GLOBAL_CLAUDE_MD" | \
+    sed '/## AutoImprove Learned Rules/,+2d' > "${GLOBAL_CLAUDE_MD}.tmp"
+  mv "${GLOBAL_CLAUDE_MD}.tmp" "$GLOBAL_CLAUDE_MD"
+  echo "✓ Removed claude-index.md auto-loading (rules fetched via search_knowledge)"
 fi
 
 # Add feedback instructions reference

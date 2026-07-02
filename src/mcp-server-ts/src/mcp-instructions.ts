@@ -15,48 +15,48 @@
  */
 
 /**
- * Instructions when high-quality rules exist (>5 rules with confidence >0.7)
+ * Unified instructions for all rule availability levels
  */
-export const SERVER_INSTRUCTIONS_RICH = `# AutoImprove — learned rules ARE PRE-LOADED into this session
+export const SERVER_INSTRUCTIONS_UNIFIED = `# AutoImprove — proactive rule lookup
 
-AutoImprove is a learned knowledge base of coding patterns from your past corrections. High-confidence rules for the current tech stack are **ALREADY IN YOUR CONTEXT** — pre-filtered by scene and loaded as resources at session start. Apply them BEFORE and DURING implementation, not just when asked.
+AutoImprove learns coding rules from your past corrections. Call \`search_knowledge\` BEFORE implementing features to check for applicable patterns — it's a fast O(1) index lookup (<10ms).
 
-## One workflow: apply rules automatically
+## Usage workflow
 
-When writing or modifying code, relevant rules are ALREADY AVAILABLE:
+Before writing or editing code:
 
-1. **High-confidence rules (>70%) — apply them WITHOUT asking**. These are proven patterns from 3+ confirmations.
-2. **Mention the rule ID** when applying: "Following RULE-010, adding input validation"
-3. **Record feedback** immediately after:
-   - Applied successfully → \`record_feedback({rule_id: "RULE-010", feedback_type: "used", user_rating: 5})\`
-   - Doesn't fit → \`record_feedback({rule_id: "RULE-010", feedback_type: "ignored", context: "why"})\`
+1. **Call \`search_knowledge\`** with current scene (auto-detected from file extensions/keywords)
+   - Example: \`search_knowledge({scene_json: '{"tech":["react"],"functional":["auth"]}', keywords: "token,validation"})\`
+2. **Apply matched rules** — mention rule ID: "Following RULE-005, using async/await pattern"
+3. **Feedback is auto-recorded** — \`search_knowledge\` automatically tracks "used" when rules match
+4. **Manual feedback only for exceptions**:
+   - Rule doesn't fit → \`record_feedback({rule_id, feedback_type: "ignored", context: "why"})\`
+   - User corrects rule → \`record_feedback({rule_id, feedback_type: "corrected", context: "what changed"})\`
 
-## Rule priority (MANDATORY enforcement)
+## Rule priority
 
-- **🔴 Critical** — Security/correctness. NO exceptions. Apply automatically.
-- **🟠 High** — Anti-patterns, performance. Follow unless user explicitly says otherwise.
+- **🔴 Critical** — Security/correctness. MANDATORY, no exceptions.
+- **🟠 High** — Anti-patterns/performance. Follow unless user says otherwise.
 - **🟡 Medium/Low** — Style preferences. Mention as suggestions.
 
-## When to call search_knowledge (rarely needed)
+## When to call search_knowledge
 
-Most rules for the current scene are ALREADY LOADED. Only call \`search_knowledge\` when:
-- User explicitly asks about a **different tech stack** than current files
-- You need **cross-domain patterns** not in the pre-loaded set
+- **Before implementing** any feature or fix (proactive lookup)
 - **After user corrects you** — check if a rule already exists for this pattern
+- **When switching tech stacks** — get domain-specific patterns
 
 ## Anti-patterns
 
-- **Don't call \`search_knowledge\` for the current scene** — those rules are already in your context. Calling it again is redundant and wastes tokens.
-- **Don't ask permission to apply 🔴 Critical or 🟠 High rules** — they're mandatory. Just apply and mention the rule ID.
-- **Don't ignore pre-loaded rules** — they're battle-tested patterns you would otherwise re-discover through trial and error.
-- **Don't forget to record feedback** — every application or skip should call \`record_feedback\`. This is how AutoImprove learns what works.
+- **Don't skip \`search_knowledge\`** — it's fast and prevents reinventing known patterns
+- **Don't manually record "used" feedback** — \`search_knowledge\` does this automatically
+- **Don't ask permission for 🔴 Critical rules** — just apply and mention the rule ID
 
-## Feedback tracking (REQUIRED after using rules)
+## Building quality
 
-- When you apply a rule → \`record_feedback({rule_id, feedback_type: "used", user_rating: 1-5, context: "brief scenario"})\`
-- When you skip a rule → \`record_feedback({rule_id, feedback_type: "ignored", context: "why it doesn't apply"})\`
-- \`search_knowledge\` auto-records "used" (skip with \`skip_feedback: true\` if just browsing)
-- User corrects you repeatedly → suggest \`/autoimprove-summarize\` at conversation end
+Quality improves when:
+1. You call \`search_knowledge\` consistently → builds usage data
+2. User corrects you → run \`/autoimprove-summarize\` to capture new patterns
+3. Rules get validated through repeated use → confidence increases
 
 ## Limitations
 
@@ -65,38 +65,9 @@ Most rules for the current scene are ALREADY LOADED. Only call \`search_knowledg
 - Storage is user-level (~/.autoimprove/), not project-specific
 `;
 
-/**
- * Instructions when some rules exist but quality is low (<5 high-confidence rules)
- */
-export const SERVER_INSTRUCTIONS_BASIC = `# AutoImprove — learned rules available (call proactively)
-
-AutoImprove learns from your corrections. Rules exist but quality is still building (<5 high-confidence patterns). Call \`search_knowledge\` BEFORE implementing to check for applicable patterns — this is a cheap O(1) index lookup (<10ms).
-
-## Usage workflow
-
-Before writing or editing code:
-
-1. **Call \`search_knowledge\`** with current scene (auto-detected from file extensions/keywords)
-2. **Apply matched rules** — mention rule ID: "Following RULE-005, using async/await pattern"
-3. **Record feedback** immediately:
-   - Applied → \`record_feedback({rule_id, feedback_type: "used", user_rating: 1-5})\`
-   - Skipped → \`record_feedback({rule_id, feedback_type: "ignored", context: "why"})\`
-
-## Rule priority
-
-- **🔴 Critical** — Security/correctness. MANDATORY, no exceptions.
-- **🟠 High** — Anti-patterns/performance. Follow unless user says otherwise.
-- **🟡 Medium/Low** — Style preferences. Mention as suggestions.
-
-## Building quality
-
-Rules will auto-load in future sessions once they reach high confidence. Quality improves when:
-1. You apply rules consistently → auto-records "used" feedback, increases confidence
-2. User corrects you → run \`/autoimprove-summarize\` to capture new patterns
-3. Patterns reach 3+ confirmations → promoted to auto-load tier
-
-Call \`search_knowledge\` proactively on every coding task — it's indexed and fast.
-`;
+// Legacy exports for backward compatibility
+export const SERVER_INSTRUCTIONS_RICH = SERVER_INSTRUCTIONS_UNIFIED;
+export const SERVER_INSTRUCTIONS_BASIC = SERVER_INSTRUCTIONS_UNIFIED;
 
 /**
  * Instructions when no rules exist yet
@@ -122,9 +93,8 @@ Work normally with built-in tools for now. Mention the setup command if the user
 
 /**
  * Legacy export for backward compatibility (before dynamic selection)
- * Note: SERVER_INSTRUCTIONS_NO_STORAGE is now an alias for SERVER_INSTRUCTIONS_EMPTY
  */
-export const SERVER_INSTRUCTIONS = SERVER_INSTRUCTIONS_BASIC;
+export const SERVER_INSTRUCTIONS = SERVER_INSTRUCTIONS_UNIFIED;
 
 export const SERVER_INSTRUCTIONS_NO_STORAGE = `# AutoImprove — inactive (storage not initialized)
 

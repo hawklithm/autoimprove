@@ -38,7 +38,7 @@ import { AdaptiveSessionAnalyzer } from "./core/adaptive-session-analyzer.js";
 import { logger } from "./core/logger.js";
 import { createScene, PatternType } from "./core/models.js";
 import { existsSync } from "fs";
-import { SERVER_INSTRUCTIONS, SERVER_INSTRUCTIONS_NO_STORAGE, SERVER_INSTRUCTIONS_RICH, SERVER_INSTRUCTIONS_BASIC, SERVER_INSTRUCTIONS_EMPTY } from "./mcp-instructions.js";
+import { SERVER_INSTRUCTIONS_UNIFIED, SERVER_INSTRUCTIONS_EMPTY } from "./mcp-instructions.js";
 import { ProactiveRuleResourceProvider } from "./resources/proactive-rules.js";
 
 // ============================================================================
@@ -121,8 +121,7 @@ function ensureInitialized() {
 // ============================================================================
 
 /**
- * Select appropriate instructions based on rule quality.
- * Learned from CodeGraph's dynamic instruction pattern.
+ * Select appropriate instructions based on storage availability.
  */
 function selectInstructions(): string {
   const homeDir = process.env.HOME || process.env.USERPROFILE;
@@ -134,22 +133,11 @@ function selectInstructions(): string {
   }
 
   try {
-    // Lazy initialize to check rule quality
-    ensureInitialized();
-
-    const allRules = indexManager.listRules();
-    const highConfidenceRules = allRules.filter(r => r.confidence >= 0.7);
-
-    if (highConfidenceRules.length >= 5) {
-      return SERVER_INSTRUCTIONS_RICH;
-    } else if (allRules.length > 0) {
-      return SERVER_INSTRUCTIONS_BASIC;
-    } else {
-      return SERVER_INSTRUCTIONS_EMPTY;
-    }
+    // Use unified instructions for all initialized storage
+    return SERVER_INSTRUCTIONS_UNIFIED;
   } catch (error) {
     logger.warn("instruction-selection", `Failed to select instructions: ${error}`);
-    return SERVER_INSTRUCTIONS_BASIC; // Fallback to basic
+    return SERVER_INSTRUCTIONS_UNIFIED; // Fallback to unified
   }
 }
 
