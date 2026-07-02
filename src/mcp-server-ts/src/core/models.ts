@@ -35,9 +35,9 @@ export interface Scene {
 
 export function createScene(partial: Partial<Scene> = {}): Scene {
   return {
-    tech: partial.tech || [],
-    functional: partial.functional || [],
-    business: partial.business || []
+    tech: Array.isArray(partial.tech) ? partial.tech : [],
+    functional: Array.isArray(partial.functional) ? partial.functional : [],
+    business: Array.isArray(partial.business) ? partial.business : []
   };
 }
 

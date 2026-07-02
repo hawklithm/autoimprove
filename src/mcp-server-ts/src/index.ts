@@ -1151,7 +1151,9 @@ async function handleSearchKnowledge(args: any) {
 
     // 🆕 Auto-record feedback for matched rules
     if (!skipFeedback && matches.length > 0) {
-      const sceneContext = `scene:${scene.tech.join(",")}/${scene.functional.join(",")}`;
+      const techStr = (scene.tech || []).join(",") || "none";
+      const funcStr = (scene.functional || []).join(",") || "none";
+      const sceneContext = `scene:${techStr}/${funcStr}`;
       const keywordContext = kwList ? `:keywords:${kwList.join(",")}` : "";
 
       for (const match of matches) {
