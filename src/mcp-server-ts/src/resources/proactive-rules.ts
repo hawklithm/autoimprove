@@ -133,14 +133,19 @@ export class ProactiveRuleResourceProvider {
   /**
    * Format rules as markdown for Claude's context.
    * Compact format: 1 rule = ~100-150 tokens.
+   * Budget: max 500 tokens per scene to prevent context pollution.
    */
   private formatRulesAsMarkdown(rules: any[], scene: string): string {
     const lines: string[] = [];
+    const TOKEN_BUDGET = 500; // Max tokens per scene resource
+    let currentTokens = 0;
 
     lines.push(`# AutoImprove Learned Rules — ${scene}`);
     lines.push("");
     lines.push(`> 🤖 Auto-loaded ${rules.length} high-priority rules. Apply these automatically when relevant.`);
     lines.push("");
+
+    currentTokens += this.estimateTokens(lines.join("\n"));
 
     // Sort by priority (critical > high) then confidence
     const sorted = rules.sort((a, b) => {
@@ -151,60 +156,29 @@ export class ProactiveRuleResourceProvider {
       return b.confidence - a.confidence;
     });
 
+    let rulesIncluded = 0;
+
     for (const rule of sorted) {
-      const priorityEmoji = {
-        critical: "🔴",
-        high: "🟠",
-        medium: "🟡",
-        low: "⚪",
-      }[rule.priority as 'critical' | 'high' | 'medium' | 'low'] || "⚪";
+      // Check token budget before adding rule
+      const rulePreview = this.formatSingleRule(rule);
+      const ruleTokens = this.estimateTokens(rulePreview);
 
-      lines.push(`## ${priorityEmoji} ${rule.id} — ${this.extractTitle(rule)}`);
-      lines.push("");
-
-      // Load full content
-      const ruleContent = this.contentManager.loadContent(rule.id);
-      if (ruleContent) {
-        const sections = this.parseRuleContent(ruleContent.content);
-
-        // Description (mandatory)
-        if (sections.description) {
-          lines.push(`**What**: ${sections.description}`);
-          lines.push("");
-        }
-
-        // Rationale (why it matters)
-        if (sections.rationale) {
-          lines.push(`**Why**: ${sections.rationale}`);
-          lines.push("");
-        }
-
-        // How to apply (action items)
-        if (sections.howTo) {
-          lines.push(`**How**: ${sections.howTo}`);
-          lines.push("");
-        }
-
-        // When to use (context)
-        if (sections.whenToUse) {
-          lines.push(`**When**: ${sections.whenToUse}`);
-          lines.push("");
-        }
-
-        // Examples (if compact)
-        if (sections.examples && sections.examples.length < 500) {
-          lines.push(`**Example**:`);
-          lines.push("```");
-          lines.push(sections.examples);
-          lines.push("```");
-          lines.push("");
-        }
+      if (currentTokens + ruleTokens > TOKEN_BUDGET && rulesIncluded > 0) {
+        // Budget exceeded, stop adding rules
+        lines.push(`_...and ${sorted.length - rulesIncluded} more rules (omitted to preserve context budget)_`);
+        lines.push("");
+        break;
       }
 
-      lines.push(`_Confidence: ${(rule.confidence * 100).toFixed(0)}% | Scenes: ${this.formatScenes(rule.scenes)}_`);
-      lines.push("");
-      lines.push("---");
-      lines.push("");
+      // Add the rule
+      lines.push(rulePreview);
+      currentTokens += ruleTokens;
+      rulesIncluded++;
+    }
+
+    // Only add footer if we didn't already add rules
+    if (rulesIncluded === 0) {
+      return this.formatEmptyResource(scene);
     }
 
     lines.push("## Usage");
@@ -215,6 +189,83 @@ export class ProactiveRuleResourceProvider {
     lines.push("- Critical (🔴) rules are MANDATORY; High (🟠) rules should be followed unless user says otherwise");
 
     return lines.join("\n");
+  }
+
+  /**
+   * Format a single rule as markdown.
+   */
+  private formatSingleRule(rule: any): string {
+    const lines: string[] = [];
+
+    const priorityEmoji = {
+      critical: "🔴",
+      high: "🟠",
+      medium: "🟡",
+      low: "⚪",
+    }[rule.priority as 'critical' | 'high' | 'medium' | 'low'] || "⚪";
+
+    lines.push(`## ${priorityEmoji} ${rule.id} — ${this.extractTitle(rule)}`);
+    lines.push("");
+
+    // Load full content
+    const ruleContent = this.contentManager.loadContent(rule.id);
+    if (ruleContent) {
+      const sections = this.parseRuleContent(ruleContent.content);
+
+      // Description (mandatory)
+      if (sections.description) {
+        lines.push(`**What**: ${sections.description}`);
+        lines.push("");
+      }
+
+      // Rationale (why it matters)
+      if (sections.rationale) {
+        lines.push(`**Why**: ${sections.rationale}`);
+        lines.push("");
+      }
+
+      // How to apply (action items)
+      if (sections.howTo) {
+        lines.push(`**How**: ${sections.howTo}`);
+        lines.push("");
+      }
+
+      // When to use (context)
+      if (sections.whenToUse) {
+        lines.push(`**When**: ${sections.whenToUse}`);
+        lines.push("");
+      }
+
+      // Examples (if compact)
+      if (sections.examples && sections.examples.length < 500) {
+        lines.push(`**Example**:`);
+        lines.push("```");
+        lines.push(sections.examples);
+        lines.push("```");
+        lines.push("");
+      }
+    }
+
+    lines.push(`_Confidence: ${(rule.confidence * 100).toFixed(0)}% | Scenes: ${this.formatScenes(rule.scenes)}_`);
+    lines.push("");
+    lines.push("---");
+    lines.push("");
+
+    return lines.join("\n");
+  }
+
+  /**
+   * Estimate token count (rough approximation: 1 token ≈ 4 chars).
+   */
+  private estimateTokens(text: string): number {
+    return Math.ceil(text.length / 4);
+  }
+
+  /**
+   * Format empty resource when no rules fit budget.
+   */
+  private formatEmptyResource(scene: string): string {
+    return `# AutoImprove Learned Rules — ${scene}\n\n> No high-priority rules available for this scene yet. Use \`search_knowledge\` to find relevant patterns.\n`;
   }
 
   /**

@@ -1,22 +1,28 @@
 # Proactive Rule Loading Implementation
 
-## 概述
+## 概述 | Overview
 
 实现了在 Claude Code harness 做决策时自动注入规则的功能，无需 Claude 显式调用 `search_knowledge` 工具。通过 MCP SDK 的 **Resources** 机制和动态 **Instructions** 实现。
 
+**2026-07-02 更新**: 借鉴 CodeGraph 最佳实践，重写了 instructions 使用强声明式语言，并添加了 token budget 优化机制。
+
+Implemented automatic rule injection into Claude Code's decision-making context without requiring explicit `search_knowledge` calls, using MCP SDK's **Resources** and dynamic **Instructions**.
+
+**2026-07-02 Update**: Rewrote instructions with CodeGraph-inspired assertive language and added token budget optimization.
+
 ## 核心特性
 
-### 1. 动态 MCP Instructions（智能引导）
+### 1. 动态 MCP Instructions（智能引导）— 2026-07-02 重写
 
 **文件**: `src/mcp-server-ts/src/mcp-instructions.ts`
 
 根据规则库质量动态选择引导文案：
 
-| 模式 | 触发条件 | Token 预算 | 特点 |
-|------|---------|-----------|------|
-| **RICH** | ≥5 条高置信度规则 | ~600 tokens | 强调规则已自动加载，直接应用 |
-| **BASIC** | 有规则但质量较低 | ~500 tokens | 引导主动调用 search_knowledge |
-| **EMPTY** | 无规则/未初始化 | ~300 tokens | 提供设置指令 |
+| 模式 | 触发条件 | Token 预算 | 特点 | 更新内容 |
+|------|---------|-----------|------|---------|
+| **RICH** | ≥5 条高置信度规则 | ~780 tokens | 强调规则已自动加载，直接应用 | ✅ **强声明式语言**："ARE PRE-LOADED"（全大写）<br>✅ **明确反模式**："Don't call search_knowledge for current scene"<br>✅ **强制指令**："apply WITHOUT asking" |
+| **BASIC** | 有规则但质量较低 | ~520 tokens | 引导主动调用 search_knowledge | ✅ **行为驱动**："Call proactively BEFORE implementing"<br>✅ **质量提升路径**：明确如何达到 RICH 模式 |
+| **EMPTY** | 无规则/未初始化 | ~300 tokens | 提供设置指令 | 无变化 |
 
 **实现**:
 ```typescript
@@ -25,16 +31,38 @@ function selectInstructions(): string {
   const highConfidenceRules = allRules.filter(r => r.confidence >= 0.7);
   
   if (highConfidenceRules.length >= 5) {
-    return SERVER_INSTRUCTIONS_RICH;
+    return SERVER_INSTRUCTIONS_RICH;  // "rules ARE PRE-LOADED"
   } else if (allRules.length > 0) {
-    return SERVER_INSTRUCTIONS_BASIC;
+    return SERVER_INSTRUCTIONS_BASIC; // "call proactively BEFORE"
   } else {
-    return SERVER_INSTRUCTIONS_EMPTY;
+    return SERVER_INSTRUCTIONS_EMPTY; // "setup required"
   }
 }
 ```
 
-### 2. MCP Resources 自动加载（核心机制）
+**关键改进（2026-07-02）**:
+
+**RICH 模式的强化语言**:
+- ❌ 旧版: "rules are **automatically loaded**"
+- ✅ 新版: "rules **ARE PRE-LOADED** into this session" (全大写强调)
+- ❌ 旧版: "Apply them when relevant"
+- ✅ 新版: "apply them **WITHOUT asking**" (去除模糊性)
+
+**新增反模式部分**:
+```markdown
+## Anti-patterns
+- Don't call search_knowledge for the current scene — already loaded
+- Don't ask permission to apply 🔴 Critical or 🟠 High rules — mandatory
+- Don't ignore pre-loaded rules — battle-tested patterns
+- Don't forget to record feedback — REQUIRED after using rules
+```
+
+**BASIC 模式的改进**:
+- 明确说明为何在这个模式：`<5 high-confidence patterns`
+- 强调质量提升路径：应用规则 → 增加置信度 → 升级到 RICH 模式
+- 明确性能指标：`O(1) indexed (<10ms)`
+
+### 2. MCP Resources 自动加载（核心机制）— 2026-07-02 增强
 
 **文件**: `src/mcp-server-ts/src/resources/proactive-rules.ts`
 
@@ -60,10 +88,26 @@ autoimprove://rules/proactive/general   // 通用规则
 - 按技术栈分组（取每个规则的第一个 tech scene）
 - 最多 5 个场景资源（覆盖最常见的技术栈）
 
-**Token 优化**:
-- 每条规则 ~100-150 tokens（紧凑格式）
-- 单个资源包含 5-10 条规则 → ~800-1000 tokens
-- 符合用户设定的 ~1000 tokens 预算
+**Token 优化（2026-07-02 新增）**:
+```typescript
+const TOKEN_BUDGET = 500; // Max tokens per scene resource
+
+formatRulesAsMarkdown(rules, scene) {
+  // Sort: Critical > High, then by confidence
+  // Add rules until budget exhausted
+  // Show "...and N more rules omitted" if truncated
+}
+
+estimateTokens(text: string): number {
+  return Math.ceil(text.length / 4); // 1 token ≈ 4 chars
+}
+```
+
+**预算控制**:
+- 每个场景资源最多 500 tokens
+- 优先加载 Critical/High 规则
+- 如果超出预算，显示 "...and N more rules (omitted to preserve context budget)"
+- 确保最重要的规则总是能被加载
 
 ### 3. 规则内容格式
 

@@ -17,78 +17,85 @@
 /**
  * Instructions when high-quality rules exist (>5 rules with confidence >0.7)
  */
-export const SERVER_INSTRUCTIONS_RICH = `# AutoImprove — learned coding rules auto-loaded
+export const SERVER_INSTRUCTIONS_RICH = `# AutoImprove — learned rules ARE PRE-LOADED into this session
 
-AutoImprove learns from your corrections and generates reusable rules. High-priority rules matching the current tech stack are **automatically loaded into this session** — you don't need to search for them explicitly. Apply them when relevant.
+AutoImprove is a learned knowledge base of coding patterns from your past corrections. High-confidence rules for the current tech stack are **ALREADY IN YOUR CONTEXT** — pre-filtered by scene and loaded as resources at session start. Apply them BEFORE and DURING implementation, not just when asked.
 
-## Automatically loaded rules
+## One workflow: apply rules automatically
 
-Rules are pre-filtered by scene (tech stack + functional domain) and loaded as resources at session start. When a rule applies to the current task:
+When writing or modifying code, relevant rules are ALREADY AVAILABLE:
 
-1. **Auto-apply high-confidence rules (>70%)** without asking
-2. **Mention the rule ID** when applying ("Following RULE-010...")
-3. **Record feedback** if it doesn't fit: \`record_feedback\` with feedback_type="ignored"
+1. **High-confidence rules (>70%) — apply them WITHOUT asking**. These are proven patterns from 3+ confirmations.
+2. **Mention the rule ID** when applying: "Following RULE-010, adding input validation"
+3. **Record feedback** immediately after:
+   - Applied successfully → \`record_feedback({rule_id: "RULE-010", feedback_type: "used", user_rating: 5})\`
+   - Doesn't fit → \`record_feedback({rule_id: "RULE-010", feedback_type: "ignored", context: "why"})\`
 
-## Rule priority
+## Rule priority (MANDATORY enforcement)
 
-- **🔴 Critical** — Security rules (MANDATORY to follow, no exceptions)
-- **🟠 High** — Anti-patterns and performance (follow unless user explicitly overrides)
-- **🟡 Medium/Low** — Preferences (mention as suggestions)
+- **🔴 Critical** — Security/correctness. NO exceptions. Apply automatically.
+- **🟠 High** — Anti-patterns, performance. Follow unless user explicitly says otherwise.
+- **🟡 Medium/Low** — Style preferences. Mention as suggestions.
 
-## When to call search_knowledge
+## When to call search_knowledge (rarely needed)
 
-Most relevant rules are already loaded, but call \`search_knowledge\` when:
-- User asks about a **different tech stack** than current files
-- You need rules for a **specific functional domain** (e.g., "authentication", "payment")
-- Checking for rules **after user corrects** your approach
-
-## Feedback and learning
-
-- \`search_knowledge\` **auto-records "used" feedback** when called (skip with \`skip_feedback: true\`)
-- Manually call \`record_feedback\` for: **ignored** (doesn't apply), **corrected** (needs adjustment), **disabled** (caused bad advice)
-- When user corrects you repeatedly → suggest \`/autoimprove-summarize\` at conversation end to learn new patterns
+Most rules for the current scene are ALREADY LOADED. Only call \`search_knowledge\` when:
+- User explicitly asks about a **different tech stack** than current files
+- You need **cross-domain patterns** not in the pre-loaded set
+- **After user corrects you** — check if a rule already exists for this pattern
 
 ## Anti-patterns
 
-- **Don't ignore loaded rules** — they're proven patterns from 3+ confirmations
-- **Don't ask whether to apply Critical (🔴) rules** — they're mandatory (security/correctness)
-- **Don't search redundantly** — rules for the current scene are already loaded
+- **Don't call \`search_knowledge\` for the current scene** — those rules are already in your context. Calling it again is redundant and wastes tokens.
+- **Don't ask permission to apply 🔴 Critical or 🟠 High rules** — they're mandatory. Just apply and mention the rule ID.
+- **Don't ignore pre-loaded rules** — they're battle-tested patterns you would otherwise re-discover through trial and error.
+- **Don't forget to record feedback** — every application or skip should call \`record_feedback\`. This is how AutoImprove learns what works.
+
+## Feedback tracking (REQUIRED after using rules)
+
+- When you apply a rule → \`record_feedback({rule_id, feedback_type: "used", user_rating: 1-5, context: "brief scenario"})\`
+- When you skip a rule → \`record_feedback({rule_id, feedback_type: "ignored", context: "why it doesn't apply"})\`
+- \`search_knowledge\` auto-records "used" (skip with \`skip_feedback: true\` if just browsing)
+- User corrects you repeatedly → suggest \`/autoimprove-summarize\` at conversation end
 
 ## Limitations
 
-- Rules lag by one session (learned patterns appear next session after \`/autoimprove-summarize\`)
-- Scene detection is heuristic (file extensions + keywords)
+- Index lags edits by one session (run \`/autoimprove-summarize\` to capture new patterns)
+- Scene detection is heuristic (file extensions + user message keywords)
 - Storage is user-level (~/.autoimprove/), not project-specific
 `;
 
 /**
  * Instructions when some rules exist but quality is low (<5 high-confidence rules)
  */
-export const SERVER_INSTRUCTIONS_BASIC = `# AutoImprove — learned coding rules available
+export const SERVER_INSTRUCTIONS_BASIC = `# AutoImprove — learned rules available (call proactively)
 
-AutoImprove learns from your corrections. Some rules exist but quality is still building. Call \`search_knowledge\` BEFORE implementing to check for applicable patterns.
+AutoImprove learns from your corrections. Rules exist but quality is still building (<5 high-confidence patterns). Call \`search_knowledge\` BEFORE implementing to check for applicable patterns — this is a cheap O(1) index lookup (<10ms).
 
-## Usage
+## Usage workflow
 
-- **Before planning** → \`search_knowledge\` with current scene (auto-detected from file paths)
-- **After applying a rule** → Mention rule ID ("Following RULE-005...")
-- **Rule doesn't fit** → \`record_feedback\` with feedback_type="ignored"
-- **User corrects you** → Note pattern, suggest \`/autoimprove-summarize\` at conversation end
+Before writing or editing code:
+
+1. **Call \`search_knowledge\`** with current scene (auto-detected from file extensions/keywords)
+2. **Apply matched rules** — mention rule ID: "Following RULE-005, using async/await pattern"
+3. **Record feedback** immediately:
+   - Applied → \`record_feedback({rule_id, feedback_type: "used", user_rating: 1-5})\`
+   - Skipped → \`record_feedback({rule_id, feedback_type: "ignored", context: "why"})\`
 
 ## Rule priority
 
-- **🔴 Critical** — Security (MANDATORY)
-- **🟠 High** — Anti-patterns/performance (follow unless user says otherwise)
-- **🟡 Medium/Low** — Preferences (suggestions)
+- **🔴 Critical** — Security/correctness. MANDATORY, no exceptions.
+- **🟠 High** — Anti-patterns/performance. Follow unless user says otherwise.
+- **🟡 Medium/Low** — Style preferences. Mention as suggestions.
 
 ## Building quality
 
-Current rules have <5 high-confidence patterns. Quality improves as:
-1. You apply rules → auto-records "used" feedback
-2. User corrects you → run \`/autoimprove-summarize\` to learn
-3. Rules gain confirmations → confidence increases → auto-loaded in future sessions
+Rules will auto-load in future sessions once they reach high confidence. Quality improves when:
+1. You apply rules consistently → auto-records "used" feedback, increases confidence
+2. User corrects you → run \`/autoimprove-summarize\` to capture new patterns
+3. Patterns reach 3+ confirmations → promoted to auto-load tier
 
-\`search_knowledge\` is O(1) indexed (<10ms), so check proactively on every coding task.
+Call \`search_knowledge\` proactively on every coding task — it's indexed and fast.
 `;
 
 /**
