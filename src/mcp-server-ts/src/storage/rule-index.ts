@@ -7,7 +7,21 @@
 import { readFileSync, writeFileSync, existsSync, mkdirSync, renameSync } from "fs";
 import { join } from "path";
 import { homedir } from "os";
-import { RuleIndex, RuleIndexEntry, createRuleIndex } from "../core/models.js";
+import { RuleIndex, RuleIndexEntry, createRuleIndex, createScene } from "../core/models.js";
+
+/**
+ * Normalize rule entry to ensure all fields are valid.
+ * Fixes legacy data with missing/malformed fields.
+ */
+function normalizeRuleIndexEntry(entry: RuleIndexEntry | undefined | null): RuleIndexEntry | null {
+  if (!entry) return null;
+
+  return {
+    ...entry,
+    keywords: Array.isArray(entry.keywords) ? entry.keywords : [],
+    scenes: createScene(entry.scenes || undefined) // Normalizes missing tech/functional/business arrays
+  };
+}
 
 export class RuleIndexManager {
   private getStorageRoot(): string {
@@ -39,8 +53,25 @@ export class RuleIndexManager {
       return createRuleIndex();
     }
 
-    const data = readFileSync(indexPath, "utf-8");
-    return JSON.parse(data) as RuleIndex;
+    try {
+      const data = readFileSync(indexPath, "utf-8");
+      const index = JSON.parse(data) as RuleIndex;
+
+      // Normalize all rules on load (one-time data migration for legacy entries)
+      // Filter out null results from normalization failures
+      if (index.rules && Array.isArray(index.rules)) {
+        index.rules = index.rules
+          .map(normalizeRuleIndexEntry)
+          .filter((r): r is RuleIndexEntry => r !== null);
+      } else {
+        index.rules = [];
+      }
+
+      return index;
+    } catch (error) {
+      console.error("Failed to load rule index, returning empty index:", error);
+      return createRuleIndex();
+    }
   }
 
   saveIndex(index: RuleIndex): void {
@@ -63,8 +94,14 @@ export class RuleIndexManager {
       throw new Error(`Rule with ID ${entry.id} already exists`);
     }
 
-    index.rules.push(entry);
-    this.saveIndex(index);
+    // Normalize before persisting
+    const normalized = normalizeRuleIndexEntry(entry);
+    if (normalized) {
+      index.rules.push(normalized);
+      this.saveIndex(index);
+    } else {
+      throw new Error("Failed to normalize rule entry");
+    }
   }
 
   updateRule(ruleId: string, updates: Partial<RuleIndexEntry>): void {

@@ -45,6 +45,18 @@ import { ProactiveRuleResourceProvider } from "./resources/proactive-rules.js";
 // Initialization
 // ============================================================================
 
+/**
+ * Parse comma-separated string into trimmed, non-empty array.
+ * Returns undefined if input is falsy or results in empty array.
+ */
+function parseCommaSeparated(input: string | undefined): string[] | undefined {
+  if (!input) return undefined;
+  const items = input.split(",")
+    .map(s => s.trim())
+    .filter(s => s.length > 0);
+  return items.length > 0 ? items : undefined;
+}
+
 let indexManager: RuleIndexManager;
 let contentManager: RuleContentManager;
 let versionControl: RuleVersionControl;
@@ -1178,7 +1190,7 @@ async function handleSearchKnowledge(args: any) {
   if (sceneJson) {
     const parsedScene = JSON.parse(sceneJson);
     const scene = createScene(parsedScene); // Normalize to ensure all fields exist
-    const kwList = keywords ? keywords.split(",") : undefined;
+    const kwList = parseCommaSeparated(keywords);
     const matches = matcher.matchRules(scene, kwList);
 
     // 🆕 Auto-record feedback for matched rules
@@ -1683,7 +1695,7 @@ async function handleDetectSceneEnhanced(args: any) {
 
   const context = {
     userInput,
-    filePaths: filePaths ? filePaths.split(",").map((p) => p.trim()) : undefined,
+    filePaths: parseCommaSeparated(filePaths),
     projectRoot,
   };
 
