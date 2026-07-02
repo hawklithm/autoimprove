@@ -221,25 +221,57 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
       },
       {
         name: "search_knowledge",
-        description: "Search rules by scene, keywords, or ID",
+        description: `Search rules by scene, keywords, or ID. Use this to find applicable coding patterns before implementing.
+
+Usage patterns:
+1. Search by scene (tech stack + functional domain):
+   scene_json: '{"tech":["react","typescript"],"functional":["auth","api"],"business":[]}'
+
+2. Search by keywords:
+   keywords: "validation,async,error-handling"
+
+3. Search by specific rule ID:
+   rule_id: "RULE-010"
+
+4. Combined scene + keywords:
+   scene_json: '{"tech":["python"],"functional":["database"]}', keywords: "orm,query"
+
+Scene structure:
+- tech: Array of technology keywords (e.g., ["react","vue","python","typescript","java"])
+- functional: Array of functional domain keywords (e.g., ["auth","api","database","validation","testing"])
+- business: Array of business domain keywords (e.g., ["payment","analytics","user-management"])
+- All fields are optional arrays; empty arrays [] are valid
+
+Auto-feedback: When rules match, automatically records "used" feedback unless skip_feedback=true`,
         inputSchema: {
           type: "object",
           properties: {
             scene_json: {
               type: "string",
-              description: "Optional JSON string of scene to match",
+              description: `JSON string representing the coding scene. Structure: {"tech":[],"functional":[],"business":[]}. Examples:
+- React auth: '{"tech":["react","typescript"],"functional":["auth"]}'
+- Python API: '{"tech":["python"],"functional":["api","validation"]}'
+- General validation: '{"tech":[],"functional":["validation"]}'
+- Empty scene: '{"tech":[],"functional":[],"business":[]}'
+
+All fields are arrays. Null/undefined/non-array values are normalized to []. Scene detection is case-insensitive.`,
             },
             keywords: {
               type: "string",
-              description: "Optional comma-separated keywords",
+              description: `Comma-separated keywords to match against rule content. Examples:
+- "jwt,token,authentication"
+- "async,promise,error-handling"
+- "sql,injection,sanitize"
+
+Keywords are matched against rule descriptions, titles, and content. Use specific technical terms for better results.`,
             },
             rule_id: {
               type: "string",
-              description: "Optional rule ID",
+              description: `Specific rule ID to retrieve. Format: RULE-XXX (e.g., "RULE-010", "RULE-042"). Use this to fetch a single rule's full content when you know the exact ID.`,
             },
             skip_feedback: {
               type: "boolean",
-              description: "Skip automatic feedback recording (default: false)",
+              description: `Set to true to skip automatic "used" feedback recording. Default: false. Only use when browsing rules without applying them (e.g., listing all rules for review). Normal searches should record feedback to improve confidence scores.`,
             },
           },
         },
