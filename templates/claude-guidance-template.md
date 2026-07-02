@@ -3,28 +3,39 @@
 
 This project has AutoImprove MCP tools (`mcp__autoimprove-core__*`) configured. AutoImprove learns from user corrections and generates reusable coding rules that improve over time.
 
-### When to use AutoImprove
+### How AutoImprove works
 
-Use AutoImprove tools **proactively during coding** — not just when explicitly asked. The system learns from patterns and helps you apply learned best practices automatically.
+AutoImprove learns from patterns and **automatically injects high-priority rules** into your context at session start. The system adapts based on rule quality:
+
+**When you have ≥5 high-confidence rules (RICH mode)**:
+- Rules are **PRE-LOADED** into context — no need to call `search_knowledge` for current scene
+- Apply them automatically when relevant
+- Only call `search_knowledge` for different tech stacks or after user corrections
+
+**When you have <5 rules (BASIC mode)**:
+- Call `search_knowledge` proactively BEFORE implementing
+- Rules aren't auto-loaded yet — needs explicit lookup
 
 | Scenario | Action |
 |---|---|
-| Starting ANY coding task | Call `search_knowledge` with scene context FIRST |
-| User corrects your approach/code | Note for end-of-session learning |
+| Writing/editing code (RICH mode) | Apply pre-loaded rules directly, mention rule ID |
+| Starting task (BASIC mode) | Call `search_knowledge` with scene context FIRST |
+| User corrects your approach | Note for end-of-session learning |
 | Finishing conversation with corrections | Suggest `/autoimprove-summarize` |
-| Applying a learned rule | Mention which rule you're following |
-| Rule doesn't fit current context | Call `record_feedback` with "ignored" |
+| Applying a learned rule | Mention rule ID: "Following RULE-008..." |
+| Rule doesn't fit current context | Call `record_feedback({feedback_type: "ignored"})` |
 
 ### Rules of thumb
 
-- **Call search_knowledge FIRST** — Before planning or coding, check for learned patterns. It's O(1) indexed (<10ms), no performance cost.
-- **Trust high-confidence rules** (>0.7) — Auto-apply without asking; they're proven patterns from 3+ confirmations.
-- **Follow priority** — 🔴 Critical (security) are mandatory, 🟠 High (anti-pattern/performance) should be followed unless user explicitly says otherwise.
-- **Mention what you're following** — "Following RULE-008 (JWT validation)" so user knows why.
-- **Learn from corrections** — When user corrects you, suggest `/autoimprove-summarize` at conversation end.
-- **Don't skip the search** — "I don't think there are rules" is wrong; let the system check.  auto-load from `~/.autoimprove/rules/claude-index.md`.
-- **Scene detection is automatic** — Tech stack from file paths (`.tsx` → react), functional domain from keywords in user messages.
-- **search_knowledge auto-records feedback** — Every search with matching rules records "used" feedback automatically, so you only need manual `record_feedback` for ignored/corrected cases.
+- **Check your mode** — MCP server instructions tell you if rules are pre-loaded (RICH) or need lookup (BASIC)
+- **RICH mode**: Rules are ALREADY IN CONTEXT — apply without calling `search_knowledge` for current scene
+- **BASIC mode**: Call `search_knowledge` before implementing — rules aren't auto-loaded yet
+- **Trust high-confidence rules** (≥70%) — Apply automatically; they're proven patterns from 3+ confirmations
+- **Follow priority** — 🔴 Critical (security/correctness) are MANDATORY, 🟠 High (anti-pattern/performance) follow unless user says otherwise
+- **Always mention rule ID** — "Following RULE-008 (JWT validation)" shows transparency
+- **Record feedback** — Call `record_feedback` when applying/ignoring rules (builds confidence scores)
+- **Learn from corrections** — When user corrects you repeatedly, suggest `/autoimprove-summarize` at conversation end
+- **Scene detection is automatic** — Tech stack from file extensions (`.tsx` → react), functional domain from user message keywords
 
 ### Core tools
 

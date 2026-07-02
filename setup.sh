@@ -303,8 +303,21 @@ EOF
 fi
 
 echo ""
-echo "Step 8: Restarting MCP Server..."
+echo "Step 8: Rebuilding and Restarting MCP Server..."
 echo "-----------------------------------"
+
+# Rebuild server to pick up latest code changes
+echo "Rebuilding MCP server (ensures latest instructions/resources)..."
+cd "$MCP_SERVER_DIR"
+npm run build
+
+if [ ! -f "$MCP_SERVER_DIR/dist/index.js" ]; then
+  echo "❌ Error: Rebuild failed - dist/index.js not found"
+  exit 1
+fi
+echo "✓ MCP server rebuilt successfully"
+
+cd "$SCRIPT_DIR"
 
 # Method 1: Kill any existing autoimprove MCP server processes
 echo "Stopping any running autoimprove MCP server processes..."
