@@ -11,6 +11,7 @@ import { readdirSync, statSync, writeFileSync } from "fs";
 import { join } from "path";
 import { homedir } from "os";
 import { spawn } from "child_process";
+import { isConventionPattern, separateConventionPatterns } from "./convention-pattern-detector.js";
 
 interface Pattern {
   type: string;
@@ -55,7 +56,7 @@ async function run() {
     const forceReanalyze = args.includes("--force");
     const rebuildAll = args.includes("--rebuild");
     const minConfidenceArg = args.find((a, i) => args[i - 1] === "--min-confidence");
-    const minConfidence = minConfidenceArg ? parseFloat(minConfidenceArg) : 0.85;
+    const minConfidence = minConfidenceArg ? parseFloat(minConfidenceArg) : 0.60; // Lowered from 0.85 to capture important low-frequency patterns
 
     // Rebuild mode: clear all rules and reanalyze everything
     if (rebuildAll) {
@@ -613,10 +614,20 @@ function mergeEnhancedPatterns(original: Pattern[], enhanced: EnhancedPattern[])
 async function consolidateWithAgent(patterns: Pattern[], minConfidence: number, sessionFile?: string): Promise<void> {
   console.log("📥 Step 1: Preparing patterns for agent analysis...");
 
+  // Separate convention patterns from mergable patterns
+  const { conventionPatterns, mergablePatterns } = separateConventionPatterns(patterns);
+
+  console.log(`   ✓ Protected ${conventionPatterns.length} convention patterns from merging`);
+  console.log(`   ✓ ${mergablePatterns.length} patterns eligible for consolidation\n`);
+
   // Save patterns to temporary file for agent to read
   const tempFile = join(homedir(), ".autoimprove", "temp_patterns.json");
-  writeFileSync(tempFile, JSON.stringify(patterns, null, 2));
-  console.log(`   ✓ Saved ${patterns.length} patterns to ${tempFile}\n`);
+  writeFileSync(tempFile, JSON.stringify({
+    convention_patterns: conventionPatterns,
+    mergable_patterns: mergablePatterns,
+    total_count: patterns.length
+  }, null, 2));
+  console.log(`   ✓ Saved patterns to ${tempFile}\n`);
 
   console.log("🧠 Step 2: Launching analysis agent...");
   console.log("   The agent will:");
@@ -624,13 +635,13 @@ async function consolidateWithAgent(patterns: Pattern[], minConfidence: number, 
   console.log("   • Consolidate descriptions and examples");
   console.log("   • Calculate aggregated confidence scores");
   console.log("   • Detect tech/functional/business scenes");
-  console.log("   • Generate optimized knowledge points\n");
+  console.log("   • Keep convention patterns separate\n");
 
   // Spawn a Claude agent to do the consolidation
   const agentPrompt = `You are an intelligent pattern consolidation agent. Your task is to:
 
 1. Read the patterns from: ${tempFile}
-2. Group similar patterns together based on semantic similarity (not just keyword matching)
+2. Group ONLY the "mergable_patterns" based on semantic similarity (convention_patterns stay separate)
 3. For each group, create a consolidated knowledge point with:
    - A clear, concise title
    - A merged description that captures all unique insights
@@ -638,6 +649,23 @@ async function consolidateWithAgent(patterns: Pattern[], minConfidence: number, 
    - Aggregated confidence score (average + group size boost)
    - Detected scenes (tech/functional/business)
 4. Output the consolidated knowledge points in this exact JSON format:
+
+**CRITICAL GROUPING RULES:**
+- Only merge patterns if they share BOTH topic AND context
+- Minimum group size: 2 patterns (don't force single patterns into groups)
+- Maximum group size: 5 patterns (prevent mega-groups that lose specificity)
+- Keep high-specificity patterns separate (e.g., "Redis key format", "specific API rules")
+- Convention patterns are ALREADY separated - output them as-is without merging
+
+**Examples of what NOT to merge:**
+- "Redis key naming" + "Database transaction scope" (different topics)
+- "Null pointer exception" + "SQL injection risk" (different error types)
+- "API response format" + "Logging best practices" (different concerns)
+- Patterns with different tech stacks unless clearly related
+
+**Examples of what TO merge:**
+- "Missing null check in UserService" + "Null validation absent in OrderService" → "Add null validation before accessing object properties"
+- "React component re-renders unnecessarily" + "Expensive computation not memoized" → "Optimize React performance with memo and useMemo"
 
 \`\`\`json
 {
@@ -667,6 +695,7 @@ Important:
 - Filter out patterns with confidence < ${minConfidence}
 - Boost confidence for patterns that appear multiple times
 - Extract technical terms for scene detection
+- Convention patterns should be returned as separate entries (not merged)
 
 Output ONLY the JSON, no explanations.`;
 

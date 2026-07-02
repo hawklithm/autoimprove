@@ -1016,7 +1016,7 @@ async function handleAnalyzeSession(args: any) {
 async function handleGenerateRules(args: any) {
   const patternsJson = args.patterns_json as string;
   const sceneJson = args.scene_json as string | undefined;
-  const useLLMEnhancement = args.use_llm_enhancement === true;
+  const useLLMEnhancement = args.use_llm_enhancement !== false; // Default true - enable LLM enhancement for detailed rule content
   const extractCodeExamples = args.extract_code_examples !== false; // Default true
   const sessionDir = args.session_dir as string | undefined;
   const maxExamples = args.max_examples as number | undefined;
