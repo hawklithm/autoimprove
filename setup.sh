@@ -271,30 +271,13 @@ if grep -q "@.*autoimprove.*rules.*claude-index.md" "$GLOBAL_CLAUDE_MD" 2>/dev/n
   echo "✓ Removed claude-index.md auto-loading (rules fetched via search_knowledge)"
 fi
 
-# Add feedback instructions reference
+# Remove feedback instructions reference if it exists
 if grep -q "autoimprove-feedback-instructions.md" "$GLOBAL_CLAUDE_MD" 2>/dev/null; then
-  echo "✓ Feedback instructions reference already exists in CLAUDE.md"
-else
-  echo "Adding feedback instructions to CLAUDE.md..."
-
-  # Copy feedback instructions template to .claude directory
-  FEEDBACK_INSTRUCTIONS="$CLAUDE_DIR/autoimprove-feedback-instructions.md"
-  if [ -f "$TEMPLATES_DIR/claude-feedback-instructions.md" ]; then
-    cp "$TEMPLATES_DIR/claude-feedback-instructions.md" "$FEEDBACK_INSTRUCTIONS"
-    echo "✓ Copied feedback instructions to $FEEDBACK_INSTRUCTIONS"
-  else
-    echo "⚠ Warning: Feedback instructions template not found at $TEMPLATES_DIR/claude-feedback-instructions.md"
-  fi
-
-  # Add reference to CLAUDE.md
-  cat >> "$GLOBAL_CLAUDE_MD" << 'EOF'
-
-## AutoImprove 规则使用反馈
-
-@~/.claude/autoimprove-feedback-instructions.md
-
-EOF
-  echo "✓ Added feedback instructions reference to $GLOBAL_CLAUDE_MD"
+  echo "Removing obsolete feedback instructions from CLAUDE.md..."
+  grep -v "autoimprove-feedback-instructions.md" "$GLOBAL_CLAUDE_MD" | \
+    sed '/## AutoImprove 规则使用反馈/,+2d' > "${GLOBAL_CLAUDE_MD}.tmp"
+  mv "${GLOBAL_CLAUDE_MD}.tmp" "$GLOBAL_CLAUDE_MD"
+  echo "✓ Removed feedback instructions reference"
 fi
 
 echo ""
