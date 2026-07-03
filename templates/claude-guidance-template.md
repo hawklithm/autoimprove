@@ -7,9 +7,12 @@ This project has AutoImprove MCP tools (`mcp__autoimprove-core__*`) configured. 
 
 Use AutoImprove for **learned patterns** — coding conventions, anti-patterns, and context-specific best practices from your past corrections. Use native tools for general programming knowledge.
 
-| Question | Tool |
+| Scenario | Action |
 |---|---|
-| "What patterns have I corrected before?" | `search_knowledge` with current scene |
+| Before implementing a feature | `search_knowledge` with current scene/tech stack |
+| Before writing/editing code | `search_knowledge` to check for applicable patterns |
+| Before proposing a solution | `search_knowledge` to find relevant learned rules |
+| Debugging/fixing a bug | `search_knowledge` with error context keywords |
 | "Any rules for React auth?" | `search_knowledge({scene_json: '{"tech":["react"],"functional":["auth"]}'})` |
 | "Show rule RULE-008" | `search_knowledge({rule_id: "RULE-008"})` |
 | "What rules exist?" | `/autoimprove-rules` |
