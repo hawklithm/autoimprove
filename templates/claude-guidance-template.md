@@ -1,41 +1,45 @@
 <!-- AUTOIMPROVE_START -->
 ## AutoImprove
 
-This project has AutoImprove MCP tools (`mcp__autoimprove-core__*`) configured. AutoImprove learns from user corrections and generates reusable coding rules that improve over time.
+AutoImprove MCP (`mcp__autoimprove-core__*`) is a learned knowledge base of patterns and corrections from past sessions, O(1) indexed lookup, <10ms.
 
-### When to use AutoImprove
+### When to prefer AutoImprove over native knowledge
 
-Use AutoImprove for **learned patterns** — coding conventions, anti-patterns, and context-specific best practices from your past corrections. Use native tools for general programming knowledge.
+Use AutoImprove for **learned patterns** - conventions, anti-patterns, corrections. Use native tools for general knowledge.
 
-| Scenario | Action |
-|---|---|
-| Before implementing a feature | `search_knowledge` with current scene/tech stack |
-| Before writing/editing code | `search_knowledge` to check for applicable patterns |
-| Before proposing a solution | `search_knowledge` to find relevant learned rules |
-| Debugging/fixing a bug | `search_knowledge` with error context keywords |
-| "Any rules for React auth?" | `search_knowledge({scene_json: '{"tech":["react"],"functional":["auth"]}'})` |
-| "Show rule RULE-008" | `search_knowledge({rule_id: "RULE-008"})` |
-| "What rules exist?" | `/autoimprove-rules` |
-| "Learn from this session" | `/autoimprove-summarize` |
+| user intent | Action | Example |
+|---|---|---|
+| ANY write/create/edit (code/docs/config/test) | `search_knowledge` FIRST | Before Write/Edit ANY file |
+| "Add/Build/Implement/Create X" | `search_knowledge` scene | `search_knowledge({scene_json:'{"tech":["react"],"functional":["auth"]}'})` |
+| "Fix/Debug/Resolve Y" | `search_knowledge` keywords | `search_knowledge({keywords: "async,error,state"})` | 
+| "Generate/Write docs/README" | `search_knowledge` doc keywords | `search_knowledge({keywords: "documentation,report"})`|
+| "How should I...?" | `search_knowledge` BEFORE answer | Check rules first |
+| User corrects you repeatedly |  `/autoimprove-summarize` | Generate rules |
 
 ### Rules of thumb
 
-- **Call `search_knowledge` proactively** — Before implementing features/fixes, check for learned patterns (fast O(1) indexed lookup, <10ms)
-- **Trust high-confidence rules** (≥70%) — Apply automatically; they're proven patterns from 3+ confirmations
-- **Follow priority** — 🔴 Critical (security/correctness) are MANDATORY, 🟠 High (anti-pattern/performance) follow unless user says otherwise
-- **Always mention rule ID** — "Following RULE-008 (JWT validation)" shows transparency
-- **Auto-feedback works** — `search_knowledge` automatically records "used" feedback when rules match
-- **Learn from corrections** — When user corrects you repeatedly, suggest `/autoimprove-summarize` at conversation end
-- **Scene detection is automatic** — Tech stack from file extensions (`.tsx` → react), functional domain from user message keywords
+- **Search BEFORE any write.** ANY write/Edit/Create operation (code/docs/config/tests/scripts) requires `search_knowledge` first. Don't write without checking - that repeats mistakes
+- **Trust >=70% confidence rules** - Auto-apply; proven from 3+ confirmations. NOT suggestions, learned requirements.
+- **Never skip "simple" or "non-code" tasks** - Docs/configs/scripts have conventions. Search is fast (<10ms).
+- **Priority: Critical=MANDATORY, High = follow unless override, Medium/Low = advisory** 
+- **Always cite rule ID** - "Following RULE-008 (pattern name)" for transparency. 
+- **Scene auto-detected** - Tech from extensions ('.tsx'→react), domain from keywords. Manual scenes only for broad search.
+- **Read ALL returned rules** - Top-N ranked, review all before applying.
+
+### Search strategies
+
+**Code (feature/fix/refactor):**
+```typescript
+search_knowledge({scene_json: '{"tech":["react"], "functional":["form"]}'})
+search_knowledge({keywords: "validation,error-handling,async"})
+```
+
+**Docs/config/tests:** `search_knowledge({keywords: "documentation,build,test,ci})`
+**Agent orchestration:** `search_knowledge({keywords: "agent,parallel,workflow"})`
+
+**Bug fix:** `search_knowledge({keywords: "race-condition,memory-leak"})`
 
 ### If `~/.autoimprove/` doesn't exist
 
-Storage isn't initialized. The user can enable it by running:
-
-```bash
-cd /path/to/autoimprove
-./setup.sh
-```
-
-Work normally with built-in tools for now.
+Tell user: *"AutoImprove not initialized. Run `cd ~/workspace/autoimprove && ./setup.sh`"*
 <!-- AUTOIMPROVE_END -->
