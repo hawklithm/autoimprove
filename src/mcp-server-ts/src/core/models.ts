@@ -23,6 +23,12 @@ export enum Priority {
   LOW = "low"
 }
 
+export enum RuleScope {
+  GLOBAL = "global",           // Universal programming patterns/principles
+  ORGANIZATION = "organization", // Company-specific frameworks/conventions
+  PROJECT = "project"          // Project-specific implementations
+}
+
 // ============================================================================
 // Scene Model
 // ============================================================================
@@ -50,8 +56,15 @@ export interface PatternOccurrence {
   timestamp: string;
   user_action: "explicit_correction" | "amend" | "undo" | "accept";
   context: string;
-  test_passed?: boolean;
-  performance_improved?: boolean;
+
+  // Quality validation fields (currently not fully implemented)
+  // TODO: Implement test output parsing to set test_passed from actual test runs
+  test_passed?: boolean;  // Would indicate fix passed tests (requires test output parsing)
+
+  // Currently hardcoded to true for performance patterns (not based on actual benchmarks)
+  // TODO: Implement performance metric parsing from benchmark/profiler output
+  performance_improved?: boolean;  // Would indicate actual performance improvement
+
   security_issue?: string;
   user_input?: string;
 }
@@ -81,6 +94,12 @@ export interface RuleIndexEntry {
   keywords: string[];
   created_at: string;
   updated_at: string;
+  scope?: RuleScope;           // Rule applicability scope
+  scope_context?: {            // Additional scope metadata
+    organization_id?: string;  // e.g., company domain, org identifier
+    project_id?: string;       // e.g., project name, repo path
+    project_path?: string;     // Absolute path of project where rule was learned
+  };
 }
 
 export interface RuleIndex {
@@ -185,6 +204,10 @@ export function isPatternType(value: string): value is PatternType {
 
 export function isPriority(value: string): value is Priority {
   return Object.values(Priority).includes(value as Priority);
+}
+
+export function isRuleScope(value: string): value is RuleScope {
+  return Object.values(RuleScope).includes(value as RuleScope);
 }
 
 // ============================================================================

@@ -3,13 +3,15 @@
  */
 
 import { SignalDictionaryDB, LabeledContent } from "../storage/signal-dictionary-db.js";
+import { PatternType } from "./models.js";
 
 export interface PatternCluster {
   cluster_id: string;
-  pattern_type: string;
+  pattern_type: PatternType;
   labeled_content_ids: number[];
   common_signals: string[];
   representative_phrases: string[];
+  representative_description?: string;
   total_occurrences: number;
   session_count: number;
   avg_confidence: number;
@@ -44,7 +46,7 @@ export class PatternClusterer {
     const allClusters: PatternCluster[] = [];
 
     for (const [type, contents] of Object.entries(byType)) {
-      const typeClusters = this.clusterByType(type, contents);
+      const typeClusters = this.clusterByType(type as PatternType, contents);
       allClusters.push(...typeClusters);
     }
 
@@ -54,7 +56,7 @@ export class PatternClusterer {
   /**
    * Group content by pattern type
    */
-  private groupByType(content: LabeledContent[]): Record<string, LabeledContent[]> {
+  private groupByType(content: LabeledContent[]): Record<PatternType, LabeledContent[]> {
     const groups: Record<string, LabeledContent[]> = {};
 
     for (const item of content) {
@@ -64,13 +66,13 @@ export class PatternClusterer {
       groups[item.pattern_type].push(item);
     }
 
-    return groups;
+    return groups as Record<PatternType, LabeledContent[]>;
   }
 
   /**
    * Cluster content of the same pattern type
    */
-  private clusterByType(patternType: string, contents: LabeledContent[]): PatternCluster[] {
+  private clusterByType(patternType: PatternType, contents: LabeledContent[]): PatternCluster[] {
     const clusters: PatternCluster[] = [];
     const visited = new Set<number>();
 
@@ -121,8 +123,7 @@ export class PatternClusterer {
           const signals2Set = new Set(signals2.map(s => s.signal_text));
 
           // Keep only signals that appear in both
-          const intersection = new Set([...clusterSignals].filter(s => signals2Set.has(s)));
-          if (intersection.size > 0) {
+          const intersection = new Set([...clusterSignals].filter(s => signals2Set.has(s)));       if (intersection.size > 0) {
             clusterSignals.clear();
             intersection.forEach(s => clusterSignals.add(s));
           }
@@ -131,13 +132,14 @@ export class PatternClusterer {
         }
       }
 
-      // Create cluster
+      // Create cluster with representative description
       const cluster: PatternCluster = {
         cluster_id: `cluster-${patternType}-${Date.now()}-${i}`,
         pattern_type: patternType,
         labeled_content_ids: clusterContentIds,
         common_signals: Array.from(clusterSignals),
         representative_phrases: clusterPhrases,
+        representative_description: Array.from(clusterSignals).join(", ") || clusterPhrases[0],
         total_occurrences: clusterContentIds.length,
         session_count: sessionIds.size,
         avg_confidence: totalConfidence / clusterContentIds.length,
@@ -217,7 +219,7 @@ export class PatternClusterer {
   /**
    * Get clusters for a specific pattern type
    */
-  getClustersForType(patternType: string): PatternCluster[] {
+  getClustersForType(patternType: PatternType): PatternCluster[] {
     const labeledContent = this.db.getLabeledContentByPatternType(patternType);
     return this.clusterByType(patternType, labeledContent);
   }

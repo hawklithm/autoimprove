@@ -17,6 +17,9 @@ import Anthropic from "@anthropic-ai/sdk";
 import { Pattern, RuleIndexEntry, RuleContent, Scene, Priority } from "./models.js";
 import { PatternSimilarityClusterer, PatternClusterGroup } from "./pattern-similarity-clusterer.js";
 import { RuleGenerator } from "./rule-generator.js";
+import { logger } from "./logger.js";
+import { JsonSanitizer } from "./json-sanitizer.js";
+import { LLMPromptBuilder, PromptEvidence } from "./llm-prompt-builder.js";
 import { appendFileSync } from "fs";
 import { homedir } from "os";
 import { join } from "path";
@@ -81,11 +84,11 @@ export class BatchLLMRuleGenerator {
       maxConcurrent = 3
     } = options;
 
-    // console.error(`\n=== Batch LLM Rule Generation ===`);
-    // console.error(`Total patterns: ${patterns.length}`);
+    logger.info("batch-llm", `\n=== Batch LLM Rule Generation ===`);
+    logger.info("batch-llm", `Total patterns: ${patterns.length}`);
 
     // Step 1: Cluster similar patterns
-    // console.error(`\n[1/3] Clustering similar patterns...`);
+    logger.info("batch-llm", `\n[1/3] Clustering similar patterns...`);
     const clusters = this.clusterer.clusterPatterns(patterns, {
       minSimilarity,
       maxClusterSize: maxPatternsPerBatch,
@@ -93,15 +96,15 @@ export class BatchLLMRuleGenerator {
     });
 
     const stats = this.clusterer.getClusteringStats(clusters);
-    // console.error(`✓ Created ${stats.total_clusters} clusters:`);
-    // console.error(`  - Multi-pattern: ${stats.multi_pattern_clusters} (will merge)`);
-    // console.error(`  - Singleton: ${stats.singleton_clusters} (unique patterns)`);
-    // console.error(`  - Largest cluster: ${stats.largest_cluster_size} patterns`);
-    // console.error(`  - Avg cluster size: ${stats.avg_cluster_size.toFixed(1)}`);
-    // console.error(`  - Reduction: ${patterns.length} → ${clusters.length} LLM calls (${((1 - clusters.length / patterns.length) * 100).toFixed(1)}% fewer)`);
+    logger.info("batch-llm", `✓ Created ${stats.total_clusters} clusters:`);
+    logger.info("batch-llm", `  - Multi-pattern: ${stats.multi_pattern_clusters} (will merge)`);
+    logger.info("batch-llm", `  - Singleton: ${stats.singleton_clusters} (unique patterns)`);
+    logger.info("batch-llm", `  - Largest cluster: ${stats.largest_cluster_size} patterns`);
+    logger.info("batch-llm", `  - Avg cluster size: ${stats.avg_cluster_size.toFixed(1)}`);
+    logger.info("batch-llm", `  - Reduction: ${patterns.length} → ${clusters.length} LLM calls (${((1 - clusters.length / patterns.length) * 100).toFixed(1)}% fewer)`);
 
     // Step 2: Generate rules from clusters (with LLM merging)
-    // console.error(`\n[2/3] Generating rules from clusters...`);
+    logger.info("batch-llm", `\n[2/3] Generating rules from clusters...`);
 
     const allRules: BatchGeneratedRule[] = [];
     let currentId = startId;
@@ -127,20 +130,20 @@ export class BatchLLMRuleGenerator {
           const mergeInfo = cluster.patterns.length > 1
             ? ` (merged ${cluster.patterns.length} patterns)`
             : "";
-          // console.error(`  [${i + 1}/${clusters.length}] ✓ ${rules.length} rule(s) from cluster${mergeInfo}`);
+          logger.info("batch-llm", `  [${i + 1}/${clusters.length}] ✓ ${rules.length} rule(s) from cluster${mergeInfo}`);
         } catch (error) {
-          // console.error(`  [${i + 1}/${clusters.length}] ✗ Failed:`, error);
+          logger.error("batch-llm", `  [${i + 1}/${clusters.length}] ✗ Failed`, error instanceof Error ? error : undefined);
         }
       }
     }
 
     // Step 3: Summary
-    // console.error(`\n[3/3] Summary:`);
-    // console.error(`✓ Generated ${allRules.length} rules from ${clusters.length} clusters`);
+    logger.info("batch-llm", `\n[3/3] Summary:`);
+    logger.info("batch-llm", `✓ Generated ${allRules.length} rules from ${clusters.length} clusters`);
 
     const totalDeduplicated = allRules.reduce((sum, r) => sum + r.dedup_count, 0);
     if (totalDeduplicated > 0) {
-      // console.error(`  - Deduplicated: ${totalDeduplicated} patterns merged into rules`);
+      logger.info("batch-llm", `  - Deduplicated: ${totalDeduplicated} patterns merged into rules`);
     }
 
     return allRules;
@@ -179,9 +182,9 @@ export class BatchLLMRuleGenerator {
           const mergeInfo = result.cluster.patterns.length > 1
             ? ` (merged ${result.cluster.patterns.length})`
             : "";
-          // console.error(`  [${processed}/${clusters.length}] ✓ ${result.rules.length} rule(s)${mergeInfo}`);
+          logger.info("batch-llm", `  [${processed}/${clusters.length}] ✓ ${result.rules.length} rule(s)${mergeInfo}`);
         } else if ('error' in result) {
-          // console.error(`  [${processed}/${clusters.length}] ✗ Failed:`, result.error);
+          logger.error("batch-llm", `  [${processed}/${clusters.length}] ✗ Failed:`, result.error);
         }
       }
 
@@ -223,8 +226,21 @@ export class BatchLLMRuleGenerator {
       return [];
     }
 
-    // Build batch prompt
-    const prompt = this.buildBatchPrompt(cluster, qualifiedPatterns);
+    // Build unified prompt using LLMPromptBuilder
+    const evidence: PromptEvidence[] = qualifiedPatterns.map(p =>
+      LLMPromptBuilder.patternToEvidence(p)
+    );
+
+    const prompt = LLMPromptBuilder.buildPrompt(evidence, {
+      patternType: cluster.pattern_type,
+      avgConfidence: cluster.avg_confidence,
+      commonKeywords: cluster.common_keywords,
+      totalOccurrences: cluster.total_occurrences,
+      sessionCount: cluster.session_count,
+      isBatchMode: true,
+      maxContentExamples: 5
+    });
+
     const maxTokens = this.calculateMaxTokens(cluster);
 
     // Use environment variable for model configuration
@@ -232,12 +248,17 @@ export class BatchLLMRuleGenerator {
       || process.env.ANTHROPIC_MODEL
       || "claude-sonnet-4-6";
 
-    const requestLog = `\n[${new Date().toISOString()}] [BATCH-LLM] Processing cluster ${cluster.cluster_id}\n` +
+    const requestLog = `\n${"=".repeat(80)}\n` +
+      `[${new Date().toISOString()}] [BATCH-LLM REQUEST] Cluster ${cluster.cluster_id}\n` +
+      `${"=".repeat(80)}\n` +
       `Patterns: ${cluster.patterns.length}, Type: ${cluster.pattern_type}\n` +
       `Model: ${model}, Max tokens: ${maxTokens}\n` +
-      `Prompt (${prompt.length} chars):\n${prompt.slice(0, 500)}...\n`;
+      `Prompt length: ${prompt.length} chars\n` +
+      `${"-".repeat(80)}\n` +
+      `FULL PROMPT:\n${prompt}\n` +
+      `${"-".repeat(80)}\n`;
 
-    // console.error(requestLog);
+    logger.debug("batch-llm", "LLM request sent", { cluster_id: cluster.cluster_id, prompt_length: prompt.length });
     appendFileSync(LLM_LOG_FILE, requestLog, "utf8");
 
     try {
@@ -252,8 +273,23 @@ export class BatchLLMRuleGenerator {
 
       const responseText = response.content[0].type === "text" ? response.content[0].text : "";
 
-      const responseLog = `[${new Date().toISOString()}] [BATCH-LLM] Response (${responseText.length} chars):\n${responseText.slice(0, 500)}...\n`;
-      // console.error(responseLog);
+      const responseLog = `\n${"=".repeat(80)}\n` +
+        `[${new Date().toISOString()}] [BATCH-LLM RESPONSE] Cluster ${cluster.cluster_id}\n` +
+        `${"=".repeat(80)}\n` +
+        `Response length: ${responseText.length} chars\n` +
+        `Stop reason: ${response.stop_reason}\n` +
+        `Usage: input=${response.usage.input_tokens}, output=${response.usage.output_tokens}\n` +
+        `${"-".repeat(80)}\n` +
+        `FULL RESPONSE:\n${responseText}\n` +
+        `${"-".repeat(80)}\n\n`;
+
+      logger.debug("batch-llm", "LLM response received", {
+        cluster_id: cluster.cluster_id,
+        response_length: responseText.length,
+        stop_reason: response.stop_reason,
+        input_tokens: response.usage.input_tokens,
+        output_tokens: response.usage.output_tokens
+      });
       appendFileSync(LLM_LOG_FILE, responseLog, "utf8");
 
       // Parse response (may contain multiple rules)
@@ -277,70 +313,11 @@ export class BatchLLMRuleGenerator {
 
       return rules;
     } catch (error) {
-      // console.error(`LLM batch processing failed for cluster ${cluster.cluster_id}:`, error);
+      logger.warn("batch-llm", `LLM batch processing failed for cluster ${cluster.cluster_id}`, { error: error instanceof Error ? error.message : String(error) });
       throw error;
     }
   }
 
-  /**
-   * Build batch prompt for LLM (with merge instructions)
-   */
-  private buildBatchPrompt(cluster: PatternClusterGroup, patterns: Pattern[]): string {
-    // Format patterns with context
-    const patternDescriptions = patterns.map((p, i) => {
-      const occCount = p.occurrences.length;
-      const confidence = (p.confidence * 100).toFixed(0);
-      const keywords = p.keywords.slice(0, 5).join(", ");
-
-      // Get representative user input
-      const userInputs = p.occurrences
-        .map(o => o.user_input)
-        .filter(input => input && input.length > 20)
-        .slice(0, 2);
-
-      let desc = `${i + 1}. "${p.description}"\n`;
-      desc += `   Confidence: ${confidence}%, Occurrences: ${occCount}, Keywords: ${keywords}\n`;
-
-      if (userInputs.length > 0) {
-        desc += `   Evidence: ${userInputs.join(" | ")}`;
-      }
-
-      return desc;
-    }).join("\n\n");
-
-    const isSinglePattern = patterns.length === 1;
-
-    return `${isSinglePattern ? 'Generate' : 'Analyze and merge'} coding rule${isSinglePattern ? '' : 's'} from pattern${isSinglePattern ? '' : 's'}.
-
-Type: ${cluster.pattern_type} | Avg confidence: ${(cluster.avg_confidence * 100).toFixed(0)}%
-Common keywords: ${cluster.common_keywords.join(", ")}
-
-Patterns (${patterns.length}):
-${patternDescriptions}
-
-${isSinglePattern ? 'Generate 1 rule.' : `Instructions:
-1. Identify if patterns describe the SAME rule or DIFFERENT rules
-2. MERGE similar/duplicate patterns into ONE rule
-3. Keep distinct patterns as SEPARATE rules
-4. For merged rules, list source_patterns and merged_count`}
-
-Output JSON array: [{"title":"...","description":"...","rationale":"...","how_to_apply":[...],"when_to_use":[...],"exceptions":[...],"examples":{"bad":"...","good":"...","explanation":"..."},"source_patterns":["pattern 1","pattern 2"],"merged_count":2}]
-
-${isSinglePattern ? '' : 'If all patterns are similar, return 1 rule. If distinct, return multiple rules.'}
-
-Rules:
-- title: imperative verb, 60-80 chars
-- description: what to do/avoid, 3-5 sentences, specific
-- rationale: why (2-4 sentences, concrete benefits/risks)
-- how_to_apply: 3-6 actionable steps (array)
-- when_to_use: 3-5 conditions (array)
-- exceptions: 2-4 edge cases (array, optional)
-- examples: {bad?, good, explanation} - realistic code (optional)
-- source_patterns: original pattern descriptions merged (array)
-- merged_count: number of patterns merged into this rule
-
-Be specific, actionable, deduplicate aggressively.`;
-  }
 
   /**
    * Parse batch LLM response (may contain multiple rules)
@@ -352,7 +329,6 @@ Be specific, actionable, deduplicate aggressively.`;
     how_to_apply: string[];
     when_to_use: string[];
     exceptions?: string[];
-    examples?: { bad?: string; good: string; explanation: string };
     source_patterns: string[];
     merged_count: number;
   }> {
@@ -364,7 +340,69 @@ Be specific, actionable, deduplicate aggressively.`;
         jsonStr = jsonMatch[1];
       }
 
-      const parsed = JSON.parse(jsonStr);
+      // Check for response completeness before parsing
+      const trimmed = jsonStr.trim();
+      if (!trimmed.endsWith('}') && !trimmed.endsWith(']')) {
+        logger.warn("batch-llm", "Potentially truncated LLM response detected", {
+          lastChars: trimmed.slice(-100),
+          length: trimmed.length
+        });
+      }
+
+      // Sanitize control characters and unescaped quotes in JSON strings
+      // This handles unescaped newlines, tabs, nested quotes (Python docstrings), etc.
+      jsonStr = JsonSanitizer.sanitize(jsonStr);
+
+      let parsed;
+      try {
+        parsed = JSON.parse(jsonStr);
+      } catch (parseError) {
+        // Attempt recovery strategies
+        logger.warn("batch-llm", "Initial parse failed, attempting recovery", {
+          error: parseError instanceof Error ? parseError.message : String(parseError)
+        });
+
+        // Strategy 1: Try to extract partial valid JSON up to the error position
+        const errorMatch = parseError instanceof Error
+          ? parseError.message.match(/position (\d+)/)
+          : null;
+
+        if (errorMatch) {
+          const errorPos = parseInt(errorMatch[1]);
+          const partialJson = this.attemptPartialRecovery(jsonStr, errorPos);
+
+          if (partialJson) {
+            try {
+              parsed = JSON.parse(partialJson);
+              logger.info("batch-llm", "Successfully recovered partial JSON");
+            } catch {
+              // Recovery failed, continue to next strategy
+            }
+          }
+        }
+
+        // Strategy 2: Try removing incomplete last object/array element
+        if (!parsed) {
+          const recoveredJson = this.attemptIncompleteElementRemoval(jsonStr);
+          if (recoveredJson) {
+            try {
+              parsed = JSON.parse(recoveredJson);
+              logger.info("batch-llm", "Successfully recovered by removing incomplete element");
+            } catch {
+              // Recovery failed
+            }
+          }
+        }
+
+        // If all recovery failed, log details and throw
+        if (!parsed) {
+          logger.error("batch-llm", "All recovery strategies failed", parseError instanceof Error ? parseError : undefined, {
+            jsonSample: jsonStr.slice(0, 500),
+            jsonEnd: jsonStr.slice(-500)
+          });
+          throw parseError;
+        }
+      }
 
       // Normalize to array
       const rulesArray = Array.isArray(parsed) ? parsed : [parsed];
@@ -382,16 +420,86 @@ Be specific, actionable, deduplicate aggressively.`;
           how_to_apply: rule.how_to_apply || [],
           when_to_use: rule.when_to_use || [],
           exceptions: rule.exceptions,
-          examples: rule.examples,
           source_patterns: rule.source_patterns || [cluster.representative_description],
           merged_count: rule.merged_count || 1
         };
       });
     } catch (error) {
-      // console.error("Failed to parse batch LLM response:", error);
-      // console.error("Response was:", response);
+      logger.error("batch-llm", "Failed to parse batch LLM response", error instanceof Error ? error : undefined, {
+        responseLength: response.length,
+        responseSample: response.slice(0, 300)
+      });
       throw error;
     }
+  }
+
+  /**
+   * Attempt to recover partial valid JSON by finding last complete object
+   */
+  private attemptPartialRecovery(jsonStr: string, errorPos: number): string | null {
+    // Find the last complete object before error position
+    const beforeError = jsonStr.slice(0, errorPos);
+
+    // Try to find last complete object by counting braces
+    let depth = 0;
+    let lastCompletePos = -1;
+
+    for (let i = 0; i < beforeError.length; i++) {
+      const char = beforeError[i];
+      if (char === '{' || char === '[') depth++;
+      if (char === '}' || char === ']') {
+        depth--;
+        if (depth === 0) {
+          lastCompletePos = i;
+        }
+      }
+    }
+
+    if (lastCompletePos > 0) {
+      // Extract up to last complete object and close array if needed
+      let recovered = beforeError.slice(0, lastCompletePos + 1);
+
+      // If it starts with [, ensure it ends with ]
+      if (recovered.trim().startsWith('[') && !recovered.trim().endsWith(']')) {
+        recovered += ']';
+      }
+
+      return recovered;
+    }
+
+    return null;
+  }
+
+  /**
+   * Attempt to remove incomplete last element from array
+   */
+  private attemptIncompleteElementRemoval(jsonStr: string): string | null {
+    // If it's an array, try to find and remove the last incomplete element
+    const trimmed = jsonStr.trim();
+
+    if (!trimmed.startsWith('[')) {
+      return null;
+    }
+
+    // Find last comma at depth 1
+    let depth = 0;
+    let lastCommaPos = -1;
+
+    for (let i = 0; i < trimmed.length; i++) {
+      const char = trimmed[i];
+      if (char === '{' || char === '[') depth++;
+      if (char === '}' || char === ']') depth--;
+      if (char === ',' && depth === 1) {
+        lastCommaPos = i;
+      }
+    }
+
+    if (lastCommaPos > 0) {
+      // Remove everything after last comma and close array
+      return trimmed.slice(0, lastCommaPos) + '\n]';
+    }
+
+    return null;
   }
 
   /**
@@ -417,15 +525,6 @@ Be specific, actionable, deduplicate aggressively.`;
         formattedContent += `- ${step}\n`;
       }
       formattedContent += `\n`;
-    }
-
-    if (parsed.examples) {
-      formattedContent += `## Examples\n\n`;
-      if (parsed.examples.bad) {
-        formattedContent += `### ❌ Avoid\n\n\`\`\`typescript\n${parsed.examples.bad}\n\`\`\`\n\n`;
-      }
-      formattedContent += `### ✅ Prefer\n\n\`\`\`typescript\n${parsed.examples.good}\n\`\`\`\n\n`;
-      formattedContent += `**Why**: ${parsed.examples.explanation}\n\n`;
     }
 
     if (parsed.when_to_use?.length > 0) {
@@ -462,12 +561,6 @@ Be specific, actionable, deduplicate aggressively.`;
       description: parsed.description,
       reason: parsed.rationale,
       how_to_apply: parsed.how_to_apply,
-      examples: parsed.examples ? [{
-        bad: parsed.examples.bad,
-        good: parsed.examples.good,
-        explanation: parsed.examples.explanation,
-        language: "typescript"
-      }] : undefined,
       when_to_use: parsed.when_to_use,
       exceptions: parsed.exceptions,
       metadata: {
@@ -502,8 +595,8 @@ Be specific, actionable, deduplicate aggressively.`;
    * Calculate max tokens based on cluster complexity
    */
   private calculateMaxTokens(cluster: PatternClusterGroup): number {
-    const baseTokens = 1000;
-    const perPatternTokens = 200;
+    const baseTokens = 1500;  // Increased from 1000 to reduce truncation
+    const perPatternTokens = 250;  // Increased from 200 for code examples
 
     // More tokens for complex clusters
     const complexity = cluster.patterns.length * perPatternTokens;
@@ -511,6 +604,7 @@ Be specific, actionable, deduplicate aggressively.`;
     // Security needs more explanation
     const typeBonus = cluster.pattern_type === "security" ? 500 : 0;
 
-    return Math.min(2000, baseTokens + complexity + typeBonus);
+    // Higher ceiling to accommodate code examples
+    return Math.min(3000, baseTokens + complexity + typeBonus);
   }
 }

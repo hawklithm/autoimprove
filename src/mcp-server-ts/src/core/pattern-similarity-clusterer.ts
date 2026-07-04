@@ -5,16 +5,17 @@
  * Uses keyword overlap, description similarity, and type matching.
  */
 
-import { Pattern } from "./models.js";
+import { Pattern, PatternType } from "./models.js";
 
 export interface PatternClusterGroup {
   cluster_id: string;
   patterns: Pattern[];
   common_keywords: string[];
-  pattern_type: string;
+  pattern_type: PatternType;
   avg_confidence: number;
   total_occurrences: number;
   representative_description: string;
+  session_count?: number;
 }
 
 export class PatternSimilarityClusterer {
@@ -180,7 +181,7 @@ export class PatternSimilarityClusterer {
   /**
    * Create cluster group from patterns
    */
-  private createClusterGroup(patterns: Pattern[], type: string): PatternClusterGroup {
+  private createClusterGroup(patterns: Pattern[], type: PatternType): PatternClusterGroup {
     // Use first (highest confidence) pattern as representative
     const representative = patterns[0];
 
@@ -192,6 +193,9 @@ export class PatternSimilarityClusterer {
     const avgConfidence = patterns.reduce((sum, p) => sum + p.confidence, 0) / patterns.length;
     const totalOccurrences = patterns.reduce((sum, p) => sum + p.occurrences.length, 0);
 
+    // Calculate session count
+    const sessionIds = new Set(patterns.flatMap(p => p.occurrences.map(o => o.session_id)));
+
     return {
       cluster_id: `cluster-${type}-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
       patterns,
@@ -199,7 +203,8 @@ export class PatternSimilarityClusterer {
       pattern_type: type,
       avg_confidence: avgConfidence,
       total_occurrences: totalOccurrences,
-      representative_description: representative.description
+      representative_description: representative.description,
+      session_count: sessionIds.size
     };
   }
 

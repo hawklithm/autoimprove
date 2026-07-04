@@ -6,6 +6,8 @@ import Anthropic from "@anthropic-ai/sdk";
 import { SignalDictionaryDB, LabeledContent } from "../storage/signal-dictionary-db.js";
 import { PatternCluster } from "./pattern-clusterer.js";
 import { PatternType, Priority, RuleIndexEntry, RuleContent } from "./models.js";
+import { logger } from "./logger.js";
+import { LLMPromptBuilder, PromptEvidence } from "./llm-prompt-builder.js";
 import { appendFileSync } from "fs";
 import { homedir } from "os";
 import { join } from "path";
@@ -68,7 +70,25 @@ export class LLMRuleGenerator {
       throw new Error(`No content found for cluster ${cluster.cluster_id}`);
     }
 
-    const prompt = this.buildRuleGenerationPrompt(cluster, fullContents);
+    // Build unified prompt using LLMPromptBuilder with detailed content
+    const evidence: PromptEvidence[] = [
+      LLMPromptBuilder.contentToEvidence(
+        fullContents,
+        cluster.representative_description || cluster.common_signals.join(", "),
+        cluster.avg_confidence,
+        cluster.common_signals
+      )
+    ];
+
+    const prompt = LLMPromptBuilder.buildPrompt(evidence, {
+      patternType: cluster.pattern_type,
+      avgConfidence: cluster.avg_confidence,
+      commonKeywords: cluster.common_signals,
+      totalOccurrences: cluster.total_occurrences,
+      sessionCount: cluster.session_count,
+      isBatchMode: false,  // Single cluster mode
+      maxContentExamples: 5
+    });
 
     // Dynamic max_tokens based on complexity
     const maxTokens = this.calculateMaxTokens(cluster);
@@ -83,7 +103,7 @@ export class LLMRuleGenerator {
         `Model: ${model}, Max tokens: ${maxTokens}\n` +
         `Prompt (${prompt.length} chars):\n${prompt.slice(0, 500)}...\n`;
 
-      // console.error(requestLog);
+      logger.info("llm-generation", requestLog);
       appendFileSync(LLM_LOG_FILE, requestLog, "utf8");
 
       const response = await this.anthropic.messages.create({
@@ -98,7 +118,7 @@ export class LLMRuleGenerator {
       const responseText = response.content[0].type === "text" ? response.content[0].text : "";
 
       const responseLog = `[${new Date().toISOString()}] [LLM] Response received (${responseText.length} chars):\n${responseText.slice(0, 500)}...\n`;
-      // console.error(responseLog);
+      logger.info("llm-generation", responseLog);
       appendFileSync(LLM_LOG_FILE, responseLog, "utf8");
 
       const parsed = this.parseRuleResponse(responseText);
@@ -129,7 +149,7 @@ export class LLMRuleGenerator {
         last_validated: now
       };
     } catch (error) {
-      // console.error("LLM rule generation failed:", error);
+      logger.warn("llm-generation", "LLM rule generation failed", { error: error instanceof Error ? error.message : String(error) });
       throw error;
     }
   }
@@ -150,9 +170,9 @@ export class LLMRuleGenerator {
       try {
         const rule = await this.generateRule(cluster, ruleId);
         rules.push(rule);
-        // console.error(`✓ Generated rule ${ruleId}: ${rule.title}`);
+        logger.info("llm-generation", `✓ Generated rule ${ruleId}: ${rule.title}`);
       } catch (error) {
-        // console.error(`✗ Failed to generate rule for cluster ${cluster.cluster_id}:`, error);
+        logger.error("llm-generation", `✗ Failed to generate rule for cluster ${cluster.cluster_id}`, error instanceof Error ? error : undefined);
       }
     }
 
@@ -180,42 +200,6 @@ export class LLMRuleGenerator {
     return contents;
   }
 
-  /**
-   * Build prompt for rule generation (optimized for token efficiency)
-   */
-  private buildRuleGenerationPrompt(cluster: PatternCluster, contents: LabeledContent[]): string {
-    // Intelligently select 3-5 most representative examples
-    const selectedExamples = this.selectRepresentativeExamples(contents, 5);
-    const contentExamples = selectedExamples
-      .map((c, i) => `${i + 1}. ${c.content}`)
-      .join('\n');
-
-    return `Create coding rule from observed patterns.
-
-Type: ${cluster.pattern_type} | Occurrences: ${cluster.total_occurrences} | Sessions: ${cluster.session_count}
-Signals: ${cluster.common_signals.slice(0, 5).join(', ')} | Confidence: ${(cluster.avg_confidence * 100).toFixed(0)}%
-
-Examples:
-${contentExamples}
-
-Output JSON with:
-Output JSON with:
-- title: imperative, 60-80 chars, start with verb
-- description: what to do/avoid, 3-5 sentences, specific and clear
-- rationale: why this matters, 2-4 sentences, concrete benefits/risks
-- how_to_apply: 3-6 actionable steps (array of strings)
-- examples: {bad?, good, explanation} - realistic code (10-20 lines), optional
-- when_to_use: 3-5 specific conditions (array)
-- exceptions: 2-4 edge cases where rule doesn't apply (array, optional)
-- scenes: {tech: array, business: array, generic: boolean}
-  * generic=true only if applies regardless of tech (naming, readability principles)
-  * generic=false for tech-specific (React hooks, SQL, REST)
-
-Format:
-{"title":"Use X for Y","description":"For Z cases, use X instead of Y. X is better because...","rationale":"X provides A and B. Y causes C problem.","how_to_apply":["Check if condition","Review for pattern"],"examples":{"bad":"// old way","good":"// new way","explanation":"Why better"},"when_to_use":["Condition 1","Condition 2"],"exceptions":["Exception 1"],"scenes":{"tech":["react"],"business":[],"generic":false}}
-
-Be specific, actionable, concise.`;
-  }
 
   /**
    * Parse LLM response
@@ -275,8 +259,7 @@ Be specific, actionable, concise.`;
         }
       };
     } catch (error) {
-      // console.error("Failed to parse rule response:", error);
-      // console.error("Response was:", response);
+      logger.warn("llm-generation", "Failed to parse rule response", { error: error instanceof Error ? error.message : String(error), response: String(response) });
       throw new Error("Failed to parse LLM response");
     }
   }
@@ -291,12 +274,12 @@ Be specific, actionable, concise.`;
     }
 
     // Anti-patterns and performance are high priority
-    if (cluster.pattern_type === "anti-pattern" || cluster.pattern_type === "performance") {
+    if (cluster.pattern_type === PatternType.ANTI_PATTERN || cluster.pattern_type === PatternType.PERFORMANCE) {
       return "high";
     }
 
     // Corrections with high confidence and multiple occurrences are medium
-    if (cluster.pattern_type === "correction") {
+    if (cluster.pattern_type === PatternType.REPEATED_CORRECTION) {
       if (cluster.avg_confidence >= 0.8 && cluster.total_occurrences >= 3) {
         return "medium";
       }
@@ -426,37 +409,6 @@ Be specific, actionable, concise.`;
 
     // Default: moderate complexity
     return 1000;
-  }
-
-  /**
-   * Select representative examples using diversity sampling
-   */
-  private selectRepresentativeExamples(contents: LabeledContent[], maxCount: number): LabeledContent[] {
-    if (contents.length <= maxCount) {
-      return contents;
-    }
-
-    // Strategy: Select diverse examples by content length and keywords
-    const selected: LabeledContent[] = [];
-    const remaining = [...contents];
-
-    // 1. Always include first example (usually most representative)
-    selected.push(remaining.shift()!);
-
-    // 2. Sort by length diversity (mix of short and long)
-    remaining.sort((a, b) => {
-      const avgLen = contents.reduce((sum, c) => sum + c.content.length, 0) / contents.length;
-      const aDiff = Math.abs(a.content.length - avgLen);
-      const bDiff = Math.abs(b.content.length - avgLen);
-      return bDiff - aDiff;
-    });
-
-    // 3. Select remaining based on diversity
-    while (selected.length < maxCount && remaining.length > 0) {
-      selected.push(remaining.shift()!);
-    }
-
-    return selected;
   }
 
   /**
