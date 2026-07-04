@@ -16,7 +16,11 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 const AUTOIMPROVE_DIR = path.join(process.env.HOME || '~', '.autoimprove');
-const SIGNAL_DB_PATH = path.join(AUTOIMPROVE_DIR, 'signal-dictionary.db');
+// DEPRECATED: Old path for backward compatibility
+const OLD_SIGNAL_DB_PATH = path.join(AUTOIMPROVE_DIR, 'signal-dictionary.db');
+// New standardized path (matches signal-dictionary-db.ts)
+const SIGNAL_DB_DIR = path.join(AUTOIMPROVE_DIR, 'signal_dictionary');
+const SIGNAL_DB_PATH = path.join(SIGNAL_DB_DIR, 'signals.db');
 const SEED_FILE_PATH = path.join(__dirname, '../../../templates/seed-signal-dictionary.json');
 
 interface SeedSignal {
@@ -38,6 +42,20 @@ interface SeedData {
 
 function createDatabase(): Database.Database {
   console.log('Creating signal dictionary database...');
+
+  // Ensure directory exists
+  if (!fs.existsSync(SIGNAL_DB_DIR)) {
+    fs.mkdirSync(SIGNAL_DB_DIR, { recursive: true });
+  }
+
+  // Migrate old database if exists
+  if (fs.existsSync(OLD_SIGNAL_DB_PATH) && !fs.existsSync(SIGNAL_DB_PATH)) {
+    console.log(`\n⚠️  Migrating database from old location:`);
+    console.log(`   ${OLD_SIGNAL_DB_PATH}`);
+    console.log(`   → ${SIGNAL_DB_PATH}\n`);
+    fs.copyFileSync(OLD_SIGNAL_DB_PATH, SIGNAL_DB_PATH);
+    console.log(`✅ Migration complete. Old file kept for backup.\n`);
+  }
 
   const db = new Database(SIGNAL_DB_PATH);
 
