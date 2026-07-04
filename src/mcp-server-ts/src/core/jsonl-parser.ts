@@ -47,15 +47,13 @@ export class JSONLParser {
         const data = JSON.parse(line);
         this.processLine(data, lineNum + 1, messages, toolCalls, metadata);
       } catch (error) {
-        console.warn(`Warning: Skipping malformed JSON at line ${lineNum + 1}:`, error);
+        // console.warn(`Warning: Skipping malformed JSON at line ${lineNum + 1}:`, error);
         continue;
       }
     }
 
-    if (messages.length === 0 && toolCalls.length === 0) {
-      throw new Error(`No valid data found in session file: ${filePath}`);
-    }
-
+    // Return empty session data for files with only metadata (empty sessions)
+    // This is not an error - it's a valid case for newly created or unused sessions
     return {
       session_id: sessionId,
       messages,

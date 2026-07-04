@@ -6,6 +6,12 @@ import Anthropic from "@anthropic-ai/sdk";
 import { SignalDictionaryDB, LabeledContent } from "../storage/signal-dictionary-db.js";
 import { PatternCluster } from "./pattern-clusterer.js";
 import { PatternType, Priority, RuleIndexEntry, RuleContent } from "./models.js";
+import { appendFileSync } from "fs";
+import { homedir } from "os";
+import { join } from "path";
+
+// Log file path
+const LLM_LOG_FILE = join(homedir(), ".autoimprove", "llm-calls.log");
 
 export interface GeneratedRule {
   id: string;
@@ -68,8 +74,20 @@ export class LLMRuleGenerator {
     const maxTokens = this.calculateMaxTokens(cluster);
 
     try {
+      // Use environment variable for model configuration
+      const model = process.env.ANTHROPIC_DEFAULT_SONNET_MODEL
+        || process.env.ANTHROPIC_MODEL
+        || "claude-sonnet-4-6";
+
+      const requestLog = `\n[${new Date().toISOString()}] [LLM] Requesting rule generation for ${ruleId}\n` +
+        `Model: ${model}, Max tokens: ${maxTokens}\n` +
+        `Prompt (${prompt.length} chars):\n${prompt.slice(0, 500)}...\n`;
+
+      // console.error(requestLog);
+      appendFileSync(LLM_LOG_FILE, requestLog, "utf8");
+
       const response = await this.anthropic.messages.create({
-        model: "claude-sonnet-4-6-20250514",
+        model,
         max_tokens: maxTokens,
         messages: [{
           role: "user",
@@ -78,6 +96,11 @@ export class LLMRuleGenerator {
       });
 
       const responseText = response.content[0].type === "text" ? response.content[0].text : "";
+
+      const responseLog = `[${new Date().toISOString()}] [LLM] Response received (${responseText.length} chars):\n${responseText.slice(0, 500)}...\n`;
+      // console.error(responseLog);
+      appendFileSync(LLM_LOG_FILE, responseLog, "utf8");
+
       const parsed = this.parseRuleResponse(responseText);
 
       // Extract session IDs from labeled content
@@ -106,7 +129,7 @@ export class LLMRuleGenerator {
         last_validated: now
       };
     } catch (error) {
-      console.error("LLM rule generation failed:", error);
+      // console.error("LLM rule generation failed:", error);
       throw error;
     }
   }
@@ -127,9 +150,9 @@ export class LLMRuleGenerator {
       try {
         const rule = await this.generateRule(cluster, ruleId);
         rules.push(rule);
-        console.error(`✓ Generated rule ${ruleId}: ${rule.title}`);
+        // console.error(`✓ Generated rule ${ruleId}: ${rule.title}`);
       } catch (error) {
-        console.error(`✗ Failed to generate rule for cluster ${cluster.cluster_id}:`, error);
+        // console.error(`✗ Failed to generate rule for cluster ${cluster.cluster_id}:`, error);
       }
     }
 
@@ -252,8 +275,8 @@ Be specific, actionable, concise.`;
         }
       };
     } catch (error) {
-      console.error("Failed to parse rule response:", error);
-      console.error("Response was:", response);
+      // console.error("Failed to parse rule response:", error);
+      // console.error("Response was:", response);
       throw new Error("Failed to parse LLM response");
     }
   }

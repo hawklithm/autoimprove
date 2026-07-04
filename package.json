@@ -1,6 +1,7 @@
 {
   "name": "autoimprove",
   "version": "0.2.0",
+  "type": "module",
   "description": "Learn coding patterns from Claude Code sessions and generate reusable rules",
   "author": "AutoImprove Contributors",
   "license": "MIT",

@@ -124,7 +124,7 @@ export class CompactCacheManager {
       return false;
     } catch (error) {
       // Cache file is corrupted
-      console.error(`Cache file corrupted for ${sessionFile}:`, error);
+      // console.error(`Cache file corrupted for ${sessionFile}:`, error);
       return true;
     }
   }
@@ -186,9 +186,8 @@ export class CompactCacheManager {
     const cacheSize = Buffer.byteLength(cacheContent, "utf-8");
     const reduction = ((stats.size - cacheSize) / stats.size) * 100;
 
-    console.error(
-      `Generated compact cache in ${elapsed}ms: ${this.formatBytes(stats.size)} → ${this.formatBytes(cacheSize)} (${reduction.toFixed(1)}% reduction)`
-    );
+    // Removed console logging for MCP server compatibility
+    // Previously logged: Generated compact cache in ${elapsed}ms: ${size} → ${cacheSize} (${reduction}% reduction)
 
     return cache;
   }
@@ -207,7 +206,7 @@ export class CompactCacheManager {
       const cache = JSON.parse(readFileSync(cacheFile, "utf-8")) as CompactCache;
       return cache;
     } catch (error) {
-      console.error(`Failed to load cache for ${sessionFile}:`, error);
+      // console.error(`Failed to load cache for ${sessionFile}:`, error);
       return null;
     }
   }

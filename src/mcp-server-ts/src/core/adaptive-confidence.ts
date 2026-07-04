@@ -308,7 +308,7 @@ export class AdaptiveConfidenceCalculator {
         this.userWeightsCache.set(userWeights.user_id, userWeights);
       }
     } catch (error) {
-      console.error("Failed to load user weights:", error);
+      // console.error("Failed to load user weights:", error);
     }
   }
 
@@ -340,7 +340,7 @@ export class AdaptiveConfidenceCalculator {
       const lines = data.trim().split("\n");
       this.feedbackHistory = lines.map((line) => JSON.parse(line) as RuleFeedback);
     } catch (error) {
-      console.error("Failed to load feedback history:", error);
+      // console.error("Failed to load feedback history:", error);
     }
   }
 

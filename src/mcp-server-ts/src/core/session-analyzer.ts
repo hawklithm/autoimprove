@@ -48,7 +48,7 @@ export class SessionAnalyzer {
         // No changes, return cached patterns
         const cached = this.cacheManager.getCached(sessionId);
         if (cached) {
-          console.error(`Using cached analysis for session ${sessionId}`);
+          // console.error(`Using cached analysis for session ${sessionId}`);
           return cached.cached_patterns;
         }
       }
@@ -67,7 +67,7 @@ export class SessionAnalyzer {
    * Perform full analysis on entire session
    */
   private performFullAnalysis(sessionFile: string, sessionData: SessionData): Pattern[] {
-    console.error(`Performing full analysis for session ${sessionData.session_id}`);
+    // console.error(`Performing full analysis for session ${sessionData.session_id}`);
 
     // Detect all pattern types
     const patterns: Pattern[] = [
@@ -104,7 +104,7 @@ export class SessionAnalyzer {
     const sessionId = sessionData.session_id;
     const resumePoint = this.cacheManager.getResumePoint(sessionId);
 
-    console.error(`Performing incremental analysis for session ${sessionId} from line ${resumePoint}`);
+    // console.error(`Performing incremental analysis for session ${sessionId} from line ${resumePoint}`);
 
     // Filter to only new messages and tool calls
     const newMessages = sessionData.messages.filter(m => m.line_number > resumePoint);
@@ -198,9 +198,8 @@ export class SessionAnalyzer {
 
         this.compactCache.recordCacheHit(timeSaved, bytesSaved);
 
-        console.error(
-          `Using compact cache for ${compactCache.session_id} (saved ${timeSaved}ms, ${this.formatBytes(bytesSaved)})`
-        );
+        // Removed console logging for MCP server compatibility
+        // Previously logged: Using compact cache for ${session_id} (saved ${time}ms, ${bytes})
 
         return this.compactCache.toSessionData(compactCache);
       }
@@ -410,25 +409,58 @@ export class SessionAnalyzer {
     const patterns: Pattern[] = [];
     const userMessages = this.getUserMessages(sessionData);
 
-    const securityKeywords = [
+    // More specific security keywords that require technical context
+    const specificSecurityKeywords = [
       "sql injection",
       "xss",
       "csrf",
+      "injection attack",
+      "code injection",
+      "command injection",
+      "sanitize input",
+      "escape output",
+      "vulnerability",
+      "exploit"
+    ];
+
+    // Generic security terms that need additional validation
+    const genericSecurityKeywords = [
       "injection",
       "注入",
-      "安全",
-      "security",
-      "vulnerability",
+      "安全漏洞",
+      "security issue",
       "sanitize",
       "escape",
-      "validate"
+      "validate input"
     ];
 
     for (const msg of userMessages) {
-      const matchedKeyword = securityKeywords.find(kw =>
-        msg.content.toLowerCase().includes(kw)
-      );
-      if (matchedKeyword) {
+      const content = msg.content.toLowerCase();
+
+      // Check for specific security keywords (high confidence)
+      const hasSpecificKeyword = specificSecurityKeywords.some(kw => content.includes(kw));
+
+      // Check for generic security keywords (need additional validation)
+      const hasGenericKeyword = genericSecurityKeywords.some(kw => content.includes(kw));
+
+      // For generic keywords, require additional evidence:
+      // 1. Must contain technical details (code, functions, file paths)
+      // 2. Must contain corrective language (not just questions)
+      if (hasGenericKeyword && !hasSpecificKeyword) {
+        const hasTechnical = this.hasSecurityTechnicalContext(msg.content);
+        const hasCorrective = this.hasCorrectiveLanguage(msg.content);
+
+        if (!hasTechnical || !hasCorrective) {
+          continue;  // Skip generic security mentions without context
+        }
+      }
+
+      // If we have specific keyword or validated generic keyword
+      if (hasSpecificKeyword || hasGenericKeyword) {
+        const matchedKeyword = specificSecurityKeywords.find(kw => content.includes(kw)) ||
+                               genericSecurityKeywords.find(kw => content.includes(kw)) ||
+                               "security";
+
         const description = this.extractSecurityDescription(msg);
 
         // Skip if description is empty (filtered as noise)
@@ -453,6 +485,43 @@ export class SessionAnalyzer {
     }
 
     return patterns;
+  }
+
+  /**
+   * Check if content has security-related technical context
+   */
+  private hasSecurityTechnicalContext(content: string): boolean {
+    const securityTechnicalPatterns = [
+      // Input validation patterns
+      /(validate|sanitize|escape|filter)\s+(\w+|input|output|data|parameter)/i,
+      // SQL-related
+      /(prepared statement|parameterized query|sql parameter|query builder)/i,
+      // XSS-related
+      /(innerHTML|dangerouslySetInnerHTML|DOM manipulation|script tag)/i,
+      // Authentication/Authorization
+      /(jwt|token|session|auth|permission|role|access control)/i,
+      // Encryption
+      /(encrypt|decrypt|hash|bcrypt|crypto|salt)/i,
+      // Code patterns indicating security fixes
+      /\w+\.(escape|sanitize|validate|filter)\(/i,
+      /(if|check|verify)\s+.*\s+(auth|permission|valid|safe)/i,
+    ];
+
+    return securityTechnicalPatterns.some(pattern => pattern.test(content));
+  }
+
+  /**
+   * Check if content contains corrective language (indicating a fix, not a question)
+   */
+  private hasCorrectiveLanguage(content: string): boolean {
+    const correctivePatterns = [
+      /(需要|应该|必须|改成|修改|添加|使用)/,  // Chinese
+      /(need to|should|must|change to|modify|add|use|fix|prevent)/i,  // English
+      /(不要|别用|避免)/,  // Chinese "don't"
+      /(don't|avoid|never|remove)/i,  // English "don't"
+    ];
+
+    return correctivePatterns.some(pattern => pattern.test(content));
   }
 
   private getUserMessages(sessionData: SessionData): Message[] {
@@ -514,9 +583,24 @@ export class SessionAnalyzer {
   private extractMeaningfulDescription(msg: Message, patternType: string): string {
     let content = msg.content.trim();
 
-    // Skip if too short (likely not a real pattern)
-    if (content.length < 15) {
+    // Skip if too short (likely not a real pattern) - increased threshold
+    if (content.length < 30) {
       return "";
+    }
+
+    // Filter out request phrases (questions/requests, not corrections)
+    const requestPatterns = [
+      /^(请|能不能|帮我|可以吗|麻烦|帮忙)/i,
+      /^(can you|could you|please|help me|would you)/i,
+      /^(how do|how to|how can|what should|should i)/i,
+      /^(给我|看看|检查|分析一下)/i,
+      /(能不能|可以吗|好吗|行吗)\s*[?？]?\s*$/i
+    ];
+
+    for (const pattern of requestPatterns) {
+      if (pattern.test(content)) {
+        return "";
+      }
     }
 
     // Filter out noise patterns
@@ -543,6 +627,13 @@ export class SessionAnalyzer {
       if (pattern.test(content)) {
         return "";
       }
+    }
+
+    // Check if content contains technical details (code, function names, file paths)
+    const hasTechnicalDetail = this.hasTechnicalDetail(content);
+    if (!hasTechnicalDetail && patternType !== "preference") {
+      // For non-preference patterns, require technical details
+      return "";
     }
 
     // Extract sentences that contain actionable information
@@ -599,5 +690,35 @@ export class SessionAnalyzer {
     }
 
     return "";
+  }
+
+  /**
+   * Check if content contains technical details (code, function names, file paths, technical terms)
+   */
+  private hasTechnicalDetail(content: string): boolean {
+    const technicalIndicators = [
+      // Code patterns
+      /[\w]+\(.*\)/,  // Function calls: foo()
+      /[\w]+\.\w+/,    // Property access: obj.prop
+      /[\w]+::\w+/,    // Static access: Class::method
+      /`[^`]+`/,       // Inline code
+      /```/,           // Code blocks
+
+      // File patterns
+      /\w+\.(ts|js|tsx|jsx|py|java|go|rs|c|cpp|h|css|html|json|yaml|yml|md|sql)/i,
+      /src\/|lib\/|dist\/|node_modules\//i,
+
+      // Technical terms (specific enough)
+      /(function|method|class|interface|type|const|let|var|import|export|async|await)/i,
+      /(useState|useEffect|useCallback|useMemo|useRef)/i,  // React hooks
+      /(query|mutation|resolver|schema)/i,  // GraphQL/DB
+      /(endpoint|route|handler|middleware)/i,  // Backend
+
+      // Variable/function naming patterns
+      /\w+_\w+/,  // snake_case
+      /[a-z]+[A-Z]\w*/,  // camelCase
+    ];
+
+    return technicalIndicators.some(pattern => pattern.test(content));
   }
 }

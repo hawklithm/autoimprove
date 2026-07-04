@@ -7,17 +7,20 @@
 
 import { join } from "path";
 import { existsSync, readFileSync, writeFileSync, statSync } from "fs";
+import { createHash } from "crypto";
 import { CACHE_DIR } from "./init.js";
 import { Pattern } from "../core/models.js";
 
 export interface SessionCacheEntry {
   session_id: string;
   session_file: string;
+  content_hash?: string;  // NEW: SHA256 hash for content verification
   last_analyzed_at: string;
   last_line_analyzed: number;
   file_size_at_analysis: number;
   patterns_found: number;
   cached_patterns: Pattern[];
+  pattern_fingerprints?: string[];  // NEW: Link to pattern evolution
 }
 
 export interface SessionCacheIndex {
@@ -49,7 +52,24 @@ export class SessionCacheManager {
   }
 
   /**
-   * Check if session file has changed since last analysis
+   * Compute SHA256 hash of file content
+   */
+  computeFileHash(filePath: string): string | null {
+    try {
+      if (!existsSync(filePath)) return null;
+
+      const content = readFileSync(filePath, "utf-8");
+      const hash = createHash('sha256').update(content).digest('hex');
+
+      return `sha256:${hash}`;
+    } catch (error) {
+      // console.error(`Failed to compute hash for ${filePath}:`, error);
+      return null;
+    }
+  }
+
+  /**
+   * Check if session file has changed since last analysis (using content hash)
    */
   hasSessionChanged(sessionFile: string, sessionId: string): boolean {
     const cached = this.getCached(sessionId);
@@ -57,7 +77,19 @@ export class SessionCacheManager {
 
     if (!existsSync(sessionFile)) return false;
 
-    // Check file size
+    // Use content hash if available (most accurate)
+    if (cached.content_hash) {
+      const currentHash = this.computeFileHash(sessionFile);
+      if (currentHash && currentHash !== cached.content_hash) {
+        return true;
+      }
+      // Hash match = no change
+      if (currentHash === cached.content_hash) {
+        return false;
+      }
+    }
+
+    // Fallback to file size comparison (legacy)
     const stats = statSync(sessionFile);
     const currentSize = stats.size;
 
@@ -80,16 +112,22 @@ export class SessionCacheManager {
     sessionFile: string,
     lastLine: number,
     fileSize: number,
-    patterns: Pattern[]
+    patterns: Pattern[],
+    patternFingerprints?: string[]
   ): void {
+    // Compute content hash for accurate change detection
+    const contentHash = this.computeFileHash(sessionFile);
+
     this.index.sessions[sessionId] = {
       session_id: sessionId,
       session_file: sessionFile,
+      content_hash: contentHash || undefined,
       last_analyzed_at: new Date().toISOString(),
       last_line_analyzed: lastLine,
       file_size_at_analysis: fileSize,
       patterns_found: patterns.length,
       cached_patterns: patterns,
+      pattern_fingerprints: patternFingerprints,
     };
 
     this.saveIndex();
@@ -149,6 +187,13 @@ export class SessionCacheManager {
   }
 
   /**
+   * Get all cached sessions
+   */
+  getAllCached(): SessionCacheEntry[] {
+    return Object.values(this.index.sessions);
+  }
+
+  /**
    * Get cache statistics
    */
   getStats() {
@@ -158,9 +203,15 @@ export class SessionCacheManager {
       0
     );
 
+    // Count sessions with content hash
+    const withHash = Object.values(this.index.sessions).filter(
+      entry => !!entry.content_hash
+    ).length;
+
     return {
       total_sessions: sessionIds.length,
       total_patterns_cached: totalPatterns,
+      sessions_with_hash: withHash,
       cache_size_kb: this.getCacheSizeKB(),
     };
   }
@@ -200,7 +251,7 @@ export class SessionCacheManager {
       const data = readFileSync(CACHE_INDEX_PATH, "utf-8");
       return JSON.parse(data) as SessionCacheIndex;
     } catch (error) {
-      console.error("Failed to load session cache index:", error);
+      // console.error("Failed to load session cache index:", error);
       return {
         version: "1.0",
         sessions: {},
@@ -212,7 +263,7 @@ export class SessionCacheManager {
     try {
       writeFileSync(CACHE_INDEX_PATH, JSON.stringify(this.index, null, 2));
     } catch (error) {
-      console.error("Failed to save session cache index:", error);
+      // console.error("Failed to save session cache index:", error);
     }
   }
 

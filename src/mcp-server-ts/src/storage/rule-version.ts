@@ -297,7 +297,7 @@ export class RuleVersionControl {
           const fs = require("fs");
           fs.unlinkSync(filePath);
         } catch (err) {
-          console.error(`Failed to delete ${filePath}:`, err);
+          // console.error(`Failed to delete ${filePath}:`, err);
         }
       }
 
@@ -306,7 +306,7 @@ export class RuleVersionControl {
         const fs = require("fs");
         fs.rmdirSync(ruleDir);
       } catch (err) {
-        console.error(`Failed to delete directory ${ruleDir}:`, err);
+        // console.error(`Failed to delete directory ${ruleDir}:`, err);
       }
     }
   }

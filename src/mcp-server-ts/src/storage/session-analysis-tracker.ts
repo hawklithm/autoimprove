@@ -59,7 +59,7 @@ export class SessionAnalysisTracker {
       const data = readFileSync(this.stateFilePath, "utf-8");
       return JSON.parse(data) as AnalysisTrackerState;
     } catch (error) {
-      console.error("Failed to load analysis tracker state, creating new:", error);
+      // console.error("Failed to load analysis tracker state, creating new:", error);
       return {
         version: "1.0",
         last_updated: new Date().toISOString(),

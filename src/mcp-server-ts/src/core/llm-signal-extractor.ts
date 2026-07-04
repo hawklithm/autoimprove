@@ -75,14 +75,14 @@ export class LLMSignalExtractor {
 
         if (existing) {
           duplicatesSkipped++;
-          console.error(`Signal already exists: "${signal.text}"`);
+          // console.error(`Signal already exists: "${signal.text}"`);
         } else {
           this.addSignalToDictionary(signal);
           newSignalsAdded++;
-          console.error(`Added new signal: "${signal.text}" (${signal.pattern_type}, confidence: ${signal.confidence})`);
+          // console.error(`Added new signal: "${signal.text}" (${signal.pattern_type}, confidence: ${signal.confidence})`);
         }
       } else {
-        console.error(`Invalid signal rejected: "${signal.text}"`);
+        // console.error(`Invalid signal rejected: "${signal.text}"`);
       }
     }
 
@@ -113,7 +113,7 @@ export class LLMSignalExtractor {
       const responseText = response.content[0].type === "text" ? response.content[0].text : "";
       return this.parseExtractionResponse(responseText);
     } catch (error) {
-      console.error("LLM signal extraction failed:", error);
+      // console.error("LLM signal extraction failed:", error);
       return [];
     }
   }
@@ -164,7 +164,7 @@ Requirements:
       const parsed = JSON.parse(jsonStr);
 
       if (!parsed.signals || !Array.isArray(parsed.signals)) {
-        console.error("Invalid response format: missing signals array");
+        // console.error("Invalid response format: missing signals array");
         return [];
       }
 
@@ -172,8 +172,8 @@ Requirements:
         s.text && s.pattern_type && s.polarity && s.confidence !== undefined
       );
     } catch (error) {
-      console.error("Failed to parse LLM response:", error);
-      console.error("Response was:", response);
+      // console.error("Failed to parse LLM response:", error);
+      // console.error("Response was:", response);
       return [];
     }
   }
@@ -256,7 +256,7 @@ Requirements:
       .map(msg => msg.content);
 
     if (unmatched.length === 0) {
-      console.error("No unmatched content to extract signals from");
+      // console.error("No unmatched content to extract signals from");
       return {
         signals: [],
         total_content_analyzed: 0,
@@ -265,7 +265,7 @@ Requirements:
       };
     }
 
-    console.error(`Extracting signals from ${unmatched.length} unmatched messages`);
+    // console.error(`Extracting signals from ${unmatched.length} unmatched messages`);
     return await this.extractSignals(unmatched);
   }
 
@@ -306,7 +306,7 @@ Requirements:
           merged.add(j);
           mergeCount++;
 
-          console.error(`Merged "${signal2.text}" into "${signal1.text}" (similarity: ${similarity.toFixed(2)})`);
+          // console.error(`Merged "${signal2.text}" into "${signal1.text}" (similarity: ${similarity.toFixed(2)})`);
         }
       }
     }

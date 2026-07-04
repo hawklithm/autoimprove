@@ -97,17 +97,7 @@ export class StructuredLogger {
 
     this.logBuffer.push(entry);
 
-    // Also log to console for immediate feedback
-    const consoleMessage = `[${entry.timestamp}] [${level}] [${category}] ${message}`;
-    if (level === LogLevel.ERROR) {
-      console.error(consoleMessage, metadata || "", error || "");
-    } else if (level === LogLevel.WARN) {
-      console.warn(consoleMessage, metadata || "");
-    } else {
-      console.error(consoleMessage); // Use stderr for structured logs
-    }
-
-    // Flush immediately for errors
+    // Flush immediately for errors to ensure they're persisted
     if (level === LogLevel.ERROR) {
       this.flush();
     }
@@ -232,7 +222,8 @@ export class StructuredLogger {
       const content = entries.map((e) => JSON.stringify(e)).join("\n") + "\n";
       appendFileSync(logFile, content);
     } catch (error) {
-      console.error("Failed to flush logs:", error);
+      // Silently fail - MCP servers cannot write to console
+      // If log file writing fails, we lose the logs but keep the server running
     }
   }
 

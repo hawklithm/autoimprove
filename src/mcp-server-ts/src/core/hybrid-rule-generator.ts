@@ -11,6 +11,12 @@ import { Pattern, RuleIndexEntry, RuleContent, Scene, CodeExample } from "./mode
 import { RuleGenerator } from "./rule-generator.js";
 import { CodeExampleExtractor } from "./code-example-extractor.js";
 import Anthropic from "@anthropic-ai/sdk";
+import { appendFileSync } from "fs";
+import { homedir } from "os";
+import { join } from "path";
+
+// Log file path
+const LLM_LOG_FILE = join(homedir(), ".autoimprove", "llm-calls.log");
 
 export interface EnhancedRuleOptions {
   /** Whether to use LLM for content enhancement (Phase 2) */
@@ -69,7 +75,7 @@ export class HybridRuleGenerator {
       try {
         enhancedContent = await this.enhanceWithLLM(pattern, basicRule.content, ruleId);
       } catch (error) {
-        console.error(`LLM enhancement failed for ${ruleId}, using basic content:`, error);
+        // console.error(`LLM enhancement failed for ${ruleId}, using basic content:`, error);
         enhancedContent = basicRule.content;
       }
     } else {
@@ -90,11 +96,38 @@ export class HybridRuleGenerator {
           );
         }
       } catch (error) {
-        console.error(`Code example extraction failed for ${ruleId}:`, error);
+        // console.error(`Code example extraction failed for ${ruleId}:`, error);
       }
     }
 
-    // Phase 4: Return structured rule with rich metadata
+    // Phase 4: Quality assessment and adjustment
+    const qualityScore = this.assessRuleQuality(enhancedContent);
+
+    // Downgrade confidence for low-quality rules
+    if (qualityScore < 0.5) {
+      // console.error(`⚠️  Rule ${ruleId} has low quality score: ${qualityScore.toFixed(2)}`);
+      basicRule.indexEntry.confidence = Math.min(
+        basicRule.indexEntry.confidence,
+        0.4 + qualityScore * 0.2  // Cap at 0.4-0.5 for low quality
+      );
+    }
+
+    // Add quality metadata
+    if (!enhancedContent.metadata) {
+      enhancedContent.metadata = {
+        type: basicRule.indexEntry.type,
+        priority: basicRule.indexEntry.priority,
+        confidence: basicRule.indexEntry.confidence,
+        source: "learned",
+        pattern_occurrences: pattern.occurrences.length,
+        first_seen: pattern.first_seen,
+        last_seen: pattern.last_seen,
+        keywords: pattern.keywords
+      };
+    }
+    enhancedContent.metadata.quality_score = qualityScore;
+
+    // Phase 5: Return structured rule with rich metadata
     return {
       indexEntry: basicRule.indexEntry,
       content: enhancedContent
@@ -125,7 +158,7 @@ export class HybridRuleGenerator {
       const rule = await this.generateEnhancedRule(pattern, ruleId, scene, options);
       rules.push(rule);
 
-      console.error(`✓ Generated enhanced rule ${ruleId}: ${rule.content.title || pattern.description}`);
+      // console.error(`✓ Generated enhanced rule ${ruleId}: ${rule.content.title || pattern.description}`);
     }
 
     return rules;
@@ -149,8 +182,20 @@ export class HybridRuleGenerator {
     // Dynamic max_tokens based on pattern complexity
     const maxTokens = this.calculateMaxTokens(pattern);
 
+    // Use environment variable for model configuration
+    const model = process.env.ANTHROPIC_DEFAULT_SONNET_MODEL
+      || process.env.ANTHROPIC_MODEL
+      || "claude-sonnet-4-6";
+
+    const requestLog = `\n[${new Date().toISOString()}] [LLM] Requesting enhancement for ${ruleId}\n` +
+      `Model: ${model}, Max tokens: ${maxTokens}\n` +
+      `Prompt (${prompt.length} chars):\n${prompt.slice(0, 500)}...\n`;
+
+    // console.error(requestLog);
+    appendFileSync(LLM_LOG_FILE, requestLog, "utf8");
+
     const response = await this.anthropic.messages.create({
-      model: "claude-sonnet-4-6-20250514",
+      model,
       max_tokens: maxTokens,
       messages: [{
         role: "user",
@@ -159,6 +204,11 @@ export class HybridRuleGenerator {
     });
 
     const responseText = response.content[0].type === "text" ? response.content[0].text : "";
+
+    const responseLog = `[${new Date().toISOString()}] [LLM] Response received (${responseText.length} chars):\n${responseText.slice(0, 500)}...\n`;
+    // console.error(responseLog);
+    appendFileSync(LLM_LOG_FILE, responseLog, "utf8");
+
     const enhanced = this.parseEnhancedResponse(responseText);
 
     // Build formatted content
@@ -207,12 +257,44 @@ export class HybridRuleGenerator {
    * Build enhancement prompt (optimized for token efficiency)
    */
   private buildEnhancementPrompt(pattern: Pattern, basicContent: RuleContent): string {
-    // Collect user input from occurrences (limit to 5 most recent)
-    const userInputs = pattern.occurrences
-      .filter(o => o.user_input)
-      .slice(-5)  // Last 5 occurrences
-      .map((o, i) => `${i + 1}. ${o.user_input}`)
-      .join('\n');
+    // Extract full context from occurrences (not just user_input)
+    // Include: user message + context (file paths, action taken)
+    const contextExamples = pattern.occurrences
+      .filter(o => o.user_input && o.user_input.length > 20)
+      .slice(-5)  // Last 5 meaningful occurrences
+      .map((o, i) => {
+        let example = `${i + 1}. User: ${o.user_input}`;
+
+        // Add context if available
+        if (o.context && o.context !== "unknown") {
+          example += `\n   Context: ${o.context}`;
+        }
+
+        // Add action type
+        const actionMap: Record<string, string> = {
+          "explicit_correction": "Corrected",
+          "accept": "Accepted",
+          "reject": "Rejected",
+          "amend": "Amended",
+          "undo": "Undone"
+        };
+        const actionLabel = actionMap[o.user_action] || o.user_action;
+        example += `\n   Action: ${actionLabel}`;
+
+        // Add metadata hints
+        if (o.security_issue) {
+          example += `\n   Security: ${o.security_issue}`;
+        }
+        if (o.performance_improved) {
+          example += `\n   Performance: Improved`;
+        }
+
+        return example;
+      })
+      .join('\n\n');
+
+    // Fallback to description if no user inputs
+    const contextToUse = contextExamples || `Pattern description: ${pattern.description}`;
 
     return `Enhance coding rule from user corrections.
 
@@ -221,8 +303,8 @@ Basic: ${basicContent.content.slice(0, 200)}...
 Type: ${pattern.type} | Confidence: ${(pattern.confidence * 100).toFixed(0)}% | Count: ${pattern.occurrences.length}
 Keywords: ${pattern.keywords.slice(0, 5).join(', ')}
 
-User corrections:
-${userInputs || "No direct input"}
+Evidence from sessions:
+${contextToUse}
 
 Output JSON:
 - title: imperative, 60-80 chars
@@ -275,8 +357,8 @@ Be specific and actionable.`;
         related_patterns: parsed.related_patterns
       };
     } catch (error) {
-      console.error("Failed to parse enhanced response:", error);
-      console.error("Response was:", response);
+      // console.error("Failed to parse enhanced response:", error);
+      // console.error("Response was:", response);
       throw error;
     }
   }
@@ -330,6 +412,117 @@ Be specific and actionable.`;
     }
 
     return section;
+  }
+
+  /**
+   * Assess rule quality based on multiple dimensions
+   * Returns a score between 0.0 (very poor) and 1.0 (excellent)
+   */
+  private assessRuleQuality(content: RuleContent): number {
+    let score = 0;
+    let maxScore = 0;
+
+    // 1. Description completeness (0-0.3)
+    maxScore += 0.3;
+    if (content.description) {
+      const desc = content.description;
+
+      // Check for truncation markers
+      if (desc.includes("...") || desc.includes("…")) {
+        score += 0.05;  // Truncated, very low score
+      }
+      // Check for corrupted text (乱码, HTML tags, JSON fragments)
+      else if (/[^\x00-\x7F]{3,}/.test(desc) && !/[一-龥]{3,}/.test(desc)) {
+        score += 0.05;  // Garbled text
+      }
+      else if (/<[^>]+>/.test(desc) || /\{["\w]+:/.test(desc)) {
+        score += 0.1;  // Contains HTML/JSON
+      }
+      // Check minimum length
+      else if (desc.length < 50) {
+        score += 0.1;  // Too short
+      }
+      // Full marks for complete description
+      else if (desc.length >= 100 && desc.length <= 500) {
+        score += 0.3;
+      }
+      // Partial marks for reasonable length
+      else if (desc.length >= 50) {
+        score += 0.2;
+      }
+    }
+
+    // 2. Rationale/Reason quality (0-0.2)
+    maxScore += 0.2;
+    if (content.reason) {
+      const reason = content.reason;
+
+      // Check for meaningful content (not just pattern metadata)
+      if (reason.includes("Corrected") && reason.includes("times in") && reason.length < 100) {
+        score += 0.05;  // Auto-generated metadata, not real rationale
+      }
+      else if (reason.length >= 50 && !reason.includes("...")) {
+        score += 0.2;
+      }
+      else if (reason.length >= 20) {
+        score += 0.1;
+      }
+    }
+
+    // 3. Actionable steps (0-0.2)
+    maxScore += 0.2;
+    if (content.how_to_apply && content.how_to_apply.length > 0) {
+      const steps = content.how_to_apply;
+
+      // Check if steps are generic or specific
+      const hasSpecificSteps = steps.some(step =>
+        step.length > 20 && (
+          /\w+\(/.test(step) ||  // Contains function calls
+          /`[^`]+`/.test(step) ||  // Contains code
+          /\b(check|verify|add|remove|use|call|import|export)\b/i.test(step)  // Action verbs
+        )
+      );
+
+      if (hasSpecificSteps && steps.length >= 3) {
+        score += 0.2;
+      } else if (steps.length >= 2) {
+        score += 0.1;
+      } else {
+        score += 0.05;
+      }
+    }
+
+    // 4. Code examples (0-0.2)
+    maxScore += 0.2;
+    if (content.examples && content.examples.length > 0) {
+      const example = content.examples[0];
+
+      // Check if examples are real code (not fragments)
+      if (example.good && example.good.length > 20 && !example.good.includes("...")) {
+        score += 0.15;
+        // Bonus for having both good and bad examples
+        if (example.bad && example.bad.length > 20) {
+          score += 0.05;
+        }
+      }
+    }
+
+    // 5. Content formatting (0-0.1)
+    maxScore += 0.1;
+    const formattedContent = content.content || "";
+
+    // Check for proper markdown structure
+    const hasHeaders = /^#{1,3}\s+\w+/m.test(formattedContent);
+    const hasLists = /^[\*\-]\s+\w+/m.test(formattedContent);
+    const hasCodeBlocks = /```[\w]*\n/.test(formattedContent);
+
+    if (hasHeaders && (hasLists || hasCodeBlocks)) {
+      score += 0.1;
+    } else if (hasHeaders) {
+      score += 0.05;
+    }
+
+    return score / maxScore;  // Normalize to 0-1
   }
 
   /**

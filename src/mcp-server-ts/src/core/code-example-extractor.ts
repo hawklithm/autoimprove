@@ -88,7 +88,7 @@ export class CodeExampleExtractor {
         });
       }
   } catch (error) {
-      console.error(`Failed to extract examples from ${sessionFile}:`, error);
+      // console.error(`Failed to extract examples from ${sessionFile}:`, error);
     }
 
     return examples;

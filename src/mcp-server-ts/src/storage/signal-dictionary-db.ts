@@ -161,7 +161,7 @@ export class SignalDictionaryDB {
       CREATE INDEX IF NOT EXISTS idx_signal_matches_session ON signal_matches(session_id);
     `);
 
-    console.error("Signal dictionary database schema initialized");
+    // console.error("Signal dictionary database schema initialized");
   }
 
   // ============================================================================

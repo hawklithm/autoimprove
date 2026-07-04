@@ -380,7 +380,7 @@ export class RuleUsageStatsAnalyzer {
         .filter((line) => line.trim())
         .map((line) => JSON.parse(line) as RuleFeedback);
     } catch (error) {
-      console.error("Failed to load feedback history:", error);
+      // console.error("Failed to load feedback history:", error);
       this.feedbackHistory = [];
     }
   }

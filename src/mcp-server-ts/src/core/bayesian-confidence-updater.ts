@@ -196,7 +196,7 @@ export class BayesianConfidenceUpdater {
         );
         results.push({ signalId: update.signalId, ...result });
       } catch (error) {
-        console.error(`Failed to update signal ${update.signalId}:`, error);
+        // console.error(`Failed to update signal ${update.signalId}:`, error);
       }
     }
 
@@ -264,7 +264,7 @@ export class BayesianConfidenceUpdater {
       }
     }
 
-    console.error(`Applying time decay to ${updates.length} signals`);
+    // console.error(`Applying time decay to ${updates.length} signals`);
     return this.batchUpdate(updates);
   }
 

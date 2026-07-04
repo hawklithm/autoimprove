@@ -42,6 +42,8 @@ import { createScene, PatternType } from "./core/models.js";
 import { existsSync } from "fs";
 import { SERVER_INSTRUCTIONS_UNIFIED, SERVER_INSTRUCTIONS_EMPTY } from "./mcp-instructions.js";
 import { ProactiveRuleResourceProvider } from "./resources/proactive-rules.js";
+import { BatchRebuildEngine } from "./core/batch-rebuild.js";
+import { PatternEvolutionManager } from "./storage/pattern-evolution.js";
 
 // ============================================================================
 // Initialization
@@ -75,6 +77,8 @@ let adaptiveConfidence: AdaptiveConfidenceCalculator;
 let sceneDetector: EnhancedSceneDetector;
 let claudeIndexExporter: ClaudeIndexExporter;
 let statsAnalyzer: RuleUsageStatsAnalyzer;
+let batchRebuildEngine: BatchRebuildEngine;
+let patternEvolution: PatternEvolutionManager;
 // Adaptive pattern recognition components (initialized but reserved for future use)
 // Reserved for future adaptive pattern recognition features
 let _signalDB: SignalDictionaryDB;
@@ -108,6 +112,8 @@ function ensureInitialized() {
     claudeIndexExporter = new ClaudeIndexExporter(indexManager, contentManager);
     statsAnalyzer = new RuleUsageStatsAnalyzer(indexManager, contentManager, adaptiveConfidence);
     proactiveRuleProvider = new ProactiveRuleResourceProvider(indexManager, contentManager, sceneDetector);
+    batchRebuildEngine = new BatchRebuildEngine();
+    patternEvolution = new PatternEvolutionManager();
 
     // Initialize adaptive pattern recognition components
     _signalDB = new SignalDictionaryDB();
@@ -843,7 +849,7 @@ Keywords are matched against rule descriptions, titles, and content. Use specifi
             },
             optimize_low_quality: {
               type: "boolean",
-              description: "Optimize low-quality rules (defaulrue)",
+              description: "Optimize low-quality rules (default: true)",
             },
             delete_very_low_quality: {
               type: "boolean",
@@ -855,6 +861,67 @@ Keywords are matched against rule descriptions, titles, and content. Use specifi
             },
           },
           required: ["mode"],
+        },
+      },
+      {
+        name: "batch_rebuild",
+        description: "Batch rebuild all rules from session files with incremental caching and optional auto-cleanup",
+        inputSchema: {
+          type: "object",
+          properties: {
+            force: {
+              type: "boolean",
+              description: "Force full rebuild (ignore cache)",
+            },
+            incremental: {
+              type: "boolean",
+              description: "Use incremental analysis (default: true)",
+            },
+            min_confidence: {
+              type: "number",
+              description: "Minimum confidence threshold (default: 0.6)",
+            },
+            session_limit: {
+              type: "number",
+              description: "Limit number of sessions to analyze",
+            },
+            dry_run: {
+              type: "boolean",
+              description: "Dry run mode (don't save results)",
+            },
+            session_dir: {
+              type: "string",
+              description: "Custom session directory path",
+            },
+            use_llm_enhancement: {
+              type: "boolean",
+              description: "Enable LLM enhancement for rules",
+            },
+            extract_code_examples: {
+              type: "boolean",
+              description: "Extract code examples from sessions",
+            },
+            auto_cleanup: {
+              type: "boolean",
+              description: "Automatically cleanup duplicates and optimize rules after generation",
+            },
+            merge_duplicates: {
+              type: "boolean",
+              description: "Merge duplicate rules during cleanup (default: true)",
+            },
+            optimize_low_quality: {
+              type: "boolean",
+              description: "Optimize low-quality rules during cleanup (default: true)",
+            },
+            delete_very_low_quality: {
+              type: "boolean",
+              description: "Delete very low quality rules during cleanup (default: false)",
+            },
+            very_low_quality_threshold: {
+              type: "number",
+              description: "Quality threshold for deletion (default: 0.3)",
+            },
+          },
         },
       },
     ],
@@ -967,6 +1034,9 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
       case "cleanup_existing_rules":
         return await handleCleanupExistingRules(request.params.arguments);
+
+      case "batch_rebuild":
+        return await handleBatchRebuild(request.params.arguments);
 
       default:
         throw new Error(`Unknown tool: ${request.params.name}`);
@@ -3018,6 +3088,53 @@ async function handleCleanupExistingRules(args: any) {
   }
 }
 
+async function handleBatchRebuild(args: any) {
+  try {
+    const result = await batchRebuildEngine.rebuild({
+      force: args.force === true,
+      incremental: args.incremental !== false,
+      minConfidence: args.min_confidence || 0.6,
+      sessionLimit: args.session_limit,
+      dryRun: args.dry_run === true,
+      sessionDir: args.session_dir,
+      enhancedRuleOptions: {
+        useLLMEnhancement: args.use_llm_enhancement === true,
+        extractCodeExamples: args.extract_code_examples === true,
+      },
+      autoCleanup: args.auto_cleanup === true,
+      mergeDuplicates: args.merge_duplicates !== false,
+      optimizeLowQuality: args.optimize_low_quality !== false,
+      deleteVeryLowQuality: args.delete_very_low_quality === true,
+      veryLowQualityThreshold: args.very_low_quality_threshold || 0.3,
+    });
+
+    return {
+      content: [
+        {
+          type: "text",
+          text: JSON.stringify({
+            success: true,
+            result,
+          }),
+        },
+      ],
+    };
+  } catch (error: any) {
+    logger.error("batch_rebuild", "Batch rebuild failed", error);
+    return {
+      content: [
+        {
+          type: "text",
+          text: JSON.stringify({
+            success: false,
+            error: error.message,
+          }),
+        },
+      ],
+    };
+  }
+}
+
 // ============================================================================
 // Resources
 // ============================================================================
@@ -3171,10 +3288,10 @@ async function main() {
   const transport = new StdioServerTransport();
   await server.connect(transport);
 
-  console.error("AutoImprove MCP Server (TypeScript) started");
+  logger.info("server", "AutoImprove MCP Server (TypeScript) started");
 }
 
 main().catch((error) => {
-  console.error("Server error:", error);
+  logger.error("server", "Server startup failed", error);
   process.exit(1);
 });

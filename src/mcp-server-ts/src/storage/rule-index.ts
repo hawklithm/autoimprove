@@ -69,7 +69,7 @@ export class RuleIndexManager {
 
       return index;
     } catch (error) {
-      console.error("Failed to load rule index, returning empty index:", error);
+      // console.error("Failed to load rule index, returning empty index:", error);
       return createRuleIndex();
     }
   }

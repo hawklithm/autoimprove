@@ -69,10 +69,10 @@ export const PATTERN_STRATEGIES: Record<
     ]
   },
   [PatternType.SECURITY]: {
-    min_confidence: 0.3,
+    min_confidence: 0.5,
     min_occurrences: 1,
     requires_multiple_sessions: false,
-    weight_adjustment: 1.5,
+    weight_adjustment: 1.0,  // Changed from 1.5 - no automatic bonus
     priority: "critical",
     detect_keywords: [
       "sql injection",
@@ -115,13 +115,62 @@ export class ConfidenceCalculator {
     // Step 1: Calculate base confidence
     const baseConfidence = this.calculateBaseConfidence(pattern);
 
-    // Step 2: Apply type-specific adjustments
-    const adjustedConfidence = this.applyTypeAdjustments(pattern, baseConfidence);
+    // Step 2: Apply occurrence-based cap (single occurrence max 0.6)
+    const cappedConfidence = this.applyOccurrenceCap(pattern, baseConfidence);
 
-    // Step 3: Apply keyword bonus
+    // Step 3: Apply session diversity requirement
+    const sessionAdjusted = this.applySessionDiversityBonus(pattern, cappedConfidence);
+
+    // Step 4: Apply type-specific adjustments
+    const adjustedConfidence = this.applyTypeAdjustments(pattern, sessionAdjusted);
+
+    // Step 5: Apply keyword bonus
     const finalConfidence = this.applyKeywordBonus(pattern, adjustedConfidence);
 
     return Math.min(finalConfidence, 1.0);
+  }
+
+  /**
+   * Cap confidence based on occurrence count
+   * Single occurrence patterns max out at 0.6 confidence
+   */
+  private applyOccurrenceCap(pattern: Pattern, baseConfidence: number): number {
+    const occurrenceCount = pattern.occurrences.length;
+
+    // Single occurrence: max 0.6
+    if (occurrenceCount === 1) {
+      return Math.min(baseConfidence, 0.6);
+    }
+
+    // 2 occurrences: max 0.75
+    if (occurrenceCount === 2) {
+      return Math.min(baseConfidence, 0.75);
+    }
+
+    // 3+ occurrences: no cap (allow reaching higher confidence)
+    return baseConfidence;
+  }
+
+  /**
+   * Bonus for patterns verified across multiple independent sessions
+   * Required for reaching 0.9+ confidence
+   */
+  private applySessionDiversityBonus(pattern: Pattern, confidence: number): number {
+    const uniqueSessions = new Set(pattern.occurrences.map(o => o.session_id));
+    const sessionCount = uniqueSessions.size;
+
+    // Need 3+ sessions for high confidence (0.9+)
+    if (sessionCount >= 3) {
+      return confidence + 0.15;
+    }
+
+    // 2 sessions: moderate bonus
+    if (sessionCount === 2) {
+      return confidence + 0.08;
+    }
+
+    // Single session: no bonus
+    return confidence;
   }
 
   private calculateBaseConfidence(pattern: Pattern): number {

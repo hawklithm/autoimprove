@@ -47,7 +47,7 @@ describe("Rule Quality Controller", () => {
       reason: "Immutability",
     });
 
-   2 = createRuleContent({
+    const rule2 = createRuleContent({
       id: "rule-002",
       content: "Never use const, prefer let",
       reason: "Flexibility",
@@ -61,7 +61,7 @@ describe("Rule Quality Controller", () => {
     ]);
 
     expect(conflicts.length).toBeGreaterThan(0);
-    expect(conflicts[0].conflict_"contradiction");
+    expect(conflicts[0].conflict_type).toBe("contradiction");
   });
 
   it("should suggest merging similar rules", () => {
