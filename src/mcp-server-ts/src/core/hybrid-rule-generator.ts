@@ -144,14 +144,17 @@ export class HybridRuleGenerator {
     options: EnhancedRuleOptions = {}
   ): Promise<Array<{ indexEntry: RuleIndexEntry; content: RuleContent }>> {
     const rules: Array<{ indexEntry: RuleIndexEntry; content: RuleContent }> = [];
+    const filteredReasons: Record<string, number> = {};
 
     for (let i = 0; i < patterns.length; i++) {
       const pattern = patterns[i];
       const ruleId = `rule-${String(startId + i).padStart(3, "0")}`;
 
       // Check if should generate rule
-      const { shouldGenerate } = this.basicGenerator["classifier"].shouldGenerateRule(pattern);
+      const { shouldGenerate, reason } = this.basicGenerator["classifier"].shouldGenerateRule(pattern);
       if (!shouldGenerate) {
+        // Track filtering reasons for diagnostics
+        filteredReasons[reason] = (filteredReasons[reason] || 0) + 1;
         continue;
       }
 
@@ -159,6 +162,14 @@ export class HybridRuleGenerator {
       rules.push(rule);
 
       // console.error(`✓ Generated enhanced rule ${ruleId}: ${rule.content.title || pattern.description}`);
+    }
+
+    // Log filtering statistics
+    if (Object.keys(filteredReasons).length > 0) {
+      console.error(`\n⚠️  Filtered ${patterns.length - rules.length} patterns:`);
+      for (const [reason, count] of Object.entries(filteredReasons)) {
+        console.error(`   • ${reason}: ${count}`);
+      }
     }
 
     return rules;

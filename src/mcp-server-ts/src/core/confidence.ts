@@ -23,7 +23,7 @@ export const PATTERN_STRATEGIES: Record<
   [PatternType.REPEATED_CORRECTION]: {
     min_confidence: 0.45,
     min_occurrences: 2,
-    requires_multiple_sessions: true,
+    requires_multiple_sessions: false,
     weight_adjustment: 1.0,
     detect_keywords: []
   },
