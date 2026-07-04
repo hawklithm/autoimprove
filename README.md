@@ -1,71 +1,49 @@
 # AutoImprove
 
-[![CI](https://github.com/yourusername/autoimprove/actions/workflows/ci.yml/badge.svg)](https://github.com/yourusername/autoimprove/actions/workflows/ci.yml)
-[![Publish to npm](https://github.com/yourusername/autoimprove/actions/workflows/publish.yml/badge.svg)](https://github.com/yourusername/autoimprove/actions/workflows/publish.yml)
-[![npm version](https://badge.fury.io/js/autoimprove.svg)](https://www.npmjs.com/package/autoimprove)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Node.js](https://img.shields.io/badge/Node.js-18+-green.svg)](https://nodejs.org/)
 
-Learn coding patterns from Claude Code sessions and generate reusable rules.
+**Learn from your coding sessions. Never repeat the same correction twice.**
+
+AutoImprove is an intelligent MCP server for Claude Code that automatically learns from your coding patterns, corrections, and preferences—then generates reusable rules that apply across all future sessions.
 
 ## Overview
 
 AutoImprove analyzes your Claude Code sessions to detect patterns in corrections, preferences, and best practices. It automatically generates rules that Claude will follow in future sessions, reducing repetitive corrections and improving consistency.
 
-**✨ New in v0.2.0**: 
-- Rules are **automatically loaded** into every Claude Code session through `~/.claude/CLAUDE.md` reference
-- **npm-installable package** with CLI commands for easy setup and management
+### Why AutoImprove?
 
-## Features
+- **🔄 Learn from Corrections**: Every time you correct Claude, AutoImprove learns and creates rules to prevent repeating the same mistake
+- **🎯 Context-Aware**: Rules automatically match based on tech stack, domain, and context—security rules for auth code, performance rules for React components
+- **📈 Continuous Improvement**: Your coding assistant gets smarter with every session, building a personalized knowledge base
+- **⚡️ Zero Overhead**: Rules load automatically—no manual configuration, no workflow changes
 
-- **Pattern Detection**: Identifies 5 types of patterns
-  - Repeated corrections
-  - Anti-patterns
-  - User preferences
-  - Performance optimizations
-  - Security issues
+### Key Capabilities
 
-- **Confidence Scoring**: Uses v2.0 formula with weighted components
-  - Frequency (30%)
-  - Time span (10%)
-  - User behavior (40%)
-  - Validation (20%)
+**🧠 Pattern Detection**
+- **Repeated Corrections**: Tracks when you correct the same mistake multiple times
+- **Anti-Patterns**: Identifies code patterns you consistently fix (null checks, error handling, etc.)
+- **Preferences**: Learns your coding style (naming conventions, import order, code structure)
+- **Performance Issues**: Detects optimization patterns (React.memo, useMemo, caching)
+- **Security Vulnerabilities**: Catches security issues (SQL injection, XSS, input validation)
 
-- **Scene-Based Matching**: Three-dimensional scene model
-  - Tech stack (React, Python, etc.)
-  - Functional domain (auth, api, etc.)
-  - Business domain (e-commerce, finance, etc.)
+**✨ Intelligent Rule Generation**
+- **Hybrid Generation**: Combines regex detection + LLM enhancement for high-quality rules
+- **Smart Filtering**: Removes noise, questions, and low-confidence patterns (8-class noise classifier)
+- **Quality Scoring**: Rates rules 0-1 based on completeness, actionability, and code examples
+- **Automatic Deduplication**: Semantic similarity detection prevents redundant rules
 
-- **🆕 Automatic Rule Loading**: Top rules are automatically loaded into every Claude Code session
-  - Rules exported to `~/.autoimprove/rules/claude-index.md`
-  - Referenced from `~/.claude/CLAUDE.md` (global)
-  - Category-balanced selection (security, corrections, anti-patterns, performance, preferences)
-  - Low token cost (~400 tokens for top 10 rules)
+**🎯 Context-Aware Matching**
+- **3D Scene Model**: Tech stack (React, TypeScript) + Functional domain (auth, API) + Business domain (e-commerce)
+- **O(1) Indexed Lookups**: Fast rule matching using inverted indexes
+- **Confidence-Based Ranking**: Weighted formula (frequency 30%, behavior 40%, validation 20%, time span 10%)
+- **Scene Auto-Detection**: Automatically extracts tech/functional scenes from file extensions and keywords
 
-- **🆕 Automatic Feedback Recording**: Tracks rule usage automatically
-  - Auto-records when rules are queried (方案1)
-  - Claude actively records detailed feedback (方案2)
-  - Stores feedback in `~/.autoimprove/feedback_history.jsonl`
-  - Supports 4 feedback types: used, ignored, corrected, disabled
-
-- **🆕 Usage Statistics & Analytics**: Multi-dimensional rule usage analysis
-  - Statistics by category, scene, priority, time
-  - Top rules ranking with ratings
-  - Problematic rules identification (high ignore/correct rate)
-  - Both MCP tool and CLI script available
-
-- **MCP Server**: MCP-based server with tools and resources (TypeScript)
-  - `analyze_session` - Analyze session patterns
-  - `generate_rules` - Generate rules from patterns
-  - `export_rules_to_claude_md` - Export top rules to Claude index
-  - `search_knowledge` - Search rules (🆕 auto-records feedback)
-  - `record_feedback` - 🆕 Record rule usage feedback
-  - `get_feedback_stats` - 🆕 Get feedback statistics
-  - `get_rule_usage_stats` - 🆕 Multi-dimensional usage statistics
-  - `update_rules` - Update existing rules
-  - `list_scenes` - List known scenes
-  - `knowledge://rules/{id}` - Get rule content
-  - `knowledge://lessons/{scene}` - Get lessons for scene
+**📊 Built-in Analytics**
+- **Automatic Feedback Tracking**: Records every rule usage (used, ignored, corrected, disabled)
+- **Multi-Dimensional Statistics**: Analyticategory, scene, priority, time
+- **Quality Monitoring**: Identifies problematic rules with high ignore/correction rates
+- **Usage Insights**: Top rules ranking, effectiveness scoring, trend analysis
 
 ## Installation
 
@@ -89,13 +67,9 @@ This will automatically:
 4. ✅ Install Skills to `~/.claude/skills/`
 5. ✅ Initialize storage directory at `~/.autoimprove/`
 6. ✅ Configure automatic rule loading in `~/.claude/CLAUDE.md`
-7. ✅ 🆕 Configure automatic feedback recording in `~/.claude/CLAUDE.md`
+7. ✅ Configure automatic feedback recording
 
 **Configuration Scope**: The setup script configures `autoimprove-core` as a **user-level MCP server**, making it accessible from any project directory. You only need to run setup once.
-
-**Automatic Rule Loading**: Setup adds a reference to `~/.autoimprove/rules/claude-index.md` in your global `~/.claude/CLAUDE.md`, ensuring top rules are automatically loaded in every Claude Code session.
-
-**Automatic Feedback Recording**: Setup copies feedback instructions to `~/.claude/autoimprove-feedback-instructions.md` and adds a reference in `~/.claude/CLAUDE.md`, enabling Claude to actively record rule usage feedback.
 
 ### Verify Installation
 
@@ -105,155 +79,179 @@ After setup completes:
 # Check MCP server status
 claude mcp list
 
-# Test with a skill
+# Test with a skill in Claude Code
 /autoimprove-status
 ```
 
-### Development: Restarting MCP Server
-
-After modifying MCP server code, restart the server to load changes:
-
-```bash
-# Quick restart (no rebuild)
-./restart-mcp.sh
-
-# Rebuild and restart
-./restart-mcp.sh --build
-```
-
-The restart script will:
-1. Stop existing MCP server processes
-2. Re-register the server with Claude Code
-3. Verify the new configuration
-4. Test server startup
-
-**Note**: If the server still shows old behavior after restart, start a new Claude Code conversation.
-autoimprove status
-
-# View existing rules
-autoimprove rules
-
-# Or check MCP server directly
-claude mcp list
-# Expected output:
-# autoimprove-core: node .../dist/index.js - ✓ Connected
-```
-
-### Manual Setup (Development)
-
-If you're developing AutoImprove from source:
-
-```bash
-# Clone repository
-git clone <repo-url>
-cd autoimprove
-
-# Install dependencies
-npm install
-
-# Build
-npm run build
-
-# Link for local testing
-npm link
-
-# Run setup
-autoimprove setup
-```
+You should see:
+- ✅ MCP Server: `autoimprove-core` listed as Connected
+- ✅ Skills: `/autoimprove-*` commands available
+- ✅ Storage: `~/.autoimprove/` directory exists
+- ✅ Auto-loading: `~/.claude/CLAUDE.md` references claude-index.md
 
 ## Quick Start
 
-### 1. Verify Installation
+### 1. Start Coding Normally
 
-```bash
-# Check system health
-autoimprove status
+Rules load automatically in every Claude Code session. Just code as usual—AutoImprove runs in the background.
 
-# View existing rules
-autoimprove rules
-```
+### 2. Analyze Your Session
 
-### 2. Start Using Claude Code
-
-Rules will automatically load into every Claude Code session. Just start coding normally!
-
-### 3. Analyze Sessions
-
-After coding, extract patterns from your session:
+After a coding session, extract patterns and generate rules:
 
 ```bash
 # In Claude Code
 /autoimprove-summarize
 ```
 
-Or use other skills:
+This analyzes your session and:
+- Detects patterns in your corrections
+- Generates rules with confidence scoring
+- Consolidates similar patterns
+- Exports top rules to claude-index.md
+- Runs automatic deduplication and cleanup
+
+Options:
 ```bash
-/autoimprove-status      # Check system health and statistics
-/autoimprove-rules       # View detailed rules with filtering
-/autoimprove-lessons     # View learned lessons
+/autoimprove-summarize              # Analyze current session
+/autoimprove-summarize --all        # Batch analyze all sessions
+/autoimprove-summarize --enhance    # Use AI enhancement for better quality
+/autoimprove-summarize --rebuild    # Clear and rebuild all rules from scratch
 ```
 
-### 4. Manage Rules from CLI
+### 3. Review Your Rules
+
+Check what AutoImprove has learned:
 
 ```bash
-# View all rules
-autoimprove rules
-
-# Filter by category
-autoimprove rules --category security
-
-# Filter by confidence
-autoimprove rules --min-confidence 0.7
-
-# Filter by priority
-autoimprove rules --priority critical
+# In Claude Code
+/autoimprove-rules                  # View all rules with filtering options
+/autoimprove-status                 # System health and statistics
+/autoimprove-lessons                # View lessons by scene
 ```
+
+### 4. Rules Apply Automatically
+
+In your next session, AutoImprove will:
+- ✅ Automatically load relevant rules based on your current context
+- ✅ Apply them without you having to remember
+- ✅ Track which rules are used vs ignored
+- ✅ Continue learning from new corrections
+
+## Available Skills
+
+### `/autoimprove-summarize`
+
+Analyze session and generate rules.
+
+**Usage**:
+```bash
+/autoimprove-summarize              # Analyze current session
+/autoimprove-summarize --all        # Batch analyze all sessions
+/autoimprove-summarize --enhance    # Enable AI enhancement
+/autoimprove-summarize --force      # Force reanautoimprove-summarize --rebuild    # Clear all rules and rebuild
+```
+
+**What it does**:
+1. Parses session JSONL for user corrections
+2. Detects 5 pattern types with confidence scoring
+3. Filters noise using 8-class classifier
+4. Generates rules with LLM enhancement (optional)
+5. Consolidates similar patterns
+6. Deduplicates against existing rules
+7. Exports top 10 rules to claude-index.md
+8. Runs automatic cleanup (merges duplicates, optimizes low-quality rules)
+
+### `/autoimprove-status`
+
+System health check and statistics.
+
+**Shows**:
+- MCP server status
+- Storage directory status
+- Rule counts by category and priority
+- Recent activity (patterns detected, rules generated)
+- Configuration status
+
+### `/autoimprove-rules`
+
+View and filter rules.
+
+**Usage**:
+```bash
+/autoimprove-rules                           # View all rules
+/autoimprove-rules --category security       # Filter by category
+/autoimprove-rules --min-confidence 0.7      # Filter by confidence
+/autoimprove-rules --priority critical       # Filter by priority
+```
+
+### `/autoimprove-lessons`
+
+View learned lessons grouped by scene.
+
+**Shows**:
+- Rules grouped by tech stack (React, TypeScript, Python, etc.)
+- Functional domain groupings (auth, API, database, etc.)
+- Applicable patterns for current context
 
 ## Architecture
 
 ```
-┌─────────────────────────────────────────────┐
-│              AutoImprove System              │
-├─────────────────────────────────────────────┤
-│                                             │
-│  Skills (User Interface)                    │
-│  ├─ /autoimprove-status                     │
-│  ├─ /autoimprove-summarize                  │
-│  ├─ /autoimprove-rules                      │
-│  └─ /autoimprove-lessons                    │
-│         ↓                                   │
-│  MCP Server (Core Logic)                    │
-│  ├─ Tools                                   │
-│  │  ├─ analyze_session                      │
-│  │  ├─ generate_rules                       │
-│  │  ├─ search_knowledge                     │
-│  │  ├─ update_rules                         │
-│  │  └─ list_scenes                          │
-│  ├─ Resources                               │
-│  │  ├─ knowledge://rules/{id}               │
-│  │  └─ knowledge://lessons/{scene}          │
-│  └─ Storage (~/.autoimprove/)               │
-│      ├─ rules/index.json                    │
-│      ├─ rules/content/*.md                  │
-│      └─ sessions/*.json                     │
-│                                             │
-└─────────────────────────────────────────────┘
+┌─────────────────────────────────────────────────────────────┐
+│                    AutoImprove System                        │
+├─────────────────────────────────────────────────────────────┤
+│                                                              │
+│  User Interface Layer                                        │
+│  ├─ Skills (/autoimprove-*)                                 │
+│  └─ CLI (optional, for manual management)                   │
+│         ↓                                                    │
+│  MCP Server (Core Logic)                                     │
+│  ├─ Pattern Detection                                        │
+│  │  ├─ Session Analyzer (5 pattern types)                   │
+│  │  ├─ Noise Classifier (8-class filtering)                 │
+│  │  └─ Confidence Calculator (v2.0 weighted formula)        │
+│  ├─ Rule Generation                                          │
+│  │  ├─ Basic Generator (regex + heuristics)                 │
+│  │  ├─ LLM Enhancer (Anthropic API, token-optimized)        │
+│  │  ├─ Code Example Extractor                               │
+│  │  └─ Quality Assessor (0-1 scoring)                       │
+│  ├─ Rule Matching                                            │
+│  │  ├─ Indexed Rule Matcher (O(1) lookups)                  │
+│  │  ├─ Scene Detector (3D model)                            │
+│  │  └─ Relevance Scorer                                     │
+│  ├─ Deduplication & Cleanup                                  │
+│  │  ├─ Semantic Similarity (Jaccard + keyword overlap)      │
+│  │  ├─ Rule Merger                                          │
+│  │  └─ Quality Optimizer                                    │
+│  └─ Storage & Analytics                                      │
+│      ├─ Rule Index (fast in-memory metadata)                │
+│      ├─ Rule Content (lazy-loaded markdown files)           │
+│      ├─ Feedback Tracker (JSONL append-only)                │
+│      ├─ Session Cache (incremental analysis)                │
+│      └─ Compact Cache (parsing optimization)                │
+│                                                              │
+└─────────────────────────────────────────────────────────────┘
 ```
 
 ## Storage Structure
 
 ```
 ~/.autoimprove/
-├── config.json              # Configuration
+├── config.json                      # User configuration
 ├── rules/
-│   ├── index.json          # Rule metadata (fast loading)
-│   └── content/            # Full rule content
-│       ├── rule-001.md
-│       ├── rule-002.md
-│       └── ...
-├── sessions/               # Session archives
+│   ├── index.json                   # Rule metadata (fast loading)
+│   ├── content/                     # Full rule content (lazy-loaded)
+│   │   ├── rule-001.md
+│   │   ├── rule-002.md
+│   │   └── ...
+│   └── claude-index.md              # Top rules (auto-loaded in sessions)
+├── sessions/                        # Session analysis cache
 │   └── {session_id}.json
-└── cache/                  # Temporary cache
+├── feedback_history.jsonl           # Rule usage feedback (append-only)
+├── analyzed_sessions.json           # Tracking for incremental analysis
+├── cache/                           # Compact session cache
+│   └── {session_id}.compact.json
+└── llm-calls.log                    # LLM enhancement logs (debugging)
 ```
 
 ## Configuration
@@ -268,7 +266,7 @@ Edit `~/.autoimprove/config.json`:
     "anti_pattern": 0.45,
     "preference": 0.3,
     "performance": 0.4,
-    "security": 0.3
+    "security": 0.5
   },
   "confidence_weights": {
     "frequency": 0.3,
@@ -282,51 +280,145 @@ Edit `~/.autoimprove/config.json`:
   },
   "business_domain_mappings": {
     "src/shop": "e-commerce",
-    "src/crm": "crm"
+    "src/crm": "crm",
+    "src/billing": "finance"
   }
 }
 ```
 
-## CLI Commands
+### Key Settings
 
-### `autoimprove setup`
+- **confidence_thresholds**: Minimum confidence required to generate a rule for each pattern type
+- **confidence_weights**: Formula weights (frequency 30%, behavior 40%, validation 20%, time span 10%)
+- **rule_matching.max_results**: Maximum rules returned by search
+- **rule_matching.min_confidence**: Minimum confidence for rule matching
+- **business_domain_mappings**: Map directory paths to business domains
 
-Install and configure AutoImprove MCP server and skills.
+## MCP Tools Reference
 
-**Options**:
-- `--force` - Force reinstall even if already configured
+### Core Tools
 
-### `autoimprove status`
+- **`analyze_session`** - Analyze session JSONL file, detect patterns
+  - Input: `session_file_path`, `incremental` (optional), `forceReanalyze` (optional)
+  - Output: Pattern list with types, confidence, occurrences
+  
+- **`generate_rules`** - Generate rules from patterns
+  - Input: `patterns_json`, `scene_json` (optional), `use_llm` (optional)
+  - Output: Rule IDs, deduplication stats
+  
+- **`search_knowledge`** - Search rules by scene and keywords
+  - Input: `scene_json` (optional), `keywords` (optional), `max_results` (optional)
+  - Output: Matched rules with relevance scores
+  - Side effect: Auto-records "used" feedback
+  
+- **`export_rules_to_claude_md`** - Export top rules to claude-index.md
+  - Input: `strategy` ("top-confidence" | "category-balanced"), `limit`, `min_confidence`
+  - Output: Success status, exported rule count
 
-Check system health and statistics:
-- Storage status and rule counts
-- MCP server registration
-- Skills installation
-- Configuration status
+### Analytics Tools
 
-### `autoimprove rules`
+- **`record_feedback`** - Record rule usage feedback
+  - Input: `rule_id`, `feedback_type` ("used" | "ignored" | "corrected" | "disabled"), `context`, `user_rating` (optional)
+  
+- **`get_feedback_stats`** - Get feedback statistics
+  - Output: Total feedback count, breakdown by type, average ratings
+  
+- **`get_rule_usage_stats`** - Multi-dimensional usage statistics
+  - Input: `dimension` ("category" | "scene" | "priority" | "time" | "top_rules" | "problematic_rules")
+  - Output: Statistics and rankings
 
-View and manage knowledge rules.
+### Management Tools
 
-**Options**:
-- `--category <type>` - Filter by category (security, performance, preference, etc.)
-- `--min-confidence <number>` - Minimum confidence threshold (0-1)
-- `--priority <level>` - Filter by priority (critical, high, medium, low)
+- **`update_rules`** - Update existing rules
+  - Input: `rule_id`, `updates` (confidence, priority, content, etc.)
+  
+- **`list_scenes`** - List known scenes
+  - Output: Tech scenes, functional scenes, business scenes
+  
+- **`cleanup_existing_rules`** - Scan and optimize rules
+  - Input: `mode` ("preview" | "execute"), `merge_duplicates`, `optimize_low_quality`, `delete_very_low_quality`
+  - Output: Actions taken (merged, optimized, deleted)
 
-**Example**:
+### Resources
+
+- **`knowledge://rules/{id}`** - Get full rule content
+- **`knowledge://lessons/{scene}`** - Get lessons for specific scene
+
+## Advanced Usage
+
+### Batch Analysis of All Sessions
+
+Analyze all historical sessions at once:
+
 ```bash
-autoimprove rules --category security --min-confidence 0.7
+/autoimprove-summarize --all
 ```
 
-### `autoimprove summarize`
+This will:
+- Scan all session files in `~/.claude/projects/`
+- Skip already-analyzed sessions (unless `--force`)
+- Generate rules incrementally
+- Show progress for each session
 
-Guide for analyzing sessions. Use the `/autoimprove-summarize` skill in Claude Code instead.
+### Rebuilding Rules from Scratch
 
-**Options**:
-- `--all` - Analyze all historical sessions
-- `--enhance` - Use AI enhancement for better rule quality
-- `--force` - Force reanalysis of already-analyzed sessions
-- `--min-confidence <number>` - Minimum confidence threshold
+If you want to clear all existing rules and rebuild:
+
+```bash
+/autoimprove-summarize --rebuild
+``s will:
+1. Backup existing rules to `~/.autoimprove/backups/`
+2. Clear all rules from database
+3. Reset analysis tracking
+4. Reanalyze all sessions with latest quality controls
+5. Generate fresh rules
+6. Export to claude-index.md
+
+**Warning**: This is destructive. Use with caution.
+
+### AI-Enhanced Rule Generation
+
+For higher quality rules (slower, uses more tokens):
+
+```bash
+/autoimprove-summarize --enhance
+```
+
+This enables:
+- LLM-based semantic analysis of patterns
+- Better noise filtering
+- Richer rule descriptions and rationale
+- More accurate keyword extraction
+
+### Customizing Confidence Thresholds
+
+Lower thresholds to capture more rules (may include more noise):
+
+```json
+{
+  "confidence_thresholds": {
+    "repeated_correction": 0.30,   // Lower from 0.45
+    "anti_pattern": 0.30,          // Lower from 0.45
+    "preference": 0.20,            // Lower from 0.30
+    "performance": 0.30,           // Lower from 0.40
+    "security": 0.40               // Lower from 0.50
+  }
+}
+```
+
+Higher thresholds for higher quality (may miss some patterns):
+
+```json
+{
+  "confidence_thresholds": {
+    "repeated_correction": 0.60,
+    "anti_pattern": 0.60,
+    "preference": 0.50,
+    "performance": 0.60,
+    "security": 0.70
+  }
+}
+```
 
 ## Development
 
@@ -334,124 +426,289 @@ Guide for analyzing sessions. Use the `/autoimprove-summarize` skill in Claude C
 
 ```bash
 # Clone repository
-git clone <repo-url>
+git clone https://github.com/your-username/autoimprove.git
 cd autoimprove
 
 # Install dependencies
-npm install
+cd src/mcp-server-ts && npm install
+cd ../skills-ts && npm install
 
-# Build
+# Build MCP server
+cd src/mcp-server-ts
 npm run build
 
-# Test locally
-npm link
+# Build skills
+cd ../skills-ts
+npm run build
+
+# Run setup
+cd ../..
+./setup.sh
 ```
 
 ### Project Structure
 
 ```
 autoimprove/
-├── bin/                      # CLI entry point
-│   └── autoimprove.js
 ├── src/
-│   ├── cli/                  # CLI implementation
-│   │   ├── commands/         # Command implementations
-│   │   └── index.ts          # Commander.js setup
-│   ├── mcp-server-ts/        # MCP server
-│   │   └── src/
-│   │       ├── tools/        # MCP tools
-│   │       └── index.ts      # Server entry
-│   └── skills-ts/            # Claude Code skills
+│   ├── mcp-server-ts/               # MCP server implementation
+│   │   ├── src/
+│   │   │   ├── core/                # Core logic
+│   │   │   │   ├── session-analyzer.ts      # Pattern detection
+│   │   │   │   ├── hybrid-rule-generator.ts # 4-phase generation
+│   │   │   │   ├── llm-rule-generator.ts    # LLM enhancement
+│   │   │   │   ├── classifier.ts            # Rule filtering
+│   │   │   │   ├── confidence.ts            # Confidence calculation
+│   │   │   │   ├── indexed-rule-matcher.ts  # O(1) rule matching
+│   │   │   │   └── enhanced-scene-detector.ts # 3D scene detection
+│   │   │   ├── storage/             # Persistence layer
+│   │   │   │   ├── rule-index.ts            # In-memory index
+│   │   │   │   ├── rule-content-manager.ts  # File I/O
+│   │   │   │   ├── feedback-tracker.ts      # Usage analytics
+│   │   │   │   ├── session-cache.ts         # Incremental analysis
+│   │   │   │   └── compact-cache.ts         # Parsing optimization
+│   │   │   └── index.ts             # MCP server entry point
+│   │   ├── tests/                   # Unit tests
+│   │   └── package.json
+│   └── skills-ts/                   # Claude Code skills
 │       └── src/
-├── templates/                # Template files
-├── package.json
-└── tsconfig.json
+│           ├── autoimprove-summarize/
+│           ├── autoimprove-status/
+│           ├── autoimprove-rules/
+│           └── autoimprove-lessons/
+├── setup.sh                         # Automated setup script
+├── restart-mcp.sh                   # Development: restart MCP server
+└── README.md
+```
+
+### Running Tests
+
+```bash
+cd src/mcp-server-ts
+npm test                 # Run all tests
+npm run test:watch       # Watch mode
+npm run test:ui          # Vitest UI
+
+# Run specific test file
+npm test -- tests/scene-detection.test.ts
+```
+
+### Debugging
+
+**Enable debug logging**:
+
+Edit `src/mcp-server-ts/src/core/logger.ts`:
+```typescript
+export const LOG_LEVEL = "debug";  // Change from "info"
+```
+
+**Check LLM enhancement logs**:
+```bash
+tail -f ~/.autoimprove/llm-calls.log
+```
+
+**Verify MCP server**:
+```bash
+claude mcp get autoimprove-core
+```
+
+### Restarting MCP Server
+
+After code changes:
+
+```bash
+# Quick restart (no rebuild)
+./restart-mcp.sh
+
+# Rebuild and restart
+./restart-mcp.sh --build
+```
+
+Or manually:
+```bash
+cd src/mcp-server-ts
+npm run build
+# Then start a new Claude Code session
 ```
 
 ## Troubleshooting
 
-### MCP Server Not Registered
+### No Patterns Detected
 
+**Possible causes**:
+- Session had no user corrections (exploratory coding)
+- Corrections were too vague or noisy
+- Patterns filtered by noise classifier
+
+**Solutions**:
+- Make more explicit corrections ("Don't do X, do Y instead")
+- Lower confidence thresholds in `config.json`
+- Check filtered reasons with diagnostic logging
+
+### Rules Generated but Not Loading
+
+**Check**:
 ```bash
-autoimprove setup --force
+# Verify claude-index.md exists
+ls ~/.autoimprove/rules/claude-index.md
+
+# Verify CLAUDE.md reference
+cat ~/.claude/CLAUDE.md | grep autoimprove
 ```
 
-### Rules Not Loading
-
-Check that `~/.claude/CLAUDE.md` contains:
+**Should see**:
 ```markdown
 @~/.autoimprove/rules/claude-index.md
 ```
 
-If missing, run:
+**Fix**:
 ```bash
-autoimprove setup --force
+./setup.sh --force
 ```
 
-### Skills Not Available
+### MCP Server Not Responding
 
-Verify installation:
+**Check server status**:
 ```bash
-ls ~/.claude/skills/autoimprove-*
+claude mcp list
+# Should show: autoimprove-core - ✓ Connected
 ```
 
-Reinstall if needed:
+**Restart server**:
 ```bash
-autoimprove setup --force
+./restart-mcp.sh
 ```
 
-### Check System Status
-
+**Check logs** (if available):
 ```bash
-# Comprehensive health check
-autoimprove status
-
-# Check MCP server directly
-claude mcp get autoimprove-core
+# MCP server logs location depends on Claude Code version
+# Check ~/.claude/logs/ or Claude Code settings
 ```
 
-### No Patterns Detected
+### High Memory Usage
 
-- Ensure you made corrections during the session
-- Try with more explicit corrections
-- Verify patterns meet confidence thresholds in `~/.autoimprove/config.json`
+AutoImprove uses caching for performance. If memory is a concern:
 
-### Rules Not Matching
+**Disable compact cache**:
 
-- Check scene detection with `/autoimprove-status`
-- Verify rule scenes match your current work (tech stack, functional domain)
-- Adjust confidence thresholds in `~/.autoimprove/config.json`
-
-### Configuration Scope Issues
-
-If the server works in one project but not others:
-
-```bash
-# Check current scope
-claude mcp get autoimprove-core
-
-# Should show: "Scope: User config (available in all your projects)"
-# If it shows "Local config", reinstall with:
-autoimprove setup --force
+Edit `src/mcp-server-ts/src/core/session-analyzer.ts`:
+```typescript
+analyzeSession(sessionFile, { useCompactCache: false })
 ```
+
+**Clear caches**:
+```bash
+rm -rf ~/.autoimprove/cache/
+```
+
+### 216 Patterns Detected, 0 Rules Generated
+
+This happens when patterns don't meet generation requirements. Common reasons:
+
+1. **Cross-session requirement** (FIXED in latest version)
+2. **Test validation required** - Anti-patterns need `test_passed: true`
+3. **Performance evidence required** - Performance patterns need `performance_improved: true`
+4. **Low confidence** - Below minimum threshold
+
+**Diagnostic**:
+
+Run `/autoimprove-summarize` and check the filtering statistics:
+```
+⚠️  Filtered 216 patterns:
+   • 需要测试验证: 150
+   • 需要性能改善证据: 40
+   • 置信度不足 (0.25 < 0.45): 26
+```
+
+**Solutions**:
+
+Edit `src/mcp-server-ts/src/core/confidence.ts` to lower requirements:
+
+```typescript
+[PatternType.ANTI_PATTERN]: {
+  requires_test_validation: false,  // Disable test requirement
+  ...
+}
+
+[PatternType.PERFORMANCE]: {
+  requires_performance_evidence: false,  // Disable performance evidence
+  ...
+}
+```
+
+Then rebuild:
+```bash
+cd src/mcp-server-ts && npm run build
+```
+
+## Roadmap
+
+### Planned Features
+
+- [ ] **Web Dashboard**: Visual rule management and analytics
+- [ ] **Rule Templates**: Pre-built rule packs for common frameworks
+- [ ] **Team Sharing**: Export/import rule packs for team consistency
+- [ ] **Git Integration**: Track rule evolution alongside code changes
+- [ ] **Multi-Language Support**: Extend beyond English/Chinese
+- [ ] **Plugin System**: Custom pattern detectors and rule generators
+- [ ] **IDE Extensions**: VS Code, JetBrains integration
+- [ ] **API Endpoints**: RESTful API for external integrations
+
+### Under Consideration
+
+- Remote rule synchronization across machines
+- Rule versioning and rollback
+- A/B testing for rule effectiveness
+- Integration with code review tools
+- Automatic rule expiration for outdated patterns
+
+## Contributing
+
+Conre welcome! Please feel free to submit issues and pull requests.
+
+### Development Guidelines
+
+- Write tests for new features
+- Follow existing code style (TypeScript, ESLint)
+- Update documentation for user-facing changes
+- Add examples for new MCP tools
 
 ## License
 
-MIT License
+MIT License - see LICENSE file for details
+
+## Credits
+
+Built with:
+- [Model Context Protocol (MCP)](https://modelcontextprotocol.io/)
+- [Anthropic Claude API](https://www.anthropic.com/)
+- [Claude Code](https://claude.ai/code)
+- TypeScript, Node.js, Vitest
 
 ## Version
 
-Current version: 0.2.0
+**Current version**: 0.3.0
 
-### Changelog
+### Recent Changes
+
+**v0.3.0** (2026-07-04)
+- 🐛 **Fix**: Removross-session requirement for REPEATED_CORRECTION patterns
+  - Allows single-session analysis to generate rules
+  - Fixes issue where 216 patterns detected but 0 rules generated
+- 📊 **New**: Added diagnostic logging for rule filtering
+  - Shows breakdown of why patterns were filtered
+  - Helps identify validation requirements blocking rule generation
+- 🧹 **Enhancement**: Improved noise filtering in session analyzer
+  - Better detection of questions vs corrections
+  - More accurate technical context validation for security patterns
+  - Stricter requirements for actionable content
 
 **v0.2.0** (2026-06-06)
 - 🎉 npm-installable package with global CLI
 - ✨ New `autoimprove` CLI commands: setup, status, rules, summarize
 - 🔧 Automated setup with `autoimprove setup`
-- 📦 Single-package distribution (no monorepo complexity)
+- 📦 Single-package distribution
 - 🌍 Commander.js-based CLI framework
-- 📄 Comprehensive README with npm installation guide
 
 **v0.1.0** (Initial Release)
 - MCP server with TypeScript implementation
