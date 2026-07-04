@@ -434,15 +434,13 @@ export class BatchLLMRuleGenerator {
 
   /**
    * Sanitize JSON string to fix common LLM output issues
+   * Note: Only remove control characters, don't try to fix string escaping
+   * as that can break valid formatted JSON
    */
   private sanitizeJson(jsonStr: string): string {
-    return jsonStr
-      // Replace unescaped newlines within strings
-      .replace(/([^\\])\n/g, '$1\\n')
-      // Replace unescaped tabs
-      .replace(/([^\\])\t/g, '$1\\t')
-      // Fix common control characters
-      .replace(/[\x00-\x1F\x7F]/g, '');
+    // Only remove problematic control characters (NULL, etc.)
+    // Don't touch newlines, tabs, or other whitespace - they're valid in JSON structure
+    return jsonStr.replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/g, '');
   }
 
   /**
