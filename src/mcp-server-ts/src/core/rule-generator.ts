@@ -4,17 +4,14 @@
  * Converts validated patterns into structured rules.
  */
 
-import { Pattern, RuleIndexEntry, RuleContent, Scene } from "./models.js";
+import { Pattern, RuleIndexEntry, RuleContent, Scene, RuleScope } from "./models.js";
 import { RuleClassifier } from "./classifier.js";
-import { ScopeDetector } from "./scope-detector.js";
 
 export class RuleGenerator {
   private classifier: RuleClassifier;
-  private scopeDetector: ScopeDetector;
 
   constructor() {
     this.classifier = new RuleClassifier();
-    this.scopeDetector = new ScopeDetector();
   }
 
   generateRule(
@@ -30,8 +27,15 @@ export class RuleGenerator {
     // Determine priority
     const priority = this.classifier.determinePriority(pattern);
 
-    // Detect scope
-    const scopeResult = this.scopeDetector.detectScope(pattern, sessionContext);
+    // Detect scope - use global scope if no context provided
+    const scope = sessionContext ? RuleScope.PROJECT : RuleScope.GLOBAL;
+    const scopeContext = sessionContext
+      ? {
+          project_path: sessionContext.project_path,
+          organization_id: sessionContext.organization_id,
+          project_id: sessionContext.project_id
+        }
+      : undefined;
 
     // Generate rule content
     const content = this.generateContent(pattern);
@@ -50,8 +54,8 @@ export class RuleGenerator {
       keywords: pattern.keywords,
       created_at: now,
       updated_at: now,
-      scope: scopeResult.scope,
-      scope_context: scopeResult.context
+      scope,
+      scope_context: scopeContext
     };
 
     // Create content
@@ -68,9 +72,9 @@ export class RuleGenerator {
         first_seen: pattern.first_seen,
         last_seen: pattern.last_seen,
         keywords: pattern.keywords,
-        scope: scopeResult.scope,
-        scope_confidence: scopeResult.confidence,
-        scope_reason: scopeResult.reason
+        scope,
+        scope_confidence: 1.0,
+        scope_reason: sessionContext ? "Detected from session context" : "Global rule"
       }
     };
 

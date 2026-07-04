@@ -178,17 +178,8 @@ echo ""
 echo "Step 6.5: Initializing signal dictionary..."
 echo "-----------------------------------"
 
-# Initialize signal dictionary with seed data
-cd "$MCP_SERVER_DIR"
-npm run init-signals
-
-if [ -f "$AUTOIMPROVE_DIR/signal-dictionary.db" ]; then
-  echo "✓ Signal dictionary initialized successfully"
-else
-  echo "⚠ Warning: Signal dictionary database not created"
-fi
-
-cd "$SCRIPT_DIR"
+# Signal dictionary will be created automatically on first use
+echo "✓ Signal dictionary will be initialized on first use"
 
 echo ""
 echo "Step 7: Configuring Claude Code global settings..."

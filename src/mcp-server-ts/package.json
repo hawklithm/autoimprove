@@ -14,8 +14,7 @@
     "test:watch": "vitest",
     "test:ui": "vitest --ui",
     "lint": "eslint src --ext .ts",
-    "typecheck": "tsc --noEmit",
-    "init-signals": "tsx scripts/init-signals.ts"
+    "typecheck": "tsc --noEmit"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.104.1",

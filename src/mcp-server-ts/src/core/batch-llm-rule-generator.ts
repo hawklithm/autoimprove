@@ -18,7 +18,6 @@ import { Pattern, RuleIndexEntry, RuleContent, Scene, Priority } from "./models.
 import { PatternSimilarityClusterer, PatternClusterGroup } from "./pattern-similarity-clusterer.js";
 import { RuleGenerator } from "./rule-generator.js";
 import { logger } from "./logger.js";
-import { JsonSanitizer } from "./json-sanitizer.js";
 import { LLMPromptBuilder, PromptEvidence } from "./llm-prompt-builder.js";
 import { appendFileSync } from "fs";
 import { homedir } from "os";
@@ -351,7 +350,7 @@ export class BatchLLMRuleGenerator {
 
       // Sanitize control characters and unescaped quotes in JSON strings
       // This handles unescaped newlines, tabs, nested quotes (Python docstrings), etc.
-      jsonStr = JsonSanitizer.sanitize(jsonStr);
+      jsonStr = this.sanitizeJson(jsonStr);
 
       let parsed;
       try {
@@ -431,6 +430,19 @@ export class BatchLLMRuleGenerator {
       });
       throw error;
     }
+  }
+
+  /**
+   * Sanitize JSON string to fix common LLM output issues
+   */
+  private sanitizeJson(jsonStr: string): string {
+    return jsonStr
+      // Replace unescaped newlines within strings
+      .replace(/([^\\])\n/g, '$1\\n')
+      // Replace unescaped tabs
+      .replace(/([^\\])\t/g, '$1\\t')
+      // Fix common control characters
+      .replace(/[\x00-\x1F\x7F]/g, '');
   }
 
   /**
