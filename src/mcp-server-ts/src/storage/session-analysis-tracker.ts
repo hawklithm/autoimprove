@@ -7,6 +7,7 @@
 import { readFileSync, writeFileSync, existsSync, renameSync } from "fs";
 import { join } from "path";
 import { homedir } from "os";
+import { logger } from "./../core/logger.js";
 
 export interface SessionAnalysisRecord {
   session_id: string;
@@ -59,7 +60,7 @@ export class SessionAnalysisTracker {
       const data = readFileSync(this.stateFilePath, "utf-8");
       return JSON.parse(data) as AnalysisTrackerState;
     } catch (error) {
-      // console.error("Failed to load analysis tracker state, creating new:", error);
+      logger.consoleError("Failed to load analysis tracker state, creating new:", error);
       return {
         version: "1.0",
         last_updated: new Date().toISOString(),

@@ -10,6 +10,7 @@ import { readFileSync, writeFileSync, existsSync, statSync, mkdirSync } from "fs
 import { join } from "path";
 import { homedir } from "os";
 import { SessionData } from "../core/jsonl-parser.js";
+import { logger } from "./../core/logger.js";
 
 /**
  * Compact cache data structure
@@ -124,7 +125,7 @@ export class CompactCacheManager {
       return false;
     } catch (error) {
       // Cache file is corrupted
-      // console.error(`Cache file corrupted for ${sessionFile}:`, error);
+      logger.consoleError(`Cache file corrupted for ${sessionFile}:`, error);
       return true;
     }
   }
@@ -206,7 +207,7 @@ export class CompactCacheManager {
       const cache = JSON.parse(readFileSync(cacheFile, "utf-8")) as CompactCache;
       return cache;
     } catch (error) {
-      // console.error(`Failed to load cache for ${sessionFile}:`, error);
+      logger.consoleError(`Failed to load cache for ${sessionFile}:`, error);
       return null;
     }
   }

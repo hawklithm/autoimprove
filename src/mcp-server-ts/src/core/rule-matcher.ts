@@ -4,7 +4,7 @@
  * Matches rules to current scene based on scene overlap, confidence, and keywords.
  */
 
-import { Scene, RuleIndexEntry, RuleMatch } from "./models.js";
+import { Scene, RuleIndexEntry, RuleMatch, RuleScope } from "./models.js";
 import { RuleIndexManager } from "../storage/rule-index.js";
 
 export class RuleMatcher {
@@ -16,19 +16,35 @@ export class RuleMatcher {
     private minConfidence: number = 0.3
   ) {}
 
-  matchRules(scene: Scene, keywords?: string[]): RuleMatch[] {
+  matchRules(
+    scene: Scene,
+    keywords?: string[],
+    maxResults?: number,
+    minConfidence?: number,
+    scopeFilter?: {
+      scopes?: RuleScope[];
+      current_project?: string;
+      organization_id?: string;
+    }
+  ): RuleMatch[] {
     // Check cache
-    const cacheKey = this.getCacheKey(scene, keywords);
+    const cacheKey = this.getCacheKey(scene, keywords, scopeFilter);
     if (this.matchCache.has(cacheKey)) {
       return this.matchCache.get(cacheKey)!;
     }
 
     // Load all rules
-    const allRules = this.indexManager.listRules({ minConfidence: this.minConfidence });
+    const effectiveMinConfidence = minConfidence ?? this.minConfidence;
+    const allRules = this.indexManager.listRules({ minConfidence: effectiveMinConfidence });
 
     // Calculate relevance for each rule
     const matches: RuleMatch[] = [];
     for (const rule of allRules) {
+      // Apply scope filtering
+      if (scopeFilter && !this.matchesScope(rule, scopeFilter)) {
+        continue;
+      }
+
       const { relevance, reason } = this.calculateRelevance(rule, scene, keywords);
       if (relevance > 0) {
         matches.push({
@@ -43,12 +59,60 @@ export class RuleMatcher {
     const sortedMatches = this.sortMatches(matches);
 
     // Limit results
-    const limitedMatches = sortedMatches.slice(0, this.maxResults);
+    const effectiveMaxResults = maxResults ?? this.maxResults;
+    const limitedMatches = sortedMatches.slice(0, effectiveMaxResults);
 
     // Cache results
     this.matchCache.set(cacheKey, limitedMatches);
 
     return limitedMatches;
+  }
+
+  /**
+   * Check if rule matches scope filter
+   */
+  private matchesScope(
+    rule: RuleIndexEntry,
+    scopeFilter: {
+      scopes?: RuleScope[];
+      current_project?: string;
+      organization_id?: string;
+    }
+  ): boolean {
+    // If no scope specified, default to GLOBAL
+    const ruleScope = rule.scope || RuleScope.GLOBAL;
+
+    // If no scopes filter provided, allow all
+    if (!scopeFilter.scopes || scopeFilter.scopes.length === 0) {
+      return true;
+    }
+
+    // Check if rule scope is in allowed scopes
+    if (!scopeFilter.scopes.includes(ruleScope)) {
+      return false;
+    }
+
+    // For PROJECT scope, match project context
+    if (ruleScope === RuleScope.PROJECT) {
+      if (!scopeFilter.current_project || !rule.scope_context?.project_path) {
+        return false;
+      }
+      // Match project path (exact or substring)
+      return rule.scope_context.project_path === scopeFilter.current_project ||
+             scopeFilter.current_project.includes(rule.scope_context.project_path) ||
+             rule.scope_context.project_path.includes(scopeFilter.current_project);
+    }
+
+    // For ORGANIZATION scope, match organization context
+    if (ruleScope === RuleScope.ORGANIZATION) {
+      if (!scopeFilter.organization_id || !rule.scope_context?.organization_id) {
+        return true; // Allow if no specific org context
+      }
+      return rule.scope_context.organization_id === scopeFilter.organization_id;
+    }
+
+    // GLOBAL scope always matches
+    return true;
   }
 
   private calculateRelevance(
@@ -162,10 +226,21 @@ export class RuleMatcher {
     });
   }
 
-  private getCacheKey(scene: Scene, keywords?: string[]): string {
+  private getCacheKey(
+    scene: Scene,
+    keywords?: string[],
+    scopeFilter?: {
+      scopes?: RuleScope[];
+      current_project?: string;
+      organization_id?: string;
+    }
+  ): string {
     const sceneStr = `${scene.tech.sort().join(",")}|${scene.functional.sort().join(",")}|${scene.business.sort().join(",")}`;
     const kwStr = keywords ? keywords.sort().join(",") : "";
-    return `${sceneStr}#${kwStr}`;
+    const scopeStr = scopeFilter
+      ? `${(scopeFilter.scopes || []).sort().join(",")}|${scopeFilter.current_project || ""}|${scopeFilter.organization_id || ""}`
+      : "";
+    return `${sceneStr}#${kwStr}#${scopeStr}`;
   }
 
   private countSetIntersection(arr1: string[], arr2: string[]): number {

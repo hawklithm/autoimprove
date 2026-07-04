@@ -38,7 +38,7 @@ import { AdaptiveSessionAnalyzer } from "./core/adaptive-session-analyzer.js";
 import { RuleDeduplicator, DeduplicationResult } from "./core/rule-deduplicator.js";
 import { RuleCleanupService } from "./core/rule-cleanup-service.js";
 import { logger } from "./core/logger.js";
-import { createScene, PatternType } from "./core/models.js";
+import { createScene, PatternType, RuleScope } from "./core/models.js";
 import { existsSync } from "fs";
 import { SERVER_INSTRUCTIONS_UNIFIED, SERVER_INSTRUCTIONS_EMPTY } from "./mcp-instructions.js";
 import { ProactiveRuleResourceProvider } from "./resources/proactive-rules.js";
@@ -59,6 +59,47 @@ function parseCommaSeparated(input: string | undefined): string[] | undefined {
     .map(s => s.trim())
     .filter(s => s.length > 0);
   return items.length > 0 ? items : undefined;
+}
+
+/**
+ * Parse scope filter from search parameters
+ */
+function parseScopeFilter(
+  scopesStr: string | undefined,
+  currentProject: string | undefined,
+  organizationId: string | undefined
+): { scopes: RuleScope[]; current_project?: string; organization_id?: string } | undefined {
+  // Auto-detect current project if not provided
+  const projectPath = currentProject || process.cwd();
+
+  // Parse scope list, default to all scopes
+  let scopes: RuleScope[];
+  if (scopesStr) {
+    const scopeNames = parseCommaSeparated(scopesStr) || [];
+    scopes = scopeNames
+      .map(s => {
+        const normalized = s.toLowerCase();
+        if (normalized === "global") return RuleScope.GLOBAL;
+        if (normalized === "organization") return RuleScope.ORGANIZATION;
+        if (normalized === "project") return RuleScope.PROJECT;
+        return null;
+      })
+      .filter((s): s is RuleScope => s !== null);
+  } else {
+    // Default: include all scopes
+    scopes = [RuleScope.GLOBAL, RuleScope.ORGANIZATION, RuleScope.PROJECT];
+  }
+
+  // If scopes is empty after parsing, include all
+  if (scopes.length === 0) {
+    scopes = [RuleScope.GLOBAL, RuleScope.ORGANIZATION, RuleScope.PROJECT];
+  }
+
+  return {
+    scopes,
+    current_project: projectPath,
+    organization_id: organizationId
+  };
 }
 
 let indexManager: RuleIndexManager;
@@ -233,7 +274,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
       },
       {
         name: "search_knowledge",
-        description: `Search rules by scene, keywords, or ID. Use this to find applicable coding patterns before implementing.
+        description: `Search rules by scene, keywords, or ID with scope-based filtering. Use this to find applicable coding patterns before implementing.
 
 Usage patterns:
 1. Search by scene (tech stack + functional domain):
@@ -247,6 +288,14 @@ Usage patterns:
 
 4. Combined scene + keywords:
    scene_json: '{"tech":["python"],"functional":["database"]}', keywords: "orm,query"
+
+5. Scope-aware search (automatically includes global + organization + current project):
+   current_project: "/path/to/project", organization_id: "mycompany"
+
+Scope filtering:
+- GLOBAL: Universal programming patterns (always included by default)
+- ORGANIZATION: Company-specific frameworks/conventions (included if organization_id matches)
+- PROJECT: Project-specific rules (included if current_project matches)
 
 Scene structure:
 - tech: Array of technology keywords (e.g., ["react","vue","python","typescript","java"])
@@ -264,7 +313,7 @@ Auto-feedback: When rules match, automatically records "used" feedback unless sk
 - React auth: '{"tech":["react","typescript"],"functional":["auth"]}'
 - Python API: '{"tech":["python"],"functional":["api","validation"]}'
 - General validation: '{"tech":[],"functional":["validation"]}'
-- Empty scene: '{"tech":[],"functional":[],"business":[]}'
+- Empty scene:"tech":[],"functional":[],"business":[]}'
 
 All fields are arrays. Null/undefined/non-array values are normalized to []. Scene detection is case-insensitive.`,
             },
@@ -284,6 +333,21 @@ Keywords are matched against rule descriptions, titles, and content. Use specifi
             skip_feedback: {
               type: "boolean",
               description: `Set to true to skip automatic "used" feedback recording. Default: false. Only use when browsing rules without applying them (e.g., listing all rules for review). Normal searches should record feedback to improve confidence scores.`,
+            },
+            current_project: {
+              type: "string",
+              description: `Current project path for PROJECT scope filtering. Automatically detects from CWD if not provided. Example: "/Users/name/workspace/myproject"`,
+            },
+            organization_id: {
+              type: "string",
+              description: `Organization identifier for ORGANIZATION scope filtering. Example: "mycompany", "github.com/myorg". If not provided, organization-scoped rules will still match if they have no specific organization_id constraint.`,
+            },
+            scopes: {
+              type: "string",
+              description: `Comma-separated list of scopes to include: "global", "organization", "project". Default: "global,organization,project" (all scopes). Examples:
+- "global" - Only universal patterns
+- "global,project" - Universal + current project rules
+- "organization,project" - Organization + project rules (no global)`,
             },
           },
         },
@@ -1330,6 +1394,9 @@ async function handleSearchKnowledge(args: any) {
   const keywords = args.keywords as string | undefined;
   const ruleId = args.rule_id as string | undefined;
   const skipFeedback = args.skip_feedback === true;
+  const currentProject = args.current_project as string | undefined;
+  const organizationId = args.organization_id as string | undefined;
+  const scopesStr = args.scopes as string | undefined;
 
   // Search by ID
   if (ruleId) {
@@ -1379,12 +1446,15 @@ async function handleSearchKnowledge(args: any) {
     }
   }
 
+  // Parse scope filter
+  const scopeFilter = parseScopeFilter(scopesStr, currentProject, organizationId);
+
   // Search by scene
   if (sceneJson) {
     const parsedScene = JSON.parse(sceneJson);
     const scene = createScene(parsedScene); // Normalize to ensure all fields exist
     const kwList = parseCommaSeparated(keywords);
-    const matches = matcher.matchRules(scene, kwList);
+    const matches = matcher.matchRules(scene, kwList, undefined, undefined, scopeFilter);
 
     // 🆕 Auto-record feedback for matched rules
     if (!skipFeedback && matches.length > 0) {
@@ -1405,6 +1475,7 @@ async function handleSearchKnowledge(args: any) {
       logger.info("feedback", `Auto-recorded ${matches.length} rule queries`, {
         scene: sceneContext,
         keywords: kwList,
+        scope_filter: scopeFilter,
       });
     }
 

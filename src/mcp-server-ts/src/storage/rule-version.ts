@@ -8,6 +8,7 @@ import { readFileSync, writeFileSync, existsSync, mkdirSync, readdirSync } from 
 import { join } from "path";
 import { homedir } from "os";
 import { RuleContent } from "../core/models.js";
+import { logger } from "./../core/logger.js";
 
 export interface RuleVersion {
   id: string;
@@ -297,7 +298,7 @@ export class RuleVersionControl {
           const fs = require("fs");
           fs.unlinkSync(filePath);
         } catch (err) {
-          // console.error(`Failed to delete ${filePath}:`, err);
+          logger.consoleError(`Failed to delete ${filePath}:`, err);
         }
       }
 
@@ -306,7 +307,7 @@ export class RuleVersionControl {
         const fs = require("fs");
         fs.rmdirSync(ruleDir);
       } catch (err) {
-        // console.error(`Failed to delete directory ${ruleDir}:`, err);
+        logger.consoleError(`Failed to delete directory ${ruleDir}:`, err);
       }
     }
   }

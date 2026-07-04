@@ -14,6 +14,7 @@ import { PatternClusterer } from "./pattern-clusterer.js";
 import { LLMRuleGenerator } from "./llm-rule-generator.js";
 import { SignalDictionaryDB } from "../storage/signal-dictionary-db.js";
 import { statSync } from "fs";
+import { logger } from "./logger.js";
 
 export interface AdaptiveAnalysisOptions {
   incremental?: boolean;
@@ -98,7 +99,7 @@ export class AdaptiveSessionAnalyzer {
       if (!hasChanged) {
         const cached = this.cacheManager.getCached(sessionId);
         if (cached) {
-          // console.error(`Using cached analysis for session ${sessionId}`);
+          logger.consoleError(`Using cached analysis for session ${sessionId}`);
           return {
             patterns: cached.cached_patterns,
             signal_matches: {
@@ -132,7 +133,7 @@ export class AdaptiveSessionAnalyzer {
       enableRuleGeneration: boolean;
     }
   ): Promise<AdaptiveAnalysisResult> {
-    // console.error(`Performing adaptive analysis for session ${sessionData.session_id}`);
+    logger.consoleError(`Performing adaptive analysis for session ${sessionData.session_id}`);
 
     const userMessages = this.getUserMessages(sessionData);
     const patterns: Pattern[] = [];
@@ -171,14 +172,14 @@ export class AdaptiveSessionAnalyzer {
     const matchedCount = matchResults.filter(r => r.is_matched).length;
     const matchRate = userMessages.length > 0 ? matchedCount / userMessages.length : 0;
 
-    // console.error(`Signal matching: ${matchedCount}/${userMessages.length} messages matched (${(matchRate * 100).toFixed(1)}%)`);
+    logger.consoleError(`Signal matching: ${matchedCount}/${userMessages.length} messages matched (${(matchRate * 100).toFixed(1)}%)`);
 
     // Step 2: Extract new signals from unmatched content (optional)
     let extractionResult;
     if (options.enableSignalExtraction && unmatchedContent.length > 0) {
-      // console.error(`Extracting signals from ${unmatchedContent.length} unmatched messages...`);
+      logger.consoleError(`Extracting signals from ${unmatchedContent.length} unmatched messages...`);
       extractionResult = await this.signalExtractor.extractSignals(unmatchedContent);
-      // console.error(`✓ Extracted ${extractionResult.new_signals_added} new signals`);
+      logger.consoleError(`✓ Extracted ${extractionResult.new_signals_added} new signals`);
 
       // Rebuild signal matcher with new signals
       this.signalMatcher.rebuild();
@@ -224,7 +225,7 @@ export class AdaptiveSessionAnalyzer {
       const clusters = this.clusterer.clusterPatterns(labeledContent);
       const clusterStats = this.clusterer.getClusterStats(clusters);
 
-      // console.error(`✓ Created ${clusters.length} pattern clusters`);
+      logger.consoleError(`✓ Created ${clusters.length} pattern clusters`);
       clusteringResult = {
         total_clusters: clusters.length,
         avg_cluster_size: clusterStats.avg_cluster_size
@@ -238,13 +239,13 @@ export class AdaptiveSessionAnalyzer {
         );
 
         if (highQualityClusters.length > 0) {
-          // console.error(`Generating rules from ${highQualityClusters.length} clusters...`);
+          logger.consoleError(`Generating rules from ${highQualityClusters.length} clusters...`);
           const generatedRules = await this.ruleGenerator.batchGenerateRules(
             highQualityClusters,
             1
           );
 
-          // console.error(`✓ Generated ${generatedRules.length} rules`);
+          logger.consoleError(`✓ Generated ${generatedRules.length} rules`);
 
           return {
             patterns,

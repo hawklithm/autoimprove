@@ -4,6 +4,7 @@
 
 import AhoCorasick from "aho-corasick";
 import { SignalDictionaryDB, SignalEntry } from "../storage/signal-dictionary-db.js";
+import { logger } from "./logger.js";
 
 export interface MatchedSignal {
   signal_text: string;
@@ -45,7 +46,7 @@ export class SignalMatcher {
     const signals = this.db.getAllSignals();
 
     if (signals.length === 0) {
-      // console.error("Warning: Signal dictionary is empty. Run initialization first.");
+      logger.consoleError("Warning: Signal dictionary is empty. Run initialization first.");
       return;
     }
 
@@ -64,7 +65,7 @@ export class SignalMatcher {
     this.ac = new AhoCorasick(patterns);
     this.lastBuildTime = Date.now();
 
-    // console.error(`Built signal matcher with ${patterns.length} patterns`);
+    logger.consoleError(`Built signal matcher with ${patterns.length} patterns`);
   }
 
   /**

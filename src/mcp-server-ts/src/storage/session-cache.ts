@@ -10,6 +10,7 @@ import { existsSync, readFileSync, writeFileSync, statSync } from "fs";
 import { createHash } from "crypto";
 import { CACHE_DIR } from "./init.js";
 import { Pattern } from "../core/models.js";
+import { logger } from "./../core/logger.js";
 
 export interface SessionCacheEntry {
   session_id: string;
@@ -63,7 +64,7 @@ export class SessionCacheManager {
 
       return `sha256:${hash}`;
     } catch (error) {
-      // console.error(`Failed to compute hash for ${filePath}:`, error);
+      logger.consoleError(`Failed to compute hash for ${filePath}:`, error);
       return null;
     }
   }
@@ -251,7 +252,7 @@ export class SessionCacheManager {
       const data = readFileSync(CACHE_INDEX_PATH, "utf-8");
       return JSON.parse(data) as SessionCacheIndex;
     } catch (error) {
-      // console.error("Failed to load session cache index:", error);
+      logger.consoleError("Failed to load session cache index:", error);
       return {
         version: "1.0",
         sessions: {},
@@ -263,7 +264,7 @@ export class SessionCacheManager {
     try {
       writeFileSync(CACHE_INDEX_PATH, JSON.stringify(this.index, null, 2));
     } catch (error) {
-      // console.error("Failed to save session cache index:", error);
+      logger.consoleError("Failed to save session cache index:", error);
     }
   }
 

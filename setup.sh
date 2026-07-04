@@ -281,8 +281,33 @@ if grep -q "autoimprove-feedback-instructions.md" "$GLOBAL_CLAUDE_MD" 2>/dev/nul
 fi
 
 echo ""
-echo "Step 8: Rebuilding and Restarting MCP Server..."
+echo "Step 8: Stopping MCP Server and Rebuilding..."
 echo "-----------------------------------"
+
+# Kill MCP server processes BEFORE rebuilding to avoid file locks
+echo "Stopping any running autoimprove MCP server processes..."
+
+# Method 1: Kill processes matching our server path
+AUTOIMPROVE_PIDS=$(pgrep -f "$MCP_SERVER_DIR/dist/index.js" 2>/dev/null || true)
+if [ -n "$AUTOIMPROVE_PIDS" ]; then
+  echo "  Found autoimprove MCP processes: $AUTOIMPROVE_PIDS"
+  for pid in $AUTOIMPROVE_PIDS; do
+    echo "  Stopping PID $pid..."
+    kill $pid 2>/dev/null || true
+  done
+  sleep 2
+
+  # Force kill if still running
+  REMAINING=$(pgrep -f "$MCP_SERVER_DIR/dist/index.js" 2>/dev/null || true)
+  if [ -n "$REMAINING" ]; then
+    echo "  Force killing remaining processes: $REMAINING"
+    kill -9 $REMAINING 2>/dev/null || true
+    sleep 1
+  fi
+  echo "✓ Stopped autoimpr MCP server processes"
+else
+  echo "  No running autoimprove MCP processes found"
+fi
 
 # Rebuild server to pick up latest code changes
 echo "Rebuilding MCP server (ensures latest instructions/resources)..."
@@ -296,11 +321,6 @@ fi
 echo "✓ MCP server rebuilt successfully"
 
 cd "$SCRIPT_DIR"
-
-# Method 1: Kill any existing autoimprove MCP server processes
-echo "Stopping any running autoimprove MCP server processes..."
-pkill -f "node.*autoimprove.*dist/index.js" 2>/dev/null || true
-sleep 1
 
 # Method 2: Remove and re-add the MCP server to force Claude Code to reload
 echo "Forcing MCP server reload..."

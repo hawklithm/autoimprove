@@ -237,6 +237,71 @@ export class StructuredLogger {
     }
     this.flush();
   }
+
+  /**
+   * Console.error replacement - logs to file instead
+   */
+  consoleError(...args: any[]): void {
+    const message = args.map(arg => {
+      if (typeof arg === 'string') return arg;
+      if (arg instanceof Error) return `${arg.name}: ${arg.message}`;
+      try {
+        return JSON.stringify(arg);
+      } catch {
+        return String(arg);
+      }
+    }).join(' ');
+
+    this.error("console", message);
+  }
+
+  /**
+   * Console.log replacement - logs to file instead
+   */
+  consoleLog(...args: any[]): void {
+    const message = args.map(arg => {
+      if (typeof arg === 'string') return arg;
+      try {
+        return JSON.stringify(arg);
+      } catch {
+        return String(arg);
+      }
+    }).join(' ');
+
+    this.info("console", message);
+  }
+
+  /**
+   * Console.warn replacement - logs to file instead
+   */
+  consoleWarn(...args: any[]): void {
+    const message = args.map(arg => {
+      if (typeof arg === 'string') return arg;
+      try {
+        return JSON.stringify(arg);
+      } catch {
+        return String(arg);
+      }
+    }).join(' ');
+
+    this.warn("console", message);
+  }
+
+  /**
+   * Console.debug replacement - logs to file instead
+   */
+  consoleDebug(...args: any[]): void {
+    const message = args.map(arg => {
+      if (typeof arg === 'string') return arg;
+      try {
+        return JSON.stringify(arg);
+      } catch {
+        return String(arg);
+      }
+    }).join(' ');
+
+    this.debug("console", message);
+  }
 }
 
 // Export singleton instance

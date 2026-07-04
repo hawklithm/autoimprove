@@ -10,6 +10,7 @@
 import { Pattern, RuleIndexEntry, RuleContent, Scene, CodeExample } from "./models.js";
 import { RuleGenerator } from "./rule-generator.js";
 import { CodeExampleExtractor } from "./code-example-extractor.js";
+import { logger } from "./logger.js";
 import Anthropic from "@anthropic-ai/sdk";
 import { appendFileSync } from "fs";
 import { homedir } from "os";
@@ -75,7 +76,7 @@ export class HybridRuleGenerator {
       try {
         enhancedContent = await this.enhanceWithLLM(pattern, basicRule.content, ruleId);
       } catch (error) {
-        // console.error(`LLM enhancement failed for ${ruleId}, using basic content:`, error);
+        logger.warn("hybrid-generation", `LLM enhancement failed for ${ruleId}, using basic content`, { error: error instanceof Error ? error.message : String(error) });
         enhancedContent = basicRule.content;
       }
     } else {
@@ -96,7 +97,7 @@ export class HybridRuleGenerator {
           );
         }
       } catch (error) {
-        // console.error(`Code example extraction failed for ${ruleId}:`, error);
+        logger.warn("hybrid-generation", `Code example extraction failed for ${ruleId}`, { error: error instanceof Error ? error.message : String(error) });
       }
     }
 
@@ -105,7 +106,7 @@ export class HybridRuleGenerator {
 
     // Downgrade confidence for low-quality rules
     if (qualityScore < 0.5) {
-      // console.error(`⚠️  Rule ${ruleId} has low quality score: ${qualityScore.toFixed(2)}`);
+      logger.warn("hybrid-generation", `⚠️  Rule ${ruleId} has low quality score: ${qualityScore.toFixed(2)}`);
       basicRule.indexEntry.confidence = Math.min(
         basicRule.indexEntry.confidence,
         0.4 + qualityScore * 0.2  // Cap at 0.4-0.5 for low quality
@@ -155,21 +156,37 @@ export class HybridRuleGenerator {
       if (!shouldGenerate) {
         // Track filtering reasons for diagnostics
         filteredReasons[reason] = (filteredReasons[reason] || 0) + 1;
+
+        // Log first 3 filtered patterns for debugging
+        if (i < 3) {
+          logger.debug("hybrid-generation", `✗ Filtered pattern ${i}: ${reason}`);
+          logger.debug("hybrid-generation", `  Type: ${pattern.type}, Confidence: ${pattern.confidence}, Occurrences: ${pattern.occurrences.length}`);
+        }
         continue;
       }
 
       const rule = await this.generateEnhancedRule(pattern, ruleId, scene, options);
       rules.push(rule);
 
-      // console.error(`✓ Generated enhanced rule ${ruleId}: ${rule.content.title || pattern.description}`);
+      logger.info("hybrid-generation", `✓ Generated enhanced rule ${ruleId}: ${rule.content.title || pattern.description}`);
     }
 
     // Log filtering statistics
     if (Object.keys(filteredReasons).length > 0) {
-      console.error(`\n⚠️  Filtered ${patterns.length - rules.length} patterns:`);
+      logger.info("hybrid-generation", `\n=== Rule Filtering Statistics ===`);
+      logger.info("hybrid-generation", `Total patterns: ${patterns.length}`);
+      logger.info("hybrid-generation", `Rules generated: ${rules.length}`);
+      logger.info("hybrid-generation", `Patterns filtered: ${patterns.length - rules.length}`);
+      logger.info("hybrid-generation", `Filtering reasons:`);
       for (const [reason, count] of Object.entries(filteredReasons)) {
-        console.error(`   • ${reason}: ${count}`);
+        logger.info("hybrid-generation", `  - ${reason}: ${count} patterns`);
       }
+
+      logger.warn(
+        "rule-generation",
+        `Filtered ${patterns.length - rules.length} patterns`,
+        { filtered_reasons: filteredReasons }
+      );
     }
 
     return rules;
@@ -202,7 +219,7 @@ export class HybridRuleGenerator {
       `Model: ${model}, Max tokens: ${maxTokens}\n` +
       `Prompt (${prompt.length} chars):\n${prompt.slice(0, 500)}...\n`;
 
-    // console.error(requestLog);
+    logger.debug("hybrid-generation", "LLM request sent", { rule_id: ruleId, model, max_tokens: maxTokens, prompt_length: prompt.length });
     appendFileSync(LLM_LOG_FILE, requestLog, "utf8");
 
     const response = await this.anthropic.messages.create({
@@ -217,7 +234,7 @@ export class HybridRuleGenerator {
     const responseText = response.content[0].type === "text" ? response.content[0].text : "";
 
     const responseLog = `[${new Date().toISOString()}] [LLM] Response received (${responseText.length} chars):\n${responseText.slice(0, 500)}...\n`;
-    // console.error(responseLog);
+    logger.debug("hybrid-generation", "LLM response received", { rule_id: ruleId, response_length: responseText.length });
     appendFileSync(LLM_LOG_FILE, responseLog, "utf8");
 
     const enhanced = this.parseEnhancedResponse(responseText);
@@ -368,8 +385,16 @@ Be specific and actionable.`;
         related_patterns: parsed.related_patterns
       };
     } catch (error) {
-      // console.error("Failed to parse enhanced response:", error);
-      // console.error("Response was:", response);
+      // Log detailed error information with full response string
+      const errorLog = `\n[${new Date().toISOString()}] [LLM] JSON Parse Error\n` +
+        `Error: ${error instanceof Error ? error.message : String(error)}\n` +
+        `=== FULL RESPONSE STRING (${response.length} chars) ===\n` +
+        `${response}\n` +
+        `=== END RESPONSE ===\n`;
+
+      logger.consoleError(errorLog);
+      appendFileSync(LLM_LOG_FILE, errorLog, "utf8");
+
       throw error;
     }
   }

@@ -11,6 +11,7 @@ import { ConfidenceCalculator } from "./confidence.js";
 import { SessionCacheManager } from "../storage/session-cache.js";
 import { CompactCacheManager } from "../storage/compact-cache.js";
 import { statSync } from "fs";
+import { logger } from "./logger.js";
 
 export class SessionAnalyzer {
   private parser: JSONLParser;
@@ -48,7 +49,7 @@ export class SessionAnalyzer {
         // No changes, return cached patterns
         const cached = this.cacheManager.getCached(sessionId);
         if (cached) {
-          // console.error(`Using cached analysis for session ${sessionId}`);
+          logger.consoleError(`Using cached analysis for session ${sessionId}`);
           return cached.cached_patterns;
         }
       }
@@ -67,7 +68,7 @@ export class SessionAnalyzer {
    * Perform full analysis on entire session
    */
   private performFullAnalysis(sessionFile: string, sessionData: SessionData): Pattern[] {
-    // console.error(`Performing full analysis for session ${sessionData.session_id}`);
+    logger.consoleLog(`Performing full analysis for session ${sessionData.session_id}`);
 
     // Detect all pattern types
     const patterns: Pattern[] = [
@@ -104,7 +105,7 @@ export class SessionAnalyzer {
     const sessionId = sessionData.session_id;
     const resumePoint = this.cacheManager.getResumePoint(sessionId);
 
-    // console.error(`Performing incremental analysis for session ${sessionId} from line ${resumePoint}`);
+    logger.consoleError(`Performing incremental analysis for session ${sessionId} from line ${resumePoint}`);
 
     // Filter to only new messages and tool calls
     const newMessages = sessionData.messages.filter(m => m.line_number > resumePoint);
@@ -392,7 +393,7 @@ export class SessionAnalyzer {
           occurrences: [
             {
               ...this.createOccurrence(sessionData, msg, "explicit_correction"),
-              performance_improved: true
+              performance_improved: true  // Hardcoded: actual performance validation not implemented
             }
           ],
           first_seen: msg.timestamp || new Date().toISOString(),

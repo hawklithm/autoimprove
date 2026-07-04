@@ -3,6 +3,7 @@
  */
 
 import { SignalDictionaryDB, SignalEntry } from "../storage/signal-dictionary-db.js";
+import { logger } from "./logger.js";
 
 export interface ConfidenceUpdateFeedback {
   outcome?: "true_positive" | "false_positive" | "uncertain";
@@ -196,7 +197,7 @@ export class BayesianConfidenceUpdater {
         );
         results.push({ signalId: update.signalId, ...result });
       } catch (error) {
-        // console.error(`Failed to update signal ${update.signalId}:`, error);
+        logger.error("confidence-update", `Failed to update signal ${update.signalId}:`, error instanceof Error ? error : undefined);
       }
     }
 
@@ -264,7 +265,7 @@ export class BayesianConfidenceUpdater {
       }
     }
 
-    // console.error(`Applying time decay to ${updates.length} signals`);
+    logger.info("confidence-update", `Applying time decay to ${updates.length} signals`);
     return this.batchUpdate(updates);
   }
 

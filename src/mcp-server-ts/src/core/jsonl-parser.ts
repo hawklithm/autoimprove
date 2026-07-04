@@ -5,6 +5,7 @@
  */
 
 import { readFileSync } from "fs";
+import { logger } from "./logger.js";
 
 export interface Message {
   role: "user" | "assistant" | "system";
@@ -47,7 +48,7 @@ export class JSONLParser {
         const data = JSON.parse(line);
         this.processLine(data, lineNum + 1, messages, toolCalls, metadata);
       } catch (error) {
-        // console.warn(`Warning: Skipping malformed JSON at line ${lineNum + 1}:`, error);
+        logger.warn("jsonl-parser", `Warning: Skipping malformed JSON at line ${lineNum + 1}`, { error: error instanceof Error ? error.message : String(error) });
         continue;
       }
     }

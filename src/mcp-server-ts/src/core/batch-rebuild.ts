@@ -23,6 +23,7 @@ import { RuleContentManager } from "../storage/rule-content.js";
 import { ClaudeIndexExporter } from "../tools/export-rules-to-claude.js";
 import { Pattern, Scene, RuleIndexEntry, RuleContent } from "./models.js";
 import { RuleCleanupService, CleanupReport } from "./rule-cleanup-service.js";
+import { logger } from "./logger.js";
 import { homedir } from "os";
 
 export interface BatchRebuildOptions {
@@ -126,45 +127,45 @@ export class BatchRebuildEngine {
       enhancedRuleOptions = {},
     } = options;
 
-    // console.error("=== AutoImprove Batch Rebuild ===");
-    // console.error(`Mode: ${force ? "FORCE (clear cache)" : incremental ? "INCREMENTAL" : "FULL"}`);
-    // console.error(`Min confidence: ${minConfidence}`);
-    // console.error(`Dry run: ${dryRun}`);
+    logger.info("batch-rebuild", "=== AutoImprove Batch Rebuild ===");
+    logger.debug("batch-rebuild", `Mode: ${force ? "FORCE (clear cache)" : incremental ? "INCREMENTAL" : "FULL"}`);
+    logger.debug("batch-rebuild", `Min confidence: ${minConfidence}`);
+    logger.debug("batch-rebuild", `Dry run: ${dryRun}`);
 
     // Step 1: Clear caches if force mode
     if (force) {
-      // console.error("\n[1/7] Clearing caches...");
+      logger.info("batch-rebuild", "\n[1/7] Clearing caches...");
       this.cacheManager.clearAll();
-      // console.error("✓ Cache cleared");
+      logger.info("batch-rebuild", "✓ Cache cleared");
     }
 
     // Step 2: Discover all session files
-    // console.error("\n[2/7] Discovering session files...");
+    logger.info("batch-rebuild", "\n[2/7] Discovering session files...");
     const allSessionFiles = this.discoverSessionFiles(sessionDir);
-    // console.error(`✓ Found ${allSessionFiles.length} session files`);
+    logger.info("batch-rebuild", `✓ Found ${allSessionFiles.length} session files`);
 
     const sessionFiles = sessionLimit
       ? allSessionFiles.slice(0, sessionLimit)
       : allSessionFiles;
 
     if (sessionLimit) {
-      // console.error(`  (limited to ${sessionLimit} for testing)`);
+      logger.debug("batch-rebuild", `  (limited to ${sessionLimit} for testing)`);
     }
 
     // Step 3: Determine which sessions need analysis
-    // console.error("\n[3/7] Checking cache...");
+    logger.info("batch-rebuild", "\n[3/7] Checking cache...");
     const { toAnalyze, cached } = incremental
       ? this.partitionSessions(sessionFiles)
       : { toAnalyze: sessionFiles, cached: [] };
 
-    // console.error(`✓ Cache hit: ${cached.length}, Cache miss: ${toAnalyze.length}`);
+    logger.info("batch-rebuild", `✓ Cache hit: ${cached.length}, Cache miss: ${toAnalyze.length}`);
     const cacheHitRate = sessionFiles.length > 0
       ? (cached.length / sessionFiles.length) * 100
       : 0;
-    // console.error(`  Cache hit rate: ${cacheHitRate.toFixed(1)}%`);
+    logger.debug("batch-rebuild", `  Cache hit rate: ${cacheHitRate.toFixed(1)}%`);
 
     // Step 4: Analyze new/changed sessions
-    // console.error("\n[4/7] Analyzing sessions...");
+    logger.info("batch-rebuild", "\n[4/7] Analyzing sessions...");
     const newPatterns: Pattern[] = [];
 
     for (let i = 0; i < toAnalyze.length; i++) {
@@ -172,7 +173,7 @@ export class BatchRebuildEngine {
       const sessionId = this.extractSessionId(sessionFile);
 
       try {
-        // console.error(`  [${i + 1}/${toAnalyze.length}] Analyzing ${sessionId}...`);
+        logger.debug("batch-rebuild", `  [${i + 1}/${toAnalyze.length}] Analyzing ${sessionId}...`);
 
         const patterns = this.analyzer.analyzeSession(sessionFile, {
           incremental: false,
@@ -197,23 +198,23 @@ export class BatchRebuildEngine {
           fingerprints
         );
 
-        // console.error(`    ✓ Found ${patterns.length} patterns`);
+        logger.debug("batch-rebuild", `    ✓ Found ${patterns.length} patterns`);
       } catch (error) {
-        // console.error(`    ✗ Error analyzing ${sessionId}:`, error);
+        logger.warn("batch-rebuild", `    ✗ Error analyzing ${sessionId}`, { error: error instanceof Error ? error.message : String(error) });
       }
     }
 
-    // console.error(`✓ Analyzed ${toAnalyze.length} sessions, found ${newPatterns.length} new patterns`);
+    logger.info("batch-rebuild", `✓ Analyzed ${toAnalyze.length} sessions, found ${newPatterns.length} new patterns`);
 
     // Step 5: Merge cached patterns
-    // console.error("\n[5/7] Merging patterns...");
+    logger.info("batch-rebuild", "\n[5/7] Merging patterns...");
     const cachedPatterns = this.extractCachedPatterns(cached);
     const allPatterns = [...cachedPatterns, ...newPatterns];
 
-    // console.error(`✓ Total patterns: ${allPatterns.length} (${cachedPatterns.length} cached + ${newPatterns.length} new)`);
+    logger.info("batch-rebuild", `✓ Total patterns: ${allPatterns.length} (${cachedPatterns.length} cached + ${newPatterns.length} new)`);
 
     // Step 6: Update pattern evolution and calculate enhanced confidence
-    // console.error("\n[6/7] Updating pattern evolution...");
+    logger.info("batch-rebuild", "\n[6/7] Updating pattern evolution...");
     const enhancedPatterns: Pattern[] = [];
 
     for (const pattern of allPatterns) {
@@ -238,12 +239,12 @@ export class BatchRebuildEngine {
       p => p.confidence >= minConfidence
     );
 
-    // console.error(`✓ Enhanced ${enhancedPatterns.length} patterns`);
-    // console.error(`  Qualified (>= ${minConfidence}): ${qualifiedPatterns.length}`);
-    // console.error(`  Filtered out: ${enhancedPatterns.length - qualifiedPatterns.length}`);
+    logger.info("batch-rebuild", `✓ Enhanced ${enhancedPatterns.length} patterns`);
+    logger.debug("batch-rebuild", `  Qualified (>= ${minConfidence}): ${qualifiedPatterns.length}`);
+    logger.debug("batch-rebuild", `  Filtered out: ${enhancedPatterns.length - qualifiedPatterns.length}`);
 
     if (dryRun) {
-      // console.error("\n[DRY RUN] Skipping rule generation");
+      logger.debug("batch-rebuild", "\n[DRY RUN] Skipping rule generation");
       return {
         sessions_analyzed: toAnalyze.length,
         sessions_cached: cached.length,
@@ -257,11 +258,11 @@ export class BatchRebuildEngine {
     }
 
     // Step 7: Generate rules
-    // console.error("\n[7/7] Generating rules...");
+    logger.info("batch-rebuild", "\n[7/7] Generating rules...");
 
     // Clear existing rules
     const existingRules = this.indexManager.getAllRules();
-    // console.error(`  Backing up ${existingRules.length} existing rules...`);
+    logger.debug("batch-rebuild", `  Backing up ${existingRules.length} existing rules...`);
 
     // Get next rule ID
     const nextId = existingRules.length > 0
@@ -275,7 +276,7 @@ export class BatchRebuildEngine {
     let rules: Array<{ indexEntry: RuleIndexEntry; content: RuleContent }>;
 
     if (useBatchLLM) {
-      // console.error(`  Using batch LLM optimization (clustering + intelligent merging)...`);
+      logger.debug("batch-rebuild", `  Using batch LLM optimization (clustering + intelligent merging)...`);
 
       const batchRules = await this.batchLLMGenerator.batchGenerateRules(
         qualifiedPatterns,
@@ -291,9 +292,9 @@ export class BatchRebuildEngine {
       }));
 
       const totalDeduped = batchRules.reduce((sum, r) => sum + r.dedup_count, 0);
-      // console.error(`✓ Generated ${rules.length} rules (deduplicated ${totalDeduped} patterns)`);
+      logger.info("batch-rebuild", `✓ Generated ${rules.length} rules (deduplicated ${totalDeduped} patterns)`);
     } else {
-      // console.error(`  Using standard rule generation...`);
+      logger.debug("batch-rebuild", `  Using standard rule generation...`);
 
       rules = await this.ruleGenerator.batchGenerateEnhancedRules(
         qualifiedPatterns,
@@ -302,7 +303,7 @@ export class BatchRebuildEngine {
         enhancedRuleOptions
       );
 
-      // console.error(`✓ Generated ${rules.length} rules`);
+      logger.info("batch-rebuild", `✓ Generated ${rules.length} rules`);
     }
 
     // Save rules and update evolution with rule IDs
@@ -332,7 +333,7 @@ export class BatchRebuildEngine {
     const skipCleanup = useBatchLLM && !options.forceCleanup;
 
     if (options.autoCleanup && !skipCleanup) {
-      // console.error("\n[8/8] Running auto-cleanup...");
+      logger.debug("batch-rebuild", "\n[8/8] Running auto-cleanup...");
 
       // Load all rules and contents
       const allRules = this.indexManager.getAllRules();
@@ -346,8 +347,8 @@ export class BatchRebuildEngine {
 
       // Scan for issues
       const cleanupReport = this.cleanupService.scanExistingRules(allRules, allContents);
-      // console.error(`  Found ${cleanupReport.duplicateGroups.length} duplicate groups`);
-      // console.error(`  Found ${cleanupReport.lowQualityRules.length} low-quality rules`);
+      logger.debug("batch-rebuild", `  Found ${cleanupReport.duplicateGroups.length} duplicate groups`);
+      logger.debug("batch-rebuild", `  Found ${cleanupReport.lowQualityRules.length} low-quality rules`);
 
       // Execute cleanup
       const cleanupResult = this.cleanupService.executeCleanup(
@@ -369,37 +370,37 @@ export class BatchRebuildEngine {
         optimizedCount = cleanupResult.optimizedCount;
         deletedCount = cleanupResult.deletedCount;
 
-        // console.error(`✓ Cleanup complete:`);
-        // console.error(`  - Merged: ${mergedCount} rules`);
-        // console.error(`  - Optimized: ${optimizedCount} rules`);
-        // console.error(`  - Deleted: ${deletedCount} rules`);
+        logger.info("batch-rebuild", `✓ Cleanup complete:`);
+        logger.debug("batch-rebuild", `  - Merged: ${mergedCount} rules`);
+        logger.debug("batch-rebuild", `  - Optimized: ${optimizedCount} rules`);
+        logger.debug("batch-rebuild", `  - Deleted: ${deletedCount} rules`);
 
         if (cleanupResult.errors.length > 0) {
-          // console.error(`  - Errors: ${cleanupResult.errors.length}`);
+          logger.debug("batch-rebuild", `  - Errors: ${cleanupResult.errors.length}`);
           for (const error of cleanupResult.errors.slice(0, 3)) {
-            // console.error(`    ${error}`);
+            logger.debug("batch-rebuild", `    ${error}`);
           }
         }
       } else {
-        // console.error(`✗ Cleanup failed with ${cleanupResult.errors.length} errors`);
+        logger.debug("batch-rebuild", `✗ Cleanup failed with ${cleanupResult.errors.length} errors`);
       }
     } else if (skipCleanup) {
-      // console.error("\n[8/8] Skipping cleanup (batch LLM already deduplicated)");
+      logger.debug("batch-rebuild", "\n[8/8] Skipping cleanup (batch LLM already deduplicated)");
     }
 
     // Export to Claude index
-    // console.error("\nExporting to Claude index...");
+    logger.debug("batch-rebuild", "\nExporting to Claude index...");
     const exported = this.exporter.export({
       strategy: "category-balanced",
       limit: 10,
       minConfidence: 0.6,
     });
 
-    // console.error(`✓ Exported ${exported.rulesExported} rules to Claude index`);
+    logger.info("batch-rebuild", `✓ Exported ${exported.rulesExported} rules to Claude index`);
 
     const executionTime = Date.now() - startTime;
-    // console.error(`\n=== Rebuild Complete ===`);
-    // console.error(`Execution time: ${(executionTime / 1000).toFixed(1)}s`);
+    logger.info("batch-rebuild", `\n=== Rebuild Complete ===`);
+    logger.debug("batch-rebuild", `Execution time: ${(executionTime / 1000).toFixed(1)}s`);
 
     return {
       sessions_analyzed: toAnalyze.length,
@@ -446,7 +447,7 @@ export class BatchRebuildEngine {
         }
       }
     } catch (error) {
-      // console.error("Error discovering session files:", error);
+      logger.warn("batch-rebuild", "Error discovering session files", { error: error instanceof Error ? error.message : String(error) });
     }
 
     return sessionFiles;

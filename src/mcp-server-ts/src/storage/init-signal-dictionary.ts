@@ -6,6 +6,7 @@ import { SignalDictionaryDB, SignalEntry } from "../storage/signal-dictionary-db
 import { readFileSync } from "fs";
 import { join, dirname } from "path";
 import { fileURLToPath } from "url";
+import { logger } from "./../core/logger.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -16,7 +17,7 @@ export function initializeSignalDictionary() {
   // Check if already initialized
   const stats = db.getDictionaryStats();
   if (stats.total_signals > 0) {
-    // console.error(`Signal dictionary already initialized with ${stats.total_signals} signals`);
+    logger.consoleError(`Signal dictionary already initialized with ${stats.total_signals} signals`);
     db.close();
     return;
   }
@@ -25,7 +26,7 @@ export function initializeSignalDictionary() {
   const seedPath = join(__dirname, "../../../templates/seed-signal-dictionary.json");
   const seedData = JSON.parse(readFileSync(seedPath, "utf-8"));
 
-  // console.error("Initializing signal dictionary with seed data...");
+  logger.consoleError("Initializing signal dictionary with seed data...");
 
   // Transform seed signals to DB format
   const now = new Date().toISOString();
@@ -51,9 +52,9 @@ export function initializeSignalDictionary() {
   db.batchInsertSignals(signals);
 
   const finalStats = db.getDictionaryStats();
-  // console.error(`✓ Initialized signal dictionary with ${finalStats.total_signals} signals`);
-  // console.error(`  By type:`, finalStats.by_type);
-  // console.error(`  By source:`, finalStats.by_source);
+  logger.consoleError(`✓ Initialized signal dictionary with ${finalStats.total_signals} signals`);
+  logger.consoleError(`  By type:`, finalStats.by_type);
+  logger.consoleError(`  By source:`, finalStats.by_source);
 
   db.close();
 }

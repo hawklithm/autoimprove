@@ -12,6 +12,7 @@ import { existsSync, readFileSync, writeFileSync } from "fs";
 import { CACHE_DIR } from "./init.js";
 import { Pattern, PatternType } from "../core/models.js";
 import { createHash } from "crypto";
+import { logger } from "./../core/logger.js";
 
 export interface PatternEvolutionEntry {
   fingerprint: string;
@@ -360,7 +361,7 @@ export class PatternEvolutionManager {
       const data = readFileSync(EVOLUTION_INDEX_PATH, "utf-8");
       return JSON.parse(data) as PatternEvolutionIndex;
     } catch (error) {
-      // console.error("Failed to load pattern evolution index:", error);
+      logger.consoleError("Failed to load pattern evolution index:", error);
       return {
         version: "1.0",
         patterns: {},
@@ -372,7 +373,7 @@ export class PatternEvolutionManager {
     try {
       writeFileSync(EVOLUTION_INDEX_PATH, JSON.stringify(this.index, null, 2));
     } catch (error) {
-      // console.error("Failed to save pattern evolution index:", error);
+      logger.consoleError("Failed to save pattern evolution index:", error);
     }
   }
 }

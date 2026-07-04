@@ -22,7 +22,7 @@ export const PATTERN_STRATEGIES: Record<
 > = {
   [PatternType.REPEATED_CORRECTION]: {
     min_confidence: 0.45,
-    min_occurrences: 2,
+    min_occurrences: 1, // Reduced from 2 to allow batch rebuild to generate rules from single-occurrence patterns
     requires_multiple_sessions: false,
     weight_adjustment: 1.0,
     detect_keywords: []
@@ -30,7 +30,9 @@ export const PATTERN_STRATEGIES: Record<
   [PatternType.ANTI_PATTERN]: {
     min_confidence: 0.45,
     min_occurrences: 1,
-    requires_test_validation: true,
+    // Relaxed: test_passed field requires test output parsing (not implemented)
+    // Without this, anti-pattern rules would never be generated
+    requires_test_validation: false,
     weight_adjustment: 1.0,
     detect_keywords: []
   },
@@ -53,7 +55,9 @@ export const PATTERN_STRATEGIES: Record<
   [PatternType.PERFORMANCE]: {
     min_confidence: 0.4,
     min_occurrences: 1,
-    requires_performance_evidence: true,
+    // Relaxed: performance_improved is currently hardcoded to true when performance
+    // keywords are detected. Real implementation would require benchmark/profiler output parsing
+    requires_performance_evidence: false,
     weight_adjustment: 1.0,
     detect_keywords: [
       "useMemo",

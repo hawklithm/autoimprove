@@ -8,6 +8,7 @@ import { readFileSync, writeFileSync, existsSync, mkdirSync, renameSync } from "
 import { join } from "path";
 import { homedir } from "os";
 import { RuleIndex, RuleIndexEntry, createRuleIndex, createScene } from "../core/models.js";
+import { logger } from "./../core/logger.js";
 
 /**
  * Normalize rule entry to ensure all fields are valid.
@@ -69,7 +70,7 @@ export class RuleIndexManager {
 
       return index;
     } catch (error) {
-      // console.error("Failed to load rule index, returning empty index:", error);
+      logger.consoleError("Failed to load rule index, returning empty index:", error);
       return createRuleIndex();
     }
   }

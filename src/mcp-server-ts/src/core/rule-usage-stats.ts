@@ -11,6 +11,7 @@ import { RuleIndexEntry, PatternType } from "./models.js";
 import { readFileSync, existsSync } from "fs";
 import { join } from "path";
 import { homedir } from "os";
+import { logger } from "./logger.js";
 
 // ============================================================================
 // Types
@@ -380,7 +381,7 @@ export class RuleUsageStatsAnalyzer {
         .filter((line) => line.trim())
         .map((line) => JSON.parse(line) as RuleFeedback);
     } catch (error) {
-      // console.error("Failed to load feedback history:", error);
+      logger.consoleError("Failed to load feedback history:", error);
       this.feedbackHistory = [];
     }
   }

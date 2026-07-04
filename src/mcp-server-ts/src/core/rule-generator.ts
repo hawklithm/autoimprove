@@ -6,21 +6,32 @@
 
 import { Pattern, RuleIndexEntry, RuleContent, Scene } from "./models.js";
 import { RuleClassifier } from "./classifier.js";
+import { ScopeDetector } from "./scope-detector.js";
 
 export class RuleGenerator {
   private classifier: RuleClassifier;
+  private scopeDetector: ScopeDetector;
 
   constructor() {
     this.classifier = new RuleClassifier();
+    this.scopeDetector = new ScopeDetector();
   }
 
   generateRule(
     pattern: Pattern,
     ruleId: string,
-    scene?: Scene
+    scene?: Scene,
+    sessionContext?: {
+      project_path?: string;
+      organization_id?: string;
+      project_id?: string;
+    }
   ): { indexEntry: RuleIndexEntry; content: RuleContent } {
     // Determine priority
     const priority = this.classifier.determinePriority(pattern);
+
+    // Detect scope
+    const scopeResult = this.scopeDetector.detectScope(pattern, sessionContext);
 
     // Generate rule content
     const content = this.generateContent(pattern);
@@ -38,7 +49,9 @@ export class RuleGenerator {
       scenes: scene || { tech: [], functional: [], business: [] },
       keywords: pattern.keywords,
       created_at: now,
-      updated_at: now
+      updated_at: now,
+      scope: scopeResult.scope,
+      scope_context: scopeResult.context
     };
 
     // Create content
@@ -54,7 +67,10 @@ export class RuleGenerator {
         pattern_occurrences: pattern.occurrences.length,
         first_seen: pattern.first_seen,
         last_seen: pattern.last_seen,
-        keywords: pattern.keywords
+        keywords: pattern.keywords,
+        scope: scopeResult.scope,
+        scope_confidence: scopeResult.confidence,
+        scope_reason: scopeResult.reason
       }
     };
 
@@ -64,7 +80,12 @@ export class RuleGenerator {
   batchGenerateRules(
     patterns: Pattern[],
     startId: number,
-    scene?: Scene
+    scene?: Scene,
+    sessionContext?: {
+      project_path?: string;
+      organization_id?: string;
+      project_id?: string;
+    }
   ): Array<{ indexEntry: RuleIndexEntry; content: RuleContent }> {
     const rules: Array<{ indexEntry: RuleIndexEntry; content: RuleContent }> = [];
 
@@ -78,7 +99,7 @@ export class RuleGenerator {
         continue;
       }
 
-      const rule = this.generateRule(pattern, ruleId, scene);
+      const rule = this.generateRule(pattern, ruleId, scene, sessionContext);
       rules.push(rule);
     }
 

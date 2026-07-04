@@ -6,6 +6,7 @@ import Database from "better-sqlite3";
 import { homedir } from "os";
 import { join } from "path";
 import { existsSync, mkdirSync } from "fs";
+import { logger } from "./../core/logger.js";
 
 export interface SignalEntry {
   id?: number;
@@ -161,7 +162,7 @@ export class SignalDictionaryDB {
       CREATE INDEX IF NOT EXISTS idx_signal_matches_session ON signal_matches(session_id);
     `);
 
-    // console.error("Signal dictionary database schema initialized");
+    logger.info("signal-dictionary", "Database schema initialized");
   }
 
   // ============================================================================

@@ -7,6 +7,7 @@
 import { Pattern, PatternOccurrence, CodeExample } from "./models.js";
 import * as fs from "fs";
 import * as path from "path";
+import { logger } from "./logger.js";
 
 interface SessionMessage {
   role: string;
@@ -88,7 +89,7 @@ export class CodeExampleExtractor {
         });
       }
   } catch (error) {
-      // console.error(`Failed to extract examples from ${sessionFile}:`, error);
+      logger.error("code-extraction", `Failed to extract examples from ${sessionFile}:`, error instanceof Error ? error : undefined);
     }
 
     return examples;

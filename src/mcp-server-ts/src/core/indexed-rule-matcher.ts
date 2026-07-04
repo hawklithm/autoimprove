@@ -4,7 +4,7 @@
  * Uses inverted indexes to accelerate rule matching queries.
  */
 
-import { Scene, RuleIndexEntry } from "./models.js";
+import { Scene, RuleIndexEntry, RuleScope } from "./models.js";
 import { RuleIndexManager } from "../storage/rule-index.js";
 
 export interface RuleMatch {
@@ -84,13 +84,18 @@ export class IndexedRuleMatcher {
   }
 
   /**
-   * Fast rule matching using indexes
+   * Fast rule matching using indexes with scope filtering
    */
   fastMatch(
     scene: Scene,
     keywords?: string[],
     maxResults: number = 20,
-    minConfidence: number = 0.3
+    minConfidence: number = 0.3,
+    scopeFilter?: {
+      scopes?: RuleScope[];          // Allowed scopes (default: all)
+      current_project?: string;       // Current project path for PROJECT scope matching
+      organization_id?: string;       // Organization ID for ORGANIZATION scope matching
+    }
   ): RuleMatch[] {
     // Rebuild index if needed (cache invalidation)
     if (!this.indexBuilt || Date.now() - this.lastIndexBuildTime > 60000) {
@@ -156,6 +161,13 @@ export class IndexedRuleMatcher {
       // Filter by confidence
       if (rule.confidence < minConfidence) continue;
 
+      // Apply scope filtering
+      if (scopeFilter) {
+        if (!this.matchesScope(rule, scopeFilter)) {
+          continue;
+        }
+      }
+
       // Adjust score by rule confidence
       const relevanceScore = scoreInfo.score * (0.7 + rule.confidence * 0.3);
 
@@ -169,6 +181,53 @@ export class IndexedRuleMatcher {
     // Sort by relevance and return top N
     matches.sort((a, b) => b.relevance_score - a.relevance_score);
     return matches.slice(0, maxResults);
+  }
+
+  /**
+   * Check if rule matches scope filter
+   */
+  private matchesScope(
+    rule: RuleIndexEntry,
+    scopeFilter: {
+      scopes?: RuleScope[];
+      current_project?: string;
+      organization_id?: string;
+    }
+  ): boolean {
+    // If no scope specified, default to GLOBAL
+    const ruleScope = rule.scope || RuleScope.GLOBAL;
+
+    // If no scopes filter provided, allow all
+    if (!scopeFilter.scopes || scopeFilter.scopes.length === 0) {
+      return true;
+    }
+
+    // Check if rule scope is in allowed scopes
+    if (!scopeFilter.scopes.includes(ruleScope)) {
+      return false;
+    }
+
+    // For PROJECT scope, match project context
+    if (ruleScope === RuleScope.PROJECT) {
+      if (!scopeFilter.current_project || !rule.scope_context?.project_path) {
+        return false;
+      }
+      // Match project path (exact or substring)
+      return rule.scope_context.project_path === scopeFilter.current_project ||
+             scopeFilter.current_project.includes(rule.scope_context.project_path) ||
+             rule.scope_context.project_path.includes(scopeFilter.current_project);
+    }
+
+    // For ORGANIZATION scope, match organization context
+    if (ruleScope === RuleScope.ORGANIZATION) {
+      if (!scopeFilter.organization_id || !rule.scope_context?.organization_id) {
+        return true; // Allow if no specific org context
+      }
+      return rule.scope_context.organization_id === scopeFilter.organization_id;
+    }
+
+    // GLOBAL scope always matches
+    return true;
   }
 
   /**

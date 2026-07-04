@@ -9,6 +9,7 @@ import { ConfidenceWeights } from "./confidence.js";
 import { readFileSync, writeFileSync, existsSync, mkdirSync } from "fs";
 import { join } from "path";
 import { homedir } from "os";
+import { logger } from "./logger.js";
 
 export interface RuleFeedback {
   rule_id: string;
@@ -308,7 +309,7 @@ export class AdaptiveConfidenceCalculator {
         this.userWeightsCache.set(userWeights.user_id, userWeights);
       }
     } catch (error) {
-      // console.error("Failed to load user weights:", error);
+      logger.error("adaptive-confidence", "Failed to load user weights:", error instanceof Error ? error : undefined);
     }
   }
 
@@ -340,7 +341,7 @@ export class AdaptiveConfidenceCalculator {
       const lines = data.trim().split("\n");
       this.feedbackHistory = lines.map((line) => JSON.parse(line) as RuleFeedback);
     } catch (error) {
-      // console.error("Failed to load feedback history:", error);
+      logger.error("adaptive-confidence", "Failed to load feedback history:", error instanceof Error ? error : undefined);
     }
   }
 
