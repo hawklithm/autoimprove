@@ -35,6 +35,8 @@ import { BayesianConfidenceUpdater } from "./core/bayesian-confidence-updater.js
 import { PatternClusterer } from "./core/pattern-clusterer.js";
 import { LLMRuleGenerator } from "./core/llm-rule-generator.js";
 import { AdaptiveSessionAnalyzer } from "./core/adaptive-session-analyzer.js";
+import { RuleDeduplicator, DeduplicationResult } from "./core/rule-deduplicator.js";
+import { RuleCleanupService } from "./core/rule-cleanup-service.js";
 import { logger } from "./core/logger.js";
 import { createScene, PatternType } from "./core/models.js";
 import { existsSync } from "fs";
@@ -65,6 +67,8 @@ let proactiveRuleProvider: ProactiveRuleResourceProvider;
 let analyzer: SessionAnalyzer;
 let generator: RuleGenerator;
 let hybridGenerator: HybridRuleGenerator;
+let deduplicator: RuleDeduplicator;
+let cleanupService: RuleCleanupService;
 let matcher: RuleMatcher;
 let qualityController: RuleQualityController;
 let adaptiveConfidence: AdaptiveConfidenceCalculator;
@@ -95,6 +99,8 @@ function ensureInitialized() {
     analyzer = new SessionAnalyzer();
     generator = new RuleGenerator();
     hybridGenerator = new HybridRuleGenerator();
+    deduplicator = new RuleDeduplicator();
+    cleanupService = new RuleCleanupService();
     matcher = new RuleMatcher(indexManager, config.rule_matching.max_results, config.rule_matching.min_confidence);
     qualityController = new RuleQualityController();
     adaptiveConfidence = new AdaptiveConfidenceCalculator();
@@ -820,6 +826,37 @@ Keywords are matched against rule descriptions, titles, and content. Use specifi
           properties: {},
         },
       },
+      {
+        name: "cleanup_existing_rules",
+        description: "Scan and cleanup existing rules: merge duplicates, optimize low-quality rules, delete very poor rules",
+        inputSchema: {
+          type: "object",
+          properties: {
+            mode: {
+              type: "string",
+              enum: ["scan", "execute"],
+              description: "scan: only report issues; execute: perform cleanup actions",
+            },
+            merge_duplicates: {
+              type: "boolean",
+              description: "Merge duplicate/similar rules (default: true)",
+            },
+            optimize_low_quality: {
+              type: "boolean",
+              description: "Optimize low-quality rules (defaulrue)",
+            },
+            delete_very_low_quality: {
+              type: "boolean",
+              description: "Delete rules with very low quality scores (default: false)",
+            },
+            very_low_quality_threshold: {
+              type: "number",
+              description: "Quality threshold for deletion (default: 0.3)",
+            },
+          },
+          required: ["mode"],
+        },
+      },
     ],
   };
 });
@@ -927,6 +964,9 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
       case "get_signal_stats":
         return await handleGetSignalStats();
+
+      case "cleanup_existing_rules":
+        return await handleCleanupExistingRules(request.params.arguments);
 
       default:
         throw new Error(`Unknown tool: ${request.params.name}`);
@@ -1096,11 +1136,96 @@ async function handleGenerateRules(args: any) {
     rules = generator.batchGenerateRules(patterns, nextIdNum, scene);
   }
 
-  const generatedIds: string[] = [];
+  // ===== DEDUPLICATION PHASE =====
+  // Automatically detect and merge similar rules
+  const existingRules = indexManager.getAllRules();
+  const deduplicationResults: DeduplicationResult[] = [];
+  const finalRuleIds: string[] = [];
+  let addedCount = 0;
+  let mergedCount = 0;
+  let skippedCount = 0;
+
   for (const { indexEntry, content } of rules) {
-    indexManager.addRule(indexEntry);
-    contentManager.saveContent(content);
-    generatedIds.push(indexEntry.id);
+    // Find similar rules in existing database
+    const similarities = deduplicator.findSimilarRules(indexEntry, existingRules);
+
+    if (similarities.length > 0 && similarities[0].action === "merge") {
+      // High similarity detected - merge into existing rule
+      const topMatch = similarities[0];
+      const existingContent = contentManager.loadContent(topMatch.existingRuleId);
+
+      const merged = deduplicator.mergeRules(
+        topMatch.existingRule,
+        indexEntry,
+        existingContent || undefined,
+        content
+      );
+
+      // Update existing rule
+      indexManager.replaceRule(topMatch.existingRuleId, merged.indexEntry);
+      if (merged.content) {
+        contentManager.saveContent(merged.content);
+      }
+
+      deduplicationResults.push({
+        action: "merged",
+        targetRuleId: topMatch.existingRuleId,
+        sourceRuleId: indexEntry.id,
+        similarity: topMatch.similarity,
+        reason: topMatch.reason,
+      });
+
+      finalRuleIds.push(topMatch.existingRuleId);
+      mergedCount++;
+
+      logger.info("deduplication", `Merged ${indexEntry.id} → ${topMatch.existingRuleId} (similarity: ${(topMatch.similarity * 100).toFixed(1)}%)`);
+    } else if (similarities.length > 0 && similarities[0].action === "update-existing") {
+      // Very similar - update existing with new examples
+      const topMatch = similarities[0];
+      const existingContent = contentManager.loadContent(topMatch.existingRuleId);
+
+      const merged = deduplicator.mergeRules(
+        topMatch.existingRule,
+        indexEntry,
+        existingContent || undefined,
+        content
+      );
+
+      indexManager.replaceRule(topMatch.existingRuleId, merged.indexEntry);
+      if (merged.content) {
+        contentManager.saveContent(merged.content);
+      }
+
+      deduplicationResults.push({
+        action: "updated",
+        targetRuleId: topMatch.existingRuleId,
+        sourceRuleId: indexEntry.id,
+        similarity: topMatch.similarity,
+        reason: "Updated with new examples",
+      });
+
+      finalRuleIds.push(topMatch.existingRuleId);
+      mergedCount++;
+
+      logger.info("deduplication", `Updated ${topMatch.existingRuleId} with content from ${indexEntry.id} (similarity: ${(topMatch.similarity * 100).toFixed(1)}%)`);
+    } else {
+      // No similar rule or similarity below threshold - add as new rule
+      indexManager.addRule(indexEntry);
+      contentManager.saveContent(content);
+
+      deduplicationResults.push({
+        action: "added",
+        targetRuleId: indexEntry.id,
+        reason: similarities.length > 0
+          ? `Kept separate (similarity: ${(similarities[0].similarity * 100).toFixed(1)}%)`
+          : "No similar rules found",
+      });
+
+      finalRuleIds.push(indexEntry.id);
+      addedCount++;
+
+      logger.info("deduplication", `Added new rule ${indexEntry.id} (${similarities.length > 0 ? 'below similarity threshold' : 'unique'})`);
+    }
   }
 
   return {
@@ -1109,11 +1234,21 @@ async function handleGenerateRules(args: any) {
         type: "text",
         text: JSON.stringify({
           success: true,
-          rules_count: generatedIds.length,
-          rule_ids: generatedIds,
+          rules_count: finalRuleIds.length,
+          rule_ids: finalRuleIds,
           generation_mode: useEnhanced ? "enhanced" : "basic",
           llm_enhancement: useLLMEnhancement,
           code_examples_extracted: extractCodeExamples,
+          // Deduplication statistics
+          deduplication: {
+            total_generated: rules.length,
+            added_new: addedCount,
+            merged_into_existing: mergedCount,
+            skipped: skippedCount,
+            final_count: finalRuleIds.length,
+            reduction_rate: rules.length > 0 ? ((rules.length - finalRuleIds.length) / rules.length) : 0,
+            details: deduplicationResults,
+          },
         }),
       },
     ],
@@ -2691,6 +2826,184 @@ async function handleGetSignalStats() {
     };
   } catch (error: any) {
     logger.error("signal-stats", "Failed to retrieve signal statistics", error);
+    return {
+      content: [
+        {
+          type: "text",
+          text: JSON.stringify({
+            success: false,
+            error: error.message,
+          }),
+        },
+      ],
+    };
+  }
+}
+
+async function handleCleanupExistingRules(args: any) {
+  const mode = args.mode as "scan" | "execute";
+  const mergeDuplicates = args.merge_duplicates !== false; // Default true
+  const optimizeLowQuality = args.optimize_low_quality !== false; // Default true
+  const deleteVeryLowQuality = args.delete_very_low_quality === true; // Default false
+  const veryLowQualityThreshold = args.very_low_quality_threshold || 0.3;
+
+  try {
+    // Load all existing rules
+    const allRules = indexManager.getAllRules();
+
+    // Load contents for quality assessment
+    const contents = new Map<string, any>();
+    for (const rule of allRules) {
+      const content = contentManager.loadContent(rule.id);
+      if (content) {
+        contents.set(rule.id, content);
+      }
+    }
+
+    logger.info("cleanup", `Starting cleanup in ${mode} mode`, {
+      total_rules: allRules.length,
+      merge_duplicates: mergeDuplicates,
+      optimize_low_quality: optimizeLowQuality,
+      delete_very_low_quality: deleteVeryLowQuality,
+    });
+
+    // Scan for issues
+    const report = cleanupService.scanExistingRules(allRules, contents);
+
+    if (mode === "scan") {
+      // Scan-only mode: return report
+      return {
+        content: [
+          {
+            type: "text",
+            text: JSON.stringify({
+              success: true,
+              mode: "scan",
+              report: {
+                total_rules: report.totalRules,
+                duplicate_groups: report.duplicateGroups.length,
+                duplicate_rules_count: report.duplicateGroups.reduce(
+                  (sum, g) => sum + g.duplicates.length,
+                  0
+                ),
+                low_quality_rules_count: report.lowQualityRules.length,
+                recommendations: report.recommendations,
+                duplicate_details: report.duplicateGroups.map((g) => ({
+                  primary: g.primaryRule.id,
+                  duplicates: g.duplicates.map((d) => ({
+                    id: d.rule.id,
+                    similarity: d.similarity,
+                    reason: d.reason,
+                  })),
+                })),
+                low_quality_details: report.lowQualityRules.map((qa) => ({
+                  rule_id: qa.ruleId,
+                  score: qa.overallScore,
+                  issues: qa.issues,
+                  recommendations: qa.recommendations,
+                })),
+              },
+            }),
+          },
+        ],
+      };
+    } else {
+      // Execute mode: perform cleanup
+      const result = cleanupService.executeCleanup(
+        report.duplicateGroups,
+        report.lowQualityRules,
+        allRules,
+        contents,
+        {
+          mergeDuplicates,
+          optimizeLowQuality,
+          deleteVeryLowQuality,
+          veryLowQualityThreshold,
+        }
+      );
+
+      // Apply changes to storage
+      if (result.success) {
+        // Merge duplicates
+        for (const merged of result.details.merged) {
+          const primary = allRules.find((r) => r.id === merged.to);
+          if (primary) {
+            // Merge all duplicates into primary
+            for (const dupId of merged.from) {
+              const duplicate = allRules.find((r) => r.id === dupId);
+              if (duplicate) {
+                const primaryContent = contentManager.loadContent(primary.id);
+                const dupContent = contentManager.loadContent(dupId);
+
+                const mergedRule = deduplicator.mergeRules(
+                  primary,
+                  duplicate,
+                  primaryContent || undefined,
+                  dupContent || undefined
+                );
+
+             // Update primary rule
+                indexManager.replaceRule(primary.id, mergedRule.indexEntry);
+                if (mergedRule.content) {
+                  contentManager.saveContent(mergedRule.content);
+                }
+
+                // Delete duplicate
+                indexManager.removeRule(dupId);
+                contentManager.deleteContent(dupId);
+              }
+            }
+          }
+        }
+
+        // Optimize low-quality rules
+        for (const ruleId of result.details.optimized) {
+          const rule = allRules.find((r) => r.id === ruleId);
+          if (rule) {
+            const content = contents.get(ruleId);
+            const optimized = cleanupService.optimizeRule(rule, content);
+
+            indexManager.replaceRule(ruleId, optimized.indexEntry);
+            if (optimized.content) {
+              contentManager.saveContent(optimized.content);
+            }
+          }
+        }
+
+        // Delete very low-quality rules
+        for (const ruleId of result.details.deleted) {
+          indexManager.removeRule(ruleId);
+          contentManager.deleteContent(ruleId);
+        }
+
+        logger.info("cleanup", "Cleanup completed successfully", {
+          merged: result.mergedCount,
+          optimized: result.optimizedCount,
+          deleted: result.deletedCount,
+        });
+      }
+
+      return {
+        content: [
+          {
+            type: "text",
+            text: JSON.stringify({
+              success: result.success,
+              mode: "execute",
+              result: {
+                merged_count: result.mergedCount,
+                optimized_count: result.optimizedCount,
+                deleted_count: result.deletedCount,
+                errors: result.errors,
+                details: result.details,
+              },
+            }),
+          },
+        ],
+      };
+    }
+  } catch (error: any) {
+    logger.error("cleanup", "Cleanup failed", error);
     return {
       content: [
         {

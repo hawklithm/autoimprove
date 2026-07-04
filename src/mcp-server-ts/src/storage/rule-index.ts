@@ -191,4 +191,33 @@ export class RuleIndexManager {
     // Placeholder for cache invalidation
     // Will be used by RuleMatcher
   }
+
+  /**
+   * Get all rules (for deduplication)
+   */
+  getAllRules(): RuleIndexEntry[] {
+    const index = this.loadIndex();
+    return index.rules;
+  }
+
+  /**
+   * Replace a rule with updated version (for merging)
+   */
+  replaceRule(ruleId: string, updatedEntry: RuleIndexEntry): void {
+    const index = this.loadIndex();
+
+    const ruleIndex = index.rules.findIndex(r => r.id === ruleId);
+    if (ruleIndex === -1) {
+      throw new Error(`Rule with ID ${ruleId} not found`);
+    }
+
+    // Normalize before replacing
+    const normalized = normalizeRuleIndexEntry(updatedEntry);
+    if (!normalized) {
+      throw new Error("Failed to normalize rule entry");
+    }
+
+    index.rules[ruleIndex] = normalized;
+    this.saveIndex(index);
+  }
 }

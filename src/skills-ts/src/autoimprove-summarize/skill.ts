@@ -43,6 +43,21 @@ interface GenerateRulesResult {
   success: boolean;
   error?: string;
   rule_ids?: string[];
+  deduplication?: {
+    total_generated: number;
+    added_new: number;
+    merged_into_existing: number;
+    skipped: number;
+    final_count: number;
+    reduction_rate: number;
+    details?: Array<{
+      action: string;
+      targetRuleId: string;
+      sourceRuleId?: string;
+      similarity?: number;
+      reason: string;
+    }>;
+  };
 }
 
 async function run() {
@@ -176,13 +191,42 @@ async function run() {
     }
 
     const ruleIds = rulesResult.rule_ids || [];
+    const dedup = rulesResult.deduplication;
+
+    // Display generation results with deduplication stats
     console.log(`✅ Generated ${ruleIds.length} rule(s)`);
+
+    if (dedup) {
+      console.log(`\n🔍 Deduplication Results:`);
+      console.log(`   • Total generated: ${dedup.total_generated}`);
+      console.log(`   • Added as new: ${dedup.added_new}`);
+      console.log(`   • Merged into existing: ${dedup.merged_into_existing}`);
+      if (dedup.merged_into_existing > 0) {
+        console.log(`   • Reduction: ${(dedup.reduction_rate * 100).toFixed(1)}% (avoided ${dedup.total_generated - dedup.final_count} duplicate(s))`);
+      }
+
+      // Show merge details
+      if (dedup.details && dedup.details.length > 0) {
+        const mergedDetails = dedup.details.filter((d: any) => d.action === "merged" || d.action === "updated");
+        if (mergedDetails.length > 0) {
+          console.log(`\n   📝 Merge details:`);
+          for (const detail of mergedDetails.slice(0, 5)) {
+            const action = detail.action === "merged" ? "merged into" : "updated";
+            const simScore = detail.similarity ? `${(detail.similarity * 100).toFixed(0)}% similar` : "high similarity";
+            console.log(`      • ${detail.sourceRuleId} ${action} ${detail.targetRuleId} (${simScore})`);
+          }
+          if (mergedDetails.length > 5) {
+            console.log(`      ... and ${mergedDetails.length - 5} more`);
+          }
+        }
+      }
+    }
 
     // Mark session as analyzed
     await markSessionAsAnalyzed(sessionFile, patternsCount, ruleIds.length, useConsolidation, true);
 
     if (ruleIds.length > 0) {
-      console.log("\n📋 Rules created:");
+      console.log("\n📋 Final rules:");
       for (const rid of ruleIds) {
         console.log(`   • ${rid}`);
       }
@@ -199,12 +243,45 @@ async function run() {
         if (exportResult.success) {
           console.log("   ✓ Rules exported to ~/.autoimprove/rules/claude-index.md");
           console.log("   ✓ New rules will be auto-loaded in your next Claude Code session\n");
-          console.log("💡 To use these rules immediately, restart your Claude Code session");
         }
       } catch (error: any) {
         console.warn(`   ⚠️  Auto-export failed: ${error.message}`);
         console.log("   💡 Run `/autoimprove-rules` to manually review and export rules");
       }
+
+      // Auto-cleanup: Scan and optimize existing rules
+      console.log("\n🧹 Running automatic cleanup...");
+      try {
+        const cleanupResult = await callMCPTool("cleanup_existing_rules", {
+          mode: "execute",
+          merge_duplicates: true,
+          optimize_low_quality: true,
+          delete_very_low_quality: false, // Don't auto-delete, too risky
+          very_low_quality_threshold: 0.3,
+        });
+
+        if (cleanupResult.success && cleanupResult.result) {
+          const result = cleanupResult.result;
+          const totalActions = result.merged_count + result.optimized_count;
+
+          if (totalActions > 0) {
+            console.log(`   ✓ Cleaned up ${totalActions} rule(s)`);
+            if (result.merged_count > 0) {
+              console.log(`      • Merged ${result.merged_count} duplicate(s)`);
+            }
+            if (result.optimized_count > 0) {
+              console.log(`      • Optimized ${result.optimized_count} low-quality rule(s)`);
+            }
+          } else {
+            console.log(`   ✓ No cleanup needed - rules are in good shape`);
+          }
+        }
+      } catch (error: any) {
+        // Don't fail the whole process if cleanup fails
+        console.warn(`   ⚠️  Cleanup skipped: ${error.message}`);
+      }
+
+      console.log("\n💡 To use these rules immediately, restart your Claude Code session");
     }
   } catch (error: any) {
     console.log(`❌ Error: ${error.message}`);
@@ -748,7 +825,15 @@ Output ONLY the JSON, no explanations.`;
   }
 
   const ruleIds = rulesResult.rule_ids || [];
+  const dedup = rulesResult.deduplication;
+
   console.log(`✅ Generated ${ruleIds.length} optimized rule(s)\n`);
+
+  // Show deduplication results
+  if (dedup && dedup.merged_into_existing > 0) {
+    console.log(`🔍 Deduplication: ${dedup.merged_into_existing} rule(s) merged into existing rules`);
+    console.log(`   • Avoided ${dedup.total_generated - dedup.final_count} duplicate(s)\n`);
+  }
 
   // Mark session as analyzed if session file provided
   if (sessionFile) {
@@ -756,7 +841,7 @@ Output ONLY the JSON, no explanations.`;
   }
 
   if (ruleIds.length > 0) {
-    console.log("📋 Rules created:");
+    console.log("📋 Final rules:");
     for (const rid of ruleIds) {
       console.log(`   • ${rid}`);
     }
@@ -773,12 +858,44 @@ Output ONLY the JSON, no explanations.`;
       if (exportResult.success) {
         console.log("   ✓ Rules exported to ~/.autoimprove/rules/claude-index.md");
         console.log("   ✓ New rules will be auto-loaded in your next Claude Code session\n");
-        console.log("💡 To use these rules immediately, restart your Claude Code session");
       }
     } catch (error: any) {
       console.warn(`   ⚠️  Auto-export failed: ${error.message}`);
       console.log("   💡 Run `/autoimprove-rules` to manually review and export rules");
     }
+
+    // Auto-cleanup: Scan and optimize existing rules
+    console.log("\n🧹 Running automatic cleanup...");
+    try {
+      const cleanupResult = await callMCPTool("cleanup_existing_rules", {
+        mode: "execute",
+        merge_duplicates: true,
+        optimize_low_quality: true,
+        delete_very_low_quality: false,
+        very_low_quality_threshold: 0.3,
+      });
+
+      if (cleanupResult.success && cleanupResult.result) {
+        const result = cleanupResult.result;
+        const totalActions = result.merged_count + result.optimized_count;
+
+        if (totalActions > 0) {
+          console.log(`   ✓ Cleaned up ${totalActions} rule(s)`);
+          if (result.merged_count > 0) {
+            console.log(`      • Merged ${result.merged_count} duplicate(s)`);
+          }
+          if (result.optimized_count > 0) {
+            console.log(`      • Optimized ${result.optimized_count} low-quality rule(s)`);
+          }
+        } else {
+          console.log(`   ✓ No cleanup needed - rules are in good shape`);
+        }
+      }
+    } catch (error: any) {
+      console.warn(`   ⚠️  Cleanup skipped: ${error.message}`);
+    }
+
+    console.log("\n💡 To use these rules immediately, restart your Claude Code session");
   }
 }
 
