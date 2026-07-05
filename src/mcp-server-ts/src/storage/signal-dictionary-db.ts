@@ -323,7 +323,38 @@ export class SignalDictionaryDB {
   // Labeled content
   // ============================================================================
 
+  /**
+   * Validate content before storage to prevent system metadata pollution
+   */
+  private validateContent(content: string): { valid: boolean; reason?: string } {
+    // Reject content with system metadata patterns
+    const systemPatterns = [
+      { pattern: /^Base directory for this skill:/i, reason: 'Contains skill system metadata' },
+      { pattern: /^<command-/i, reason: 'Contains command tag metadata' },
+      { pattern: /\/Users\/[^\/]+\/\.claude\//i, reason: 'Contains local .claude path' },
+      { pattern: /^\/Users\/[^\/]+\/\.config\//i, reason: 'Contains local config path' },
+    ];
+
+    for (const { pattern, reason } of systemPatterns) {
+      if (pattern.test(content)) {
+        return { valid: false, reason };
+      }
+    }
+
+    return { valid: true };
+  }
+
   saveLabeledContent(content: Omit<LabeledContent, "id">): number {
+    // Validate content before storing
+    const validation = this.validateContent(content.content);
+    if (!validation.valid) {
+      logger.warn('signal-db', `Rejecting labeled content: ${validation.reason}`, {
+        session_id: content.session_id,
+        content_preview: content.content.substring(0, 100)
+      });
+      throw new Error(`Invalid content: ${validation.reason}`);
+    }
+
     const stmt = this.db.prepare(`
       INSERT INTO labeled_content (
         message_id, session_id, content, matched_signals, pattern_type,

@@ -88,7 +88,7 @@ export class PatternClusterer {
       // Start new cluster
       const clusterContentIds: number[] = [content1.id];
       const clusterSignals: Set<string> = new Set();
-      const clusterPhrases: string[] = [content1.content.slice(0, 100)];
+      const clusterPhrases: string[] = [this.extractRepresentativePhrase(content1.content)];
       const sessionIds = new Set<string>([content1.session_id]);
       let totalConfidence = content1.confidence;
 
@@ -115,7 +115,7 @@ export class PatternClusterer {
 
           // Add phrase sample (limit to 3)
           if (clusterPhrases.length < 3) {
-            clusterPhrases.push(content2.content.slice(0, 100));
+            clusterPhrases.push(this.extractRepresentativePhrase(content2.content));
           }
 
           // Update common signals (intersection)
@@ -150,6 +150,41 @@ export class PatternClusterer {
     }
 
     return clusters;
+  }
+
+  /**
+   * Extract representative phrase from content with intelligent truncation
+   * Preserves complete words/sentences instead of arbitrary character limits
+   */
+  private extractRepresentativePhrase(content: string, maxLength: number = 200): string {
+    const trimmed = content.trim();
+
+    // Try to extract the first complete sentence (even if content is short)
+    const sentenceEnd = trimmed.search(/[.!?]\s/);
+    if (sentenceEnd > 0 && sentenceEnd <= maxLength) {
+      return trimmed.substring(0, sentenceEnd + 1);
+    }
+
+    // Try to extract first paragraph
+    const paragraphEnd = trimmed.indexOf('\n\n');
+    if (paragraphEnd > 0 && paragraphEnd <= maxLength) {
+      return trimmed.substring(0, paragraphEnd);
+    }
+
+    // If content is within limit and no sentence/paragraph boundaries, return all
+    if (trimmed.length <= maxLength) {
+      return trimmed;
+    }
+
+    // Find last complete word within limit
+    const truncated = trimmed.substring(0, maxLength);
+    const lastSpace = truncated.lastIndexOf(' ');
+
+    if (lastSpace > 0) {
+      return truncated.substring(0, lastSpace) + '...';
+    }
+
+    return truncated + '...';
   }
 
   /**

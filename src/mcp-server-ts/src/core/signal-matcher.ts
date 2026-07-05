@@ -46,7 +46,7 @@ export class SignalMatcher {
     const signals = this.db.getAllSignals();
 
     if (signals.length === 0) {
-      logger.consoleError("Warning: Signal dictionary is empty. Run initialization first.");
+      logger.consoleWarn("Warning: Signal dictionary is empty. Run initialization first.");
       return;
     }
 
@@ -65,7 +65,7 @@ export class SignalMatcher {
     this.ac = new AhoCorasick(patterns);
     this.lastBuildTime = Date.now();
 
-    logger.consoleError(`Built signal matcher with ${patterns.length} patterns`);
+    logger.consoleLog(`Built signal matcher with ${patterns.length} patterns`);
   }
 
   /**

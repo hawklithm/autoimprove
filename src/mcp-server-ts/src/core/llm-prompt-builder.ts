@@ -67,22 +67,13 @@ export class LLMPromptBuilder {
 
     const isSinglePattern = evidence.length === 1;
 
-    // Build evidence section
-    const evidenceSection = this.buildEvidenceSection(evidence, maxContentExamples);
+    // Build structured JSON context
+    const jsonContext = this.buildStructuredContext(evidence, options, maxContentExamples);
 
     // Build header with context
     const header = isBatchMode && !isSinglePattern
       ? this.buildBatchHeader()
       : this.buildSingleHeader();
-
-    // Build metadata section
-    const metadataSection = this.buildMetadataSection({
-      patternType,
-      avgConfidence,
-      commonKeywords,
-      totalOccurrences,
-      sessionCount
-    });
 
     // Build instructions section
     const instructionsSection = isBatchMode && !isSinglePattern
@@ -97,9 +88,13 @@ export class LLMPromptBuilder {
 
     return `${header}
 
-${metadataSection}
+## Pattern Data (Structured JSON)
 
-${evidenceSection}
+The following JSON contains all pattern information for analysis:
+
+\`\`\`json
+${jsonContext}
+\`\`\`
 
 ${instructionsSection}
 
@@ -109,7 +104,62 @@ ${qualitySection}`;
   }
 
   /**
-   * Build evidence section from various sources
+   * Build structured JSON context from evidence
+   */
+  private static buildStructuredContext(
+    evidence: PromptEvidence[],
+    options: PromptOptions,
+    maxContentExamples: number
+  ): string {
+    // Select representative examples using diversity sampling
+    const selectedEvidence = evidence.length > maxContentExamples
+      ? this.selectRepresentativeEvidence(evidence, maxContentExamples)
+      : evidence;
+
+    const context = {
+      metadata: {
+        pattern_type: options.patternType,
+        total_patterns: evidence.length,
+        selected_patterns: selectedEvidence.length,
+        avg_confidence: Math.round(options.avgConfidence * 100) / 100,
+        total_occurrences: options.totalOccurrences,
+        session_count: options.sessionCount || 1,
+        common_keywords: options.commonKeywords,
+      },
+      patterns: selectedEvidence.map((e, idx) => {
+        const pattern: any = {
+          id: idx + 1,
+          description: e.description,
+          confidence: Math.round(e.confidence * 100) / 100,
+          occurrences: e.occurrences,
+          keywords: e.keywords.slice(0, 5),
+        };
+
+        // Add content examples if available
+        if (e.contentExamples && e.contentExamples.length > 0) {
+          pattern.evidence = {
+            type: "user_corrections",
+            examples: e.contentExamples.map((content, contentIdx) => ({
+              id: contentIdx + 1,
+              content: content,
+            })),
+          };
+        }
+
+        // Add user context if available
+        if (e.userContext && e.userContext.length > 0) {
+          pattern.user_context = e.userContext;
+        }
+
+        return pattern;
+      }),
+    };
+
+    return JSON.stringify(context, null, 2);
+  }
+
+  /**
+   * Build evidence section from various sources (deprecated, kept for backward compatibility)
    */
   private static buildEvidenceSection(
     evidence: PromptEvidence[],
@@ -269,11 +319,25 @@ Extract a clear, actionable rule from the correction pattern below. The rule sho
    * Build instructions for batch mode (merging multiple patterns)
    */
   private static buildBatchInstructions(): string {
-    return `## Analysis Steps
+    return `## How to Read the JSON Data
+
+The JSON above contains:
+- **metadata**: Overall statistics (pattern type, confidence, keywords, occurrence count)
+- **patterns**: Array of individual patterns, each with:
+  - **id**: Pattern identifier (for reference)
+  - **description**: What the pattern describes
+  - **confidence**: How reliable this pattern is (0.0-1.0)
+  - **occurrences**: How many times this pattern was observed
+  - **keywords**: Key terms related to the pattern
+  - **evidence.examples**: User corrections (when available) - the actual text users wrote when correcting Claude
+  - **user_context**: Additional context from user messages
+
+## Analysis Steps
 
 1. **Group by similarity**: Read all patterns and identify which ones describe the SAME mistake
    - Same root cause? → MERGE into one rule
    - Different root causes? → Keep as SEPARATE rules
+   - Look at both **description** and **evidence.examples** to understand the pattern
 
 2. **Extract the pattern**: For each group, identify:
    - What mistake is repeating?
@@ -281,7 +345,7 @@ Extract a clear, actionable rule from the correction pattern below. The rule sho
    - What's the underlying principle being violated?
 
 3. **Generalize carefully**:
-   - Find the common thread across examples
+   - Find the common thread across examples in **evidence.examples**
    - Abstract to a broader principle, but stay evidence-based
    - Don't over-generalize beyond what the data supports
 
@@ -305,11 +369,33 @@ Extract a clear, actionable rule from the correction pattern below. The rule sho
    * Build instructions for single pattern mode
    */
   private static buildSingleInstructions(): string {
-    return `## Analysis Steps
+    return `## How to Read the JSON Data
 
-1. **Identify the mistake**: What specific error did Claude make?
-2. **Find the root cause**: Why did it happen? What was missing or wrong?
-3. **Extract the principle**: What genuld have prevented this?
+The JSON above contains:
+- **metadata**: Pattern statistics (type, confidence, keywords, occurrences)
+- **patterns**: A single pattern with:
+  - **description**: What this pattern is about
+  - **confidence**: Pattern reliability (0.0-1.0)
+  - **evidence.examples**: User corrections - actual text showing what users changed
+  - **keywords**: Key terms related to the pattern
+
+## Analysis Steps
+
+1. **Understand the mistake**: Read the **description** and examine **evidence.examples**
+   - What did Claude do wrong?
+   - What did the user correct it to?
+   - What principle was violated?
+
+2. **Extract the rule**:
+   - Identify the root cause
+   - Generalize from the specific example(s)
+   - Stay grounded in the evidence provided
+
+3. **Make it actionable**:
+   - Write concrete steps Claude can check
+   - Include positive guidance (do this) and warnings (avoid that)
+   - Ensure it prevents the specific mistake shown
+
 4. **Make it actionable**: How can Claude check this BEFORE coding?
 5. **Generalize appropriately**: Broader than the example, but evidence-based
 
@@ -325,16 +411,17 @@ Generate 1 rule following the output format below.`;
     let section = `Output ${outputType}: `;
 
     if (isBatchMode) {
-      section += `[{"title":"...","description":"...","rationale":"...","how_to_apply":[...],"when_to_use":[...],"exceptions":[...],"source_patterns":["pattern 1","pattern 2"],"merged_count":2}]\n\n`;
+      section += `[{"title":"...","description":"...","rationale":"...","scope":"global","how_to_apply":[...],"when_to_use":[...],"exceptions":[...],"source_patterns":["pattern 1","pattern 2"],"merged_count":2}]\n\n`;
       section += `If all patterns are similar, return 1 rule. If distinct, return multiple rules.\n\n`;
     } else {
-      section += `{"title":"...","description":"...","rationale":"...","how_to_apply":[...],"when_to_use":[...],"exceptions":[]}\n\n`;
+      section += `{"title":"...","description":"...","rationale":"...","scope":"global","how_to_apply":[...],"when_to_use":[...],"exceptions":[]}\n\n`;
     }
 
     section += `Rules:
 - title: imperative verb, 60-80 chars
 - description: what to do/avoid, 3-5 sentences, specific
 - rationale: why (2-4 sentences, concrete benefits/risks)
+- scope: rule applicability scope (required, see Scope Determination below)
 - how_to_apply: 3-6 actionable steps (array)
 - when_to_use: 3-5 conditions (array)
 - exceptions: 2-4 edge cases (array, optional)`;
@@ -343,6 +430,34 @@ Generate 1 rule following the output format below.`;
       section += `\n- source_patterns: original pattern descriptions merged (array)
 - merged_count: number of patterns merged into this rule`;
     }
+
+    section += `\n\n## Scope Determination
+
+REQUIRED: Every rule must include a "scope" field with one of these exact values:
+
+**"global"**: Universal programming principles that apply across all languages, frameworks, and projects
+- Examples: "Validate user input before processing", "Use meaningful variable names", "Handle errors gracefully"
+- Indicators: References general concepts (input validation, error handling, naming conventions)
+- No mention of specific libraries, frameworks, or project structures
+
+**"organization"**: Company/team-specific frameworks, conventions, or architectural patterns
+- Examples: "Use company auth middleware for all protected routes", "Follow team's React component structure"
+- Indicators: Mentions "company", "team", "our", specific framework patterns that are conventional but not universal
+- References shared libraries or organizational standards
+
+**"project"**: Specific to current project's implementation details, file paths, or local conventions
+- Examples: "Import shared types from src/types/common.ts", "Use ProjectConfig singleton for settings"
+- Indicators: Mentions specific file paths, project-specific class names, local implementation details
+- References code unique to this codebase
+
+**How to decide:**
+1. If the rule would apply to ANY project in ANY language → "global"
+2. If the rule requires your company's framework/conventions but could apply to multiple projects → "organization"
+3. If the rule references specific files, classes, or implementations unique to this project → "project"
+
+When in doubt, choose the BROADEST applicable scope (prefer global over organization, organization over project).
+
+CRITIhe "scope" field is REQUIRED. Always include it in your JSON output.`;
 
     section += `\n\nCRITICAL: Do NOT include "examples" field. Focus on clear descriptions and actionable steps.`;
 

@@ -19,6 +19,7 @@ import { PatternSimilarityClusterer, PatternClusterGroup } from "./pattern-simil
 import { RuleGenerator } from "./rule-generator.js";
 import { logger } from "./logger.js";
 import { LLMPromptBuilder, PromptEvidence } from "./llm-prompt-builder.js";
+import { JSONExtractor } from "./json-extractor.js";
 import { appendFileSync } from "fs";
 import { homedir } from "os";
 import { join } from "path";
@@ -332,55 +333,51 @@ export class BatchLLMRuleGenerator {
     merged_count: number;
   }> {
     try {
-      // Extract JSON from markdown code block if present
-      let jsonStr = response.trim();
-      const jsonMatch = jsonStr.match(/```json\n([\s\S]*?)\n```/);
-      if (jsonMatch) {
-        jsonStr = jsonMatch[1];
-      }
-
-      // Check for response completeness before parsing
-      const trimmed = jsonStr.trim();
-      if (!trimmed.endsWith('}') && !trimmed.endsWith(']')) {
+      // Check for truncation first
+      if (JSONExtractor.isTruncated(response)) {
         logger.warn("batch-llm", "Potentially truncated LLM response detected", {
-          lastChars: trimmed.slice(-100),
-          length: trimmed.length
+          lastChars: response.slice(-100),
+          length: response.length
         });
       }
 
-      // Sanitize control characters and unescaped quotes in JSON strings
-      // This handles unescaped newlines, tabs, nested quotes (Python docstrings), etc.
-      jsonStr = this.sanitizeJson(jsonStr);
+      // Use robust JSON extraction
+      const extraction = JSONExtractor.extract(response);
 
-      let parsed;
-      try {
-        parsed = JSON.parse(jsonStr);
-      } catch (parseError) {
-        // Attempt recovery strategies
-        logger.warn("batch-llm", "Initial parse failed, attempting recovery", {
-          error: parseError instanceof Error ? parseError.message : String(parseError)
+      if (!extraction.success) {
+        logger.error("batch-llm", "Failed to extract JSON from response", undefined, {
+          error: extraction.error,
+          responseSample: response.slice(0, 500),
+          responseEnd: response.slice(-500)
         });
+        throw new Error(`JSON extraction failed: ${extraction.error}`);
+      }
 
-        // Strategy 1: Try to extract partial valid JSON up to the error position
-        const errorMatch = parseError instanceof Error
-          ? parseError.message.match(/position (\d+)/)
-          : null;
+      logger.debug("batch-llm", "JSON extracted successfully", {
+        strategy: extraction.strategy,
+        jsonLength: extraction.json?.length
+      });
 
-        if (errorMatch) {
-          const errorPos = parseInt(errorMatch[1]);
-          const partialJson = this.attemptPartialRecovery(jsonStr, errorPos);
+      let parsed = extraction.parsed;
 
+      // If parsing still failed, try recovery strategies
+      if (!parsed) {
+        logger.warn("batch-llm", "Extracted JSON failed to parse, attempting recovery");
+
+        const jsonStr = extraction.json!;
+
+        // Strategy 1: Try to extract partial valid JSON up to error position
+        try {
+          const partialJson = this.attemptPartialRecovery(jsonStr, jsonStr.length);
           if (partialJson) {
-            try {
-              parsed = JSON.parse(partialJson);
-              logger.info("batch-llm", "Successfully recovered partial JSON");
-            } catch {
-              // Recovery failed, continue to next strategy
-            }
+            parsed = JSON.parse(partialJson);
+            logger.info("batch-llm", "Successfully recovered partial JSON");
           }
+        } catch {
+          // Continue to next strategy
         }
 
-        // Strategy 2: Try removing incomplete last object/array element
+        // Strategy 2: Try removing incomplete last element
         if (!parsed) {
           const recoveredJson = this.attemptIncompleteElementRemoval(jsonStr);
           if (recoveredJson) {
@@ -393,13 +390,13 @@ export class BatchLLMRuleGenerator {
           }
         }
 
-        // If all recovery failed, log details and throw
+        // If all recovery failed, throw
         if (!parsed) {
-          logger.error("batch-llm", "All recovery strategies failed", parseError instanceof Error ? parseError : undefined, {
+          logger.error("batch-llm", "All recovery strategies failed", undefined, {
             jsonSample: jsonStr.slice(0, 500),
             jsonEnd: jsonStr.slice(-500)
           });
-          throw parseError;
+          throw new Error("Failed to parse JSON after all recovery attempts");
         }
       }
 
@@ -432,16 +429,6 @@ export class BatchLLMRuleGenerator {
     }
   }
 
-  /**
-   * Sanitize JSON string to fix common LLM output issues
-   * Note: Only remove control characters, don't try to fix string escaping
-   * as that can break valid formatted JSON
-   */
-  private sanitizeJson(jsonStr: string): string {
-    // Only remove problematic control characters (NULL, etc.)
-    // Don't touch newlines, tabs, or other whitespace - they're valid in JSON structure
-    return jsonStr.replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/g, '');
-  }
 
   /**
    * Attempt to recover partial valid JSON by finding last complete object

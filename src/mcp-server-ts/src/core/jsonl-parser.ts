@@ -26,6 +26,7 @@ export interface SessionData {
   messages: Message[];
   tool_calls: ToolCall[];
   metadata: Record<string, any>;
+  project_path?: string;  // Extracted from cwd in session file
 }
 
 export class JSONLParser {
@@ -36,6 +37,7 @@ export class JSONLParser {
     const messages: Message[] = [];
     const toolCalls: ToolCall[] = [];
     const metadata: Record<string, any> = {};
+    let projectPath: string | undefined;
 
     // Extract session ID from filename
     const sessionId = filePath.split("/").pop()?.replace(".jsonl", "") || "unknown";
@@ -46,6 +48,12 @@ export class JSONLParser {
 
       try {
         const data = JSON.parse(line);
+
+        // Extract project path from cwd field (appears in user/assistant messages)
+        if (data.cwd && !projectPath) {
+          projectPath = data.cwd;
+        }
+
         this.processLine(data, lineNum + 1, messages, toolCalls, metadata);
       } catch (error) {
         logger.warn("jsonl-parser", `Warning: Skipping malformed JSON at line ${lineNum + 1}`, { error: error instanceof Error ? error.message : String(error) });
@@ -59,7 +67,8 @@ export class JSONLParser {
       session_id: sessionId,
       messages,
       tool_calls: toolCalls,
-      metadata
+      metadata,
+      project_path: projectPath
     };
   }
 
@@ -126,13 +135,39 @@ export class JSONLParser {
     }
   }
 
-  private extractContent(data: Record<string, any>): string {
-    if (typeof data.content === "string") {
-      return data.content;
+  /**
+   * Sanitize content by removing Claude Code skill system metadata
+   * This prevents local filesystem paths and system noise from polluting pattern detection
+   */
+  private sanitizeContent(content: string): string {
+    let sanitized = content;
+
+    // Remove skill system metadata patterns
+    const systemPatterns = [
+      // "Base directory for this skill: /path/to/skill\n\n"
+      /^Base directory for this skill:.*?\n\n/s,
+      // "<command-message>...</command-message>\n"
+      /^<command-message>[\s\S]*?<\/command-message>\s*/,
+      // "<command-name>...</command-name>\n"
+      /^<command-name>[\s\S]*?<\/command-name>\s*/,
+      // "<command-args>...</command-args>\n"
+      /^<command-args>[\s\S]*?<\/command-args>\s*/,
+    ];
+
+    for (const pattern of systemPatterns) {
+      sanitized = sanitized.replace(pattern, '');
     }
 
-    if (Array.isArray(data.content)) {
-      return data.content
+    return sanitized.trim();
+  }
+
+  private extractContent(data: Record<string, any>): string {
+    let content = '';
+
+    if (typeof data.content === "string") {
+      content = data.content;
+    } else if (Array.isArray(data.content)) {
+      content = data.content
         .map((block: any) => {
           if (typeof block === "string") return block;
           if (block.type === "text") return block.text;
@@ -140,12 +175,10 @@ export class JSONLParser {
         })
         .filter(Boolean)
         .join("\n");
+    } else if (data.text) {
+      content = data.text;
     }
 
-    if (data.text) {
-      return data.text;
-    }
-
-    return "";
+    return this.sanitizeContent(content);
   }
 }

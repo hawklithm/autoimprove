@@ -10,6 +10,8 @@
 import { Pattern, RuleIndexEntry, RuleContent, Scene, CodeExample } from "./models.js";
 import { RuleGenerator } from "./rule-generator.js";
 import { CodeExampleExtractor } from "./code-example-extractor.js";
+import { ScopeDetector } from "./scope-detector.js";
+import { SessionData } from "./jsonl-parser.js";
 import { logger } from "./logger.js";
 import Anthropic from "@anthropic-ai/sdk";
 import { appendFileSync } from "fs";
@@ -31,16 +33,21 @@ export interface EnhancedRuleOptions {
 
   /** Maximum number of examples to include */
   maxExamples?: number;
+
+  /** Session data for scope detection */
+  sessionData?: SessionData;
 }
 
 export class HybridRuleGenerator {
   private basicGenerator: RuleGenerator;
   private exampleExtractor: CodeExampleExtractor;
+  private scopeDetector: ScopeDetector;
   private anthropic: Anthropic | null;
 
   constructor() {
     this.basicGenerator = new RuleGenerator();
     this.exampleExtractor = new CodeExampleExtractor();
+    this.scopeDetector = new ScopeDetector();
 
     // Initialize Anthropic client if API key available
     const apiKey = process.env.ANTHROPIC_API_KEY;
@@ -64,11 +71,30 @@ export class HybridRuleGenerator {
       useLLMEnhancement = false,
       extractCodeExamples = true,
       sessionDir = "~/.claude/sessions",
-      maxExamples = 3
+      maxExamples = 3,
+      sessionData
     } = options;
 
     // Phase 1: Generate basic rule
     const basicRule = this.basicGenerator.generateRule(pattern, ruleId, scene);
+
+    // Phase 1.5: Detect and assign scope
+    const scopeContext = this.scopeDetector.detectScope(pattern, sessionData);
+    basicRule.indexEntry.scope = scopeContext.scope;
+    if (scopeContext.project_path || scopeContext.organization_id || scopeContext.project_id) {
+      basicRule.indexEntry.scope_context = {
+        organization_id: scopeContext.organization_id,
+        project_id: scopeContext.project_id,
+        project_path: scopeContext.project_path
+      };
+    }
+
+    // Log scope detection result
+    logger.debug("hybrid-generation", `Scope detected for ${ruleId}`, {
+      scope: scopeContext.scope,
+      project_path: scopeContext.project_path,
+      project_id: scopeContext.project_id
+    });
 
     // Phase 2: LLM enhancement (if enabled and available)
     let enhancedContent: RuleContent;

@@ -5,9 +5,10 @@
 import Anthropic from "@anthropic-ai/sdk";
 import { SignalDictionaryDB, LabeledContent } from "../storage/signal-dictionary-db.js";
 import { PatternCluster } from "./pattern-clusterer.js";
-import { PatternType, Priority, RuleIndexEntry, RuleContent } from "./models.js";
+import { PatternType, Priority, RuleScope, RuleIndexEntry, RuleContent } from "./models.js";
 import { logger } from "./logger.js";
 import { LLMPromptBuilder, PromptEvidence } from "./llm-prompt-builder.js";
+import { JSONExtractor } from "./json-extractor.js";
 import { appendFileSync } from "fs";
 import { homedir } from "os";
 import { join } from "path";
@@ -20,6 +21,7 @@ export interface GeneratedRule {
   title: string;
   description: string;
   rationale: string;
+  scope: "global" | "organization" | "project";  // Rule applicability scope
   how_to_apply: string[];
   examples?: {
     bad?: string;
@@ -133,6 +135,7 @@ export class LLMRuleGenerator {
         title: parsed.title,
         description: parsed.description,
         rationale: parsed.rationale,
+        scope: parsed.scope,
         how_to_apply: parsed.how_to_apply,
         examples: parsed.examples,
         when_to_use: parsed.when_to_use,
@@ -208,6 +211,7 @@ export class LLMRuleGenerator {
     title: string;
     description: string;
     rationale: string;
+    scope: "global" | "organization" | "project";
     how_to_apply: string[];
     examples?: { bad?: string; good: string; explanation: string };
     when_to_use: string[];
@@ -216,18 +220,48 @@ export class LLMRuleGenerator {
     scenes: { tech: string[]; business: string[]; generic: boolean };
   } {
     try {
-      // Extract JSON from markdown code block if present
-      let jsonStr = response.trim();
-      const jsonMatch = jsonStr.match(/```json\n([\s\S]*?)\n```/);
-      if (jsonMatch) {
-        jsonStr = jsonMatch[1];
+      // Check for truncation first
+      if (JSONExtractor.isTruncated(response)) {
+        logger.warn("llm-generation", "Potentially truncated LLM response detected", {
+          lastChars: response.slice(-100),
+          length: response.length
+        });
       }
 
-      const parsed = JSON.parse(jsonStr);
+      // Use robust JSON extraction with maximal matching
+      const extraction = JSONExtractor.extract(response);
+
+      if (!extraction.success || !extraction.parsed) {
+        logger.error("llm-generation", "Failed to extract JSON from response", undefined, {
+          error: extraction.error,
+          responseSample: response.slice(0, 500)
+        });
+        throw new Error(`JSON extraction failed: ${extraction.error}`);
+      }
+
+      logger.debug("llm-generation", "JSON extracted successfully", {
+        strategy: extraction.strategy
+      });
+
+      const parsed = extraction.parsed;
 
       // Validate required fields
       if (!parsed.title || !parsed.description || !parsed.rationale) {
         throw new Error("Missing required fields in LLM response");
+      }
+
+      // Validate and normalize scope field
+      const validScopes = ["global", "organization", "project"];
+      let scope: "global" | "organization" | "project";
+
+      if (!parsed.scope) {
+        logger.warn("llm-generation", "Missing scope field in LLM response, defaulting to 'global'");
+        scope = "global";
+      } else if (!validScopes.includes(parsed.scope)) {
+        logger.warn("llm-generation", `Invalid scope value '${parsed.scope}', defaulting to 'global'`);
+        scope = "global";
+      } else {
+        scope = parsed.scope as "global" | "organization" | "project";
       }
 
       // Ensure scenes has correct structure
@@ -247,6 +281,7 @@ export class LLMRuleGenerator {
         title: parsed.title,
         description: parsed.description,
         rationale: parsed.rationale,
+        scope: scope,
         how_to_apply: parsed.how_to_apply,
         examples: parsed.examples,
         when_to_use: parsed.when_to_use,
@@ -307,7 +342,8 @@ export class LLMRuleGenerator {
       },
       keywords: rule.source_signals,
       created_at: rule.created_at,
-      updated_at: rule.last_validated
+      updated_at: rule.last_validated,
+      scope: rule.scope as RuleScope  // Convert scope string to RuleScope enum
     };
 
     // Build structured content (Phase 4)
