@@ -32,6 +32,8 @@ AutoImprove analyzes your Claude Code sessions to detect patterns in corrections
 - **Smart Filtering**: Removes noise, questions, and low-confidence patterns (8-class noise classifier)
 - **Quality Scoring**: Rates rules 0-1 based on completeness, actionability, and code examples
 - **Automatic Deduplication**: Semantic similarity detection prevents redundant rules
+- **Robust JSON Extraction**: Handles truncated LLM responses with fallback strategies
+- **Batch Rebuild**: Full knowledge base rebuild with intelligent consolidation
 
 **🎯 Context-Aware Matching**
 - **3D Scene Model**: Tech stack (React, TypeScript) + Functional domain (auth, API) + Business domain (e-commerce)
@@ -146,10 +148,13 @@ Analyze session and generate rules.
 
 **Usage**:
 ```bash
-/autoimprove-summarize              # Analyze current session
-/autoimprove-summarize --all        # Batch analyze all sessions
-/autoimprove-summarize --enhance    # Enable AI enhancement
-/autoimprove-summarize --force      # Force reanautoimprove-summarize --rebuild    # Clear all rules and rebuild
+/autoimprove-summarize                        # Analyze current session
+/autoimprove-summarize --all                  # Batch analyze all sessions
+/autoimprove-summarize --enhance              # Enable AI enhancement
+/autoimprove-summarize --force                # Force reanalysis
+/autoimprove-summarize --rebuild              # Clear all rules and rebuild
+/autoimprove-summarize --rebuild --enhance    # Rebuild with AI enhancement
+/autoimprove-summarize --min-confidence 0.6   # Set confidence threshold
 ```
 
 **What it does**:
@@ -157,10 +162,18 @@ Analyze session and generate rules.
 2. Detects 5 pattern types with confidence scoring
 3. Filters noise using 8-class classifier
 4. Generates rules with LLM enhancement (optional)
-5. Consolidates similar patterns
+5. Consolidates similar patterns with semantic grouping
 6. Deduplicates against existing rules
-7. Exports top 10 rules to claude-index.md
-8. Runs automatic cleanup (merges duplicates, optimizes low-quality rules)
+7. Extracts code examples from Read/Edit/Write tool calls
+8. Exports top 10 rules to claude-index.md
+9. Runs automatic cleanup (merges duplicates, optimizes low-quality rules)
+
+**Batch Rebuild Mode** (`--rebuild`):
+- Backs up existing rules to `~/.autoimprove/backups/`
+- Clears all rules and reprocesses all sessions
+- Uses latest generation algorithms and quality controls
+- Intelligent consolidation and deduplication
+- 95 sessions → 49 high-quality rules (typical output)
 
 ### `/autoimprove-status`
 
@@ -213,6 +226,7 @@ View learned lessons grouped by scene.
 │  ├─ Rule Generation                                          │
 │  │  ├─ Basic Generator (regex + heuristics)                 │
 │  │  ├─ LLM Enhancer (Anthropic API, token-optimized)        │
+│  │  ├─ JSON Extractor (truncation-aware parsing)            │
 │  │  ├─ Code Example Extractor                               │
 │  │  └─ Quality Assessor (0-1 scoring)                       │
 │  ├─ Rule Matching                                            │
@@ -298,6 +312,11 @@ Edit `~/.autoimprove/config.json`:
 
 ### Core Tools
 
+- **`batch_rebuild`** - Complete knowledge base rebuild from all sessions
+  - Input: `min_confidence`, `use_llm_enhancement`, `force`, `auto_cleanup`, `merge_duplicates`, `optimize_low_quality`
+  - Output: Sessions analyzed, patterns detected, rules generated, execution time
+  - Best for: Periodic refresh, fixing quality issues, upgrading generation algorithms
+
 - **`analyze_session`** - Analyze session JSONL file, detect patterns
   - Input: `session_file_path`, `incremental` (optional), `forceReanalyze` (optional)
   - Output: Pattern list with types, confidence, occurrences
@@ -365,8 +384,10 @@ This will:
 If you want to clear all existing rules and rebuild:
 
 ```bash
-/autoimprove-summarize --rebuild
-``s will:
+/autoimprove-summarize --rebuild --enhance --min-confidence 0.6
+```
+
+This will:
 1. Backup existing rules to `~/.autoimprove/backups/`
 2. Clear all rules from database
 3. Reset analysis tracking
@@ -457,10 +478,13 @@ autoimprove/
 │   │   │   │   ├── session-analyzer.ts      # Pattern detection
 │   │   │   │   ├── hybrid-rule-generator.ts # 4-phase generation
 │   │   │   │   ├── llm-rule-generator.ts    # LLM enhancement
+│   │   │   │   ├── batch-llm-rule-generator.ts # Batch processing
+│   │   │   │   ├── json-extractor.ts        # Robust JSON parsing
 │   │   │   │   ├── classifier.ts            # Rule filtering
 │   │   │   │   ├── confidence.ts            # Confidence calculation
 │   │   │   │   ├── indexed-rule-matcher.ts  # O(1) rule matching
-│   │   │   │   └── enhanced-scene-detector.ts # 3D scene detection
+│   │   │   │   ├── enhanced-scene-detector.ts # 3D scene detection
+│   │   │   │   └── scope-detector.ts        # Project/org scope detection
 │   │   │   ├── storage/             # Persistence layer
 │   │   │   │   ├── rule-index.ts            # In-memory index
 │   │   │   │   ├── rule-content-manager.ts  # File I/O
@@ -687,12 +711,30 @@ Built with:
 
 ## Version
 
-**Current version**: 0.3.0
+**Current version**: 0.4.0
 
 ### Recent Changes
 
+**v0.4.0** (2026-07-05)
+- ✨ **New**: Batch rebuild with intelligent consolidation
+  - `batch_rebuild` MCP tool for complete knowledge base refresh
+  - Processes 95 sessions in ~4.5 minutes with caching
+  - Automatic deduplication and quality optimization
+- 🔧 **Enhancement**: Robust JSON extraction module
+  - Dedicated `JSONExtractor` with truncation detection
+  - Multiple fallback strategies for malformed JSON
+  - Handles escaped quotes, control characters, and nested structures
+- 📝 **Enhancement**: Scope detection for project/org-level rules
+  - Automatic detection of rule applicability scope
+  - Better filtering for context-specific patterns
+- 🧪 **Testing**: Comprehensive test coverage
+  - JSON extraction edge cases
+  - Content sanitization
+  - Scope parsing and filtering
+  - Pattern clusterer truncation handling
+
 **v0.3.0** (2026-07-04)
-- 🐛 **Fix**: Removross-session requirement for REPEATED_CORRECTION patterns
+- 🐛 **Fix**: Remove cross-session requirement for REPEATED_CORRECTION patterns
   - Allows single-session analysis to generate rules
   - Fixes issue where 216 patterns detected but 0 rules generated
 - 📊 **New**: Added diagnostic logging for rule filtering
