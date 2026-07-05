@@ -353,6 +353,32 @@ Keywords are matched against rule descriptions, titles, and content. Use specifi
         },
       },
       {
+        name: "get_rule_details",
+        description: `Get the full content and details of a specific rule by ID.
+
+This tool provides an alternative to search_knowledge when you already know the rule ID and want to fetch its complete content without searching. Useful for:
+- Following up on a rule ID mentioned in previous responses
+- Fetching detailed examples and exceptions for a known rule
+- Getting the full markdown content for documentation
+
+Returns: Rule metadata + full content (title, description, how_to_apply, when_to_use, exceptions, examples, full markdown)`,
+        inputSchema: {
+          type: "object",
+          properties: {
+            rule_id: {
+              type: "string",
+              description: "Rule ID (e.g., 'rule-001', 'RULE-010')",
+            },
+            include_examples: {
+              type: "boolean",
+              description: "Include code examples in the response (default: true)",
+              default: true,
+            },
+          },
+          required: ["rule_id"],
+        },
+      },
+      {
         name: "update_rules",
         description: "Update an existing rule",
         inputSchema: {
@@ -1006,6 +1032,9 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       case "search_knowledge":
         return await handleSearchKnowledge(request.params.arguments);
 
+      case "get_rule_details":
+        return await handleGetRuleDetails(request.params.arguments);
+
       case "update_rules":
         return await handleUpdateRules(request.params.arguments);
 
@@ -1362,6 +1391,22 @@ async function handleGenerateRules(args: any) {
     }
   }
 
+  // ===== AUTO-EXPORT PHASE =====
+  // Automatically update claude-index.md with top rules after generation
+  try {
+    logger.info("auto-export", "Updating claude-index.md with top rules...");
+    const exporter = new ClaudeIndexExporter(indexManager, contentManager);
+    const exportResult = exporter.export({
+      limit: 10,
+      minConfidence: 0.7,
+      strategy: "category-balanced",
+    });
+    logger.info("auto-export", `Successfully exported ${exportResult.rulesExported} rules to claude-index.md`);
+  } catch (exportError: any) {
+    logger.warn("auto-export", `Failed to auto-export rules: ${exportError.message}`);
+    // Don't fail the entire generation if export fails
+  }
+
   return {
     content: [
       {
@@ -1369,7 +1414,7 @@ async function handleGenerateRules(args: any) {
         text: JSON.stringify({
           success: true,
           rules_count: finalRuleIds.length,
-          rule_ids: finalRuleIds,
+     ids: finalRuleIds,
           generation_mode: useEnhanced ? "enhanced" : "basic",
           llm_enhancement: useLLMEnhancement,
           code_examples_extracted: extractCodeExamples,
@@ -1383,6 +1428,7 @@ async function handleGenerateRules(args: any) {
             reduction_rate: rules.length > 0 ? ((rules.length - finalRuleIds.length) / rules.length) : 0,
             details: deduplicationResults,
           },
+          auto_exported_to_claude_md: true,
         }),
       },
     ],
@@ -1398,11 +1444,31 @@ async function handleSearchKnowledge(args: any) {
   const organizationId = args.organization_id as string | undefined;
   const scopesStr = args.scopes as string | undefined;
 
+  // 🆕 Log search request
+  logger.info("search_knowledge", "Search request received", {
+    search_type: ruleId ? "by_id" : (sceneJson ? "by_scene" : "list_all"),
+    has_scene: !!sceneJson,
+    has_keywords: !!keywords,
+    has_rule_id: !!ruleId,
+    skip_feedback: skipFeedback,
+    has_scope_filter: !!(scopesStr || currentProject || organizationId),
+  });
+
   // Search by ID
   if (ruleId) {
+    logger.info("search_knowledge", "Searching by rule ID", { rule_id: ruleId });
     const rule = indexManager.getRule(ruleId);
     if (rule) {
       const content = contentManager.loadContent(ruleId);
+
+      // 🆕 Log successful ID search
+      logger.info("search_knowledge", "Rule found by ID", {
+        rule_id: ruleId,
+        type: rule.type,
+        priority: rule.priority,
+        confidence: rule.confidence,
+        has_content: !!content,
+      });
 
       // 🆕 Auto-record feedback when rule is queried
       if (!skipFeedback) {
@@ -1423,8 +1489,15 @@ async function handleSearchKnowledge(args: any) {
               matches_count: 1,
               matches: [
                 {
-                  rule: rule,
-                  content: content ? contentManager.toMarkdown(content) : null,
+                  id: rule.id,
+                  priority: rule.priority,
+                  confidence: rule.confidence,
+                  title: content?.title,
+                  description: content?.description,
+                  how_to_apply: content?.how_to_apply,
+                  when_to_use: content?.when_to_use,
+                  exceptions: content?.exceptions,
+                  examples: content?.examples,
                 },
               ],
             }),
@@ -1432,6 +1505,9 @@ async function handleSearchKnowledge(args: any) {
         ],
       };
     } else {
+      // 🆕 Log failed ID search
+      logger.warn("search_knowledge", "Rule not found by ID", { rule_id: ruleId });
+
       return {
         content: [
           {
@@ -1454,12 +1530,40 @@ async function handleSearchKnowledge(args: any) {
     const parsedScene = JSON.parse(sceneJson);
     const scene = createScene(parsedScene); // Normalize to ensure all fields exist
     const kwList = parseCommaSeparated(keywords);
+
+    // 🆕 Log scene search parameters
+    const techStr = (scene.tech || []).join(",") || "none";
+    const funcStr = (scene.functional || []).join(",") || "none";
+    const bizStr = (scene.business || []).join(",") || "none";
+    logger.info("search_knowledge", "Searching by scene", {
+      tech: techStr,
+      functional: funcStr,
+      business: bizStr,
+      keywords: kwList,
+      scope_filter: scopeFilter,
+    });
+
     const matches = matcher.matchRules(scene, kwList, undefined, undefined, scopeFilter);
+
+    // 🆕 Log search results
+    const topRelevance = matches.length > 0 ? matches[0].relevance_score : 0;
+    const avgRelevance = matches.length > 0
+      ? matches.reduce((sum, m) => sum + m.relevance_score, 0) / matches.length
+      : 0;
+
+    logger.info("search_knowledge", "Scene search completed", {
+      matches_count: matches.length,
+      top_relevance: topRelevance.toFixed(3),
+      avg_relevance: avgRelevance.toFixed(3),
+      top_3_rules: matches.slice(0, 3).map(m => ({
+        id: m.rule.id,
+        relevance: m.relevance_score.toFixed(3),
+        priority: m.rule.priority,
+      })),
+    });
 
     // 🆕 Auto-record feedback for matched rules
     if (!skipFeedback && matches.length > 0) {
-      const techStr = (scene.tech || []).join(",") || "none";
-      const funcStr = (scene.functional || []).join(",") || "none";
       const sceneContext = `scene:${techStr}/${funcStr}`;
       const keywordContext = kwList ? `:keywords:${kwList.join(",")}` : "";
 
@@ -1486,11 +1590,29 @@ async function handleSearchKnowledge(args: any) {
           text: JSON.stringify({
             success: true,
             matches_count: matches.length,
-            matches: matches.map((m) => ({
-              rule: m.rule,
-              relevance: m.relevance_score,
-              reason: m.match_reason,
-            })),
+            matches: matches.map((m) => {
+              // Load full content for each matched rule
+              const ruleContent = contentManager.loadContent(m.rule.id);
+
+              // Debug log
+              if (!ruleContent) {
+                logger.warn("search_knowledge", `Failed to load content for rule ${m.rule.id}`);
+              }
+
+              // Return only actionable fields for LLM
+              return {
+                id: m.rule.id,
+                priority: m.rule.priority,
+                confidence: m.rule.confidence,
+                relevance: m.relevance_score,
+                title: ruleContent?.title,
+                description: ruleContent?.description,
+                how_to_apply: ruleContent?.how_to_apply,
+                when_to_use: ruleContent?.when_to_use,
+                exceptions: ruleContent?.exceptions,
+                examples: ruleContent?.examples,
+              };
+            }),
           }),
         },
       ],
@@ -1499,6 +1621,21 @@ async function handleSearchKnowledge(args: any) {
 
   // List all rules (no feedback recording for list-all queries)
   const rules = indexManager.listRules();
+
+  // 🆕 Log list-all operation
+  logger.info("search_knowledge", "Listing all rules", {
+    total_rules: rules.length,
+    priority_breakdown: {
+      critical: rules.filter(r => r.priority === "critical").length,
+      high: rules.filter(r => r.priority === "high").length,
+      medium: rules.filter(r => r.priority === "medium").length,
+      low: rules.filter(r => r.priority === "low").length,
+    },
+    avg_confidence: rules.length > 0
+      ? (rules.reduce((sum, r) => sum + r.confidence, 0) / rules.length).toFixed(3)
+      : 0,
+  });
+
   return {
     content: [
       {
@@ -1506,7 +1643,75 @@ async function handleSearchKnowledge(args: any) {
         text: JSON.stringify({
           success: true,
           matches_count: rules.length,
-          matches: rules.map((r) => ({ rule: r })),
+          matches: rules.map((r) => {
+            const ruleContent = contentManager.loadContent(r.id);
+            return {
+              id: r.id,
+              priority: r.priority,
+              confidence: r.confidence,
+              title: ruleContent?.title,
+              description: ruleContent?.description,
+              how_to_apply: ruleContent?.how_to_apply,
+              when_to_use: ruleContent?.when_to_use,
+              exceptions: ruleContent?.exceptions,
+              examples: ruleContent?.examples,
+            };
+          }),
+        }),
+      },
+    ],
+  };
+}
+
+async function handleGetRuleDetails(args: any) {
+  const ruleId = args.rule_id as string;
+  const includeExamples = args.include_examples !== false; // Default: true
+
+  const rule = indexManager.getRule(ruleId);
+  if (!rule) {
+    return {
+      content: [
+        {
+          type: "text",
+          text: JSON.stringify({
+            success: false,
+            error: `Rule not found: ${ruleId}`,
+          }),
+        },
+      ],
+    };
+  }
+
+  const content = contentManager.loadContent(ruleId);
+  if (!content) {
+    return {
+      content: [
+        {
+          type: "text",
+          text: JSON.stringify({
+            success: false,
+            error: `Rule content file not found for: ${ruleId}`,
+          }),
+        },
+      ],
+    };
+  }
+
+  return {
+    content: [
+      {
+        type: "text",
+        text: JSON.stringify({
+          success: true,
+          id: rule.id,
+          priority: rule.priority,
+          confidence: rule.confidence,
+          title: content.title,
+          description: content.description,
+          how_to_apply: content.how_to_apply,
+          when_to_use: content.when_to_use,
+          exceptions: content.exceptions,
+          examples: includeExamples ? content.examples : undefined,
         }),
       },
     ],
@@ -3178,6 +3383,27 @@ async function handleBatchRebuild(args: any) {
       deleteVeryLowQuality: args.delete_very_low_quality === true,
       veryLowQualityThreshold: args.very_low_quality_threshold || 0.3,
     });
+
+    // ===== AUTO-EXPORT PHASE =====
+    // Automatically update claude-index.md with top rules after batch rebuild
+    if (!args.dry_run) {
+      try {
+        logger.info("auto-export", "Updating claude-index.md with top rules after batch rebuild...");
+        const exporter = new ClaudeIndexExporter(indexManager, contentManager);
+        const exportResult = exporter.export({
+          limit: 10,
+          minConfidence: 0.7,
+          strategy: "category-balanced",
+        });
+        logger.info("auto-export", `Successfully exported ${exportResult.rulesExported} rules to claude-index.md`);
+        // Add export metadata to result (TypeScript will allow this as it's any/Record)
+        (result as any).auto_exported_to_claude_md = true;
+        (result as any).exported_rules_count = exportResult.rulesExported;
+      } catch (exportError: any) {
+        logger.warn("auto-export", `Failed to auto-export rules: ${exportError.message}`);
+        (result as any).auto_export_warning = exportError.message;
+      }
+    }
 
     return {
       content: [

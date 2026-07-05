@@ -1,45 +1,51 @@
 <!-- AUTOIMPROVE_START -->
-## AutoImprove
+## AutoImprove - CRITICAL FIRST STEP
 
-AutoImprove MCP (`mcp__autoimprove-core__*`) is a learned knowledge base of patterns and corrections from past sessions, O(1) indexed lookup, <10ms.
+⚠️ **BLOCKING**: Call `search_knowledge` BEFORE:
+1. Write/Edit/Create files (code/config/docs/tests)
+2. Debug/Diagnose/Analyze (search BEFORE reading logs)
+3. Fix/Resolve/Repair (bugs/errors/crashes/performance)
+4. Investigate/Troubleshoot ("why X broken/slow/failing")
 
-### When to prefer AutoImprove over native knowledge
+No exceptions. Search <10ms, skips risk repeating mistakes.
 
-Use AutoImprove for **learned patterns** - conventions, anti-patterns, corrections. Use native tools for general knowledge.
+### Pre-Action Checklist
+- [ ] Called `search_knowledge` for write/edit/debug/fix?
+- [ ] Used keywords (error types, tech, operation)?
+- [ ] Checked scene_json (tech + functional)?
+- [ ] Avoiding known pattern repetition?
 
-| user intent | Action | Example |
-|---|---|---|
-| ANY write/create/edit (code/docs/config/test) | `search_knowledge` FIRST | Before Write/Edit ANY file |
-| "Add/Build/Implement/Create X" | `search_knowledge` scene | `search_knowledge({scene_json:'{"tech":["react"],"functional":["auth"]}'})` |
-| "Fix/Debug/Resolve Y" | `search_knowledge` keywords | `search_knowledge({keywords: "async,error,state"})` | 
-| "Generate/Write docs/README" | `search_knowledge` doc keywords | `search_knowledge({keywords: "documentation,report"})`|
-| "How should I...?" | `search_knowledge` BEFORE answer | Check rules first |
-| User corrects you repeatedly |  `/autoimprove-summarize` | Generate rules |
+### Trigger Keywords (case-insensitive, 中文/EN)
+- **Debug/Diagnose**: 宕机,crash,error,failed,为什么,why,出现,问题,异常,exception
+- **Fix**: 修复,fix,解决,resolve,repair,处理
+- **Implement**: 实现,添加,implement,add,create,build,开发
+- **Analyze**: 分析,analyze,调查,investigate,排查,troubleshoot
 
-### Rules of thumb
+### Scene Detection
+Extract from: file paths (`.py`→python), error msgs (`sqlite3.Error`→sqlite), user text ("FastAPI"→fastapi), cwd
 
-- **Search BEFORE any write.** ANY write/Edit/Create operation (code/docs/config/tests/scripts) requires `search_knowledge` first. Don't write without checking - that repeats mistakes
-- **Trust >=70% confidence rules** - Auto-apply; proven from 3+ confirmations. NOT suggestions, learned requirements.
-- **Never skip "simple" or "non-code" tasks** - Docs/configs/scripts have conventions. Search is fast (<10ms).
-- **Priority: Critical=MANDATORY, High = follow unless override, Medium/Low = advisory** 
-- **Always cite rule ID** - "Following RULE-008 (pattern name)" for transparency. 
-- **Scene auto-detected** - Tech from extensions ('.tsx'→react), domain from keywords. Manual scenes only for broad search.
-- **Read ALL returned rules** - Top-N ranked, review all before applying.
+Always add functional: server issues→`{"functional":["server","database"]}`, API→`["api","error-handling"]`, perf→`["performance"]`
 
-### Search strategies
-
-**Code (feature/fix/refactor):**
+### Search Examples
 ```typescript
-search_knowledge({scene_json: '{"tech":["react"], "functional":["form"]}'})
-search_knowledge({keywords: "validation,error-handling,async"})
+// Code
+search_knowledge({scene_json:'{"tech":["react"],"functional":["form"]}', keywords:"validation,async"})
+
+// Debug (BEFORE logs)
+search_knowledge({keywords:"timeout,crash,error", scene_json:'{"tech":["python"],"functional":["server"]}'})
 ```
 
-**Docs/config/tests:** `search_knowledge({keywords: "documentation,build,test,ci})`
-**Agent orchestration:** `search_knowledge({keywords: "agent,parallel,workflow"})`
+### Rules
+- **Search BEFORE write/diagnosis** - ANY write/debug needs `search_knowledge` first
+- **Trust ≥70% confidence** - Auto-apply proven patterns
+- **Never skip simple tasks** - Search is <10ms
+- **Cite rule IDs** - "Following RULE-008..."
+- **Read ALL matched rules** - Review before applying
 
-**Bug fix:** `search_knowledge({keywords: "race-condition,memory-leak"})`
+### Example
+❌ Bad: User: "服务端宕机" → Read logs directly → Miss historical fixes
+✅ Good: User: "服务端宕机" → `search_knowledge({keywords:"crash,server,timeout"})` → Review RULE-015 → Read logs → Cite rules → Solution
 
-### If `~/.autoimprove/` doesn't exist
-
+### If not initialized
 Tell user: *"AutoImprove not initialized. Run `cd ~/workspace/autoimprove && ./setup.sh`"*
 <!-- AUTOIMPROVE_END -->

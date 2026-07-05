@@ -112,12 +112,45 @@ export class RuleContentManager {
       content = body;
     }
 
+    // Parse structured sections from content
+    const title = this.extractSection(content, /^#\s+(.+)$/m);
+    const description = this.extractSection(content, /## Description\s+([\s\S]+?)(?=##|$)/);
+    const howToApply = this.extractListSection(content, /## How to Apply\s+([\s\S]+?)(?=##|$)/);
+    const whenToUse = this.extractListSection(content, /## When to Use\s+([\s\S]+?)(?=##|$)/);
+    const exceptions = this.extractListSection(content, /## Exceptions\s+([\s\S]+?)(?=##|$)/);
+
     return {
       id: ruleId,
       content,
       reason,
-      metadata
+      metadata,
+      title: title || undefined,
+      description: description || undefined,
+      how_to_apply: howToApply.length > 0 ? howToApply : undefined,
+      when_to_use: whenToUse.length > 0 ? whenToUse : undefined,
+      exceptions: exceptions.length > 0 ? exceptions : undefined,
     };
+  }
+
+  private extractSection(content: string, regex: RegExp): string | null {
+    const match = content.match(regex);
+    return match ? match[1].trim() : null;
+  }
+
+  private extractListSection(content: string, regex: RegExp): string[] {
+    const match = content.match(regex);
+    if (!match) return [];
+
+    const section = match[1].trim();
+    // Extract list items (lines starting with - or *)
+    const items = section
+      .split('\n')
+      .map(line => line.trim())
+      .filter(line => line.startsWith('-') || line.startsWith('*'))
+      .map(line => line.replace(/^[-*]\s+/, '').trim())
+      .filter(line => line.length > 0);
+
+    return items;
   }
 
   saveContent(rule: RuleContent): void {
