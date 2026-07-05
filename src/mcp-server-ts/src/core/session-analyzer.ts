@@ -5,7 +5,7 @@
  * Supports incremental analysis for performance.
  */
 
-import { JSONLParser, SessionData, Message } from "./jsonl-parser.js";
+import { UnifiedSessionParser, SessionData, Message } from "./unified-session-parser.js";
 import { Pattern, PatternType, PatternOccurrence, createPattern } from "./models.js";
 import { ConfidenceCalculator } from "./confidence.js";
 import { SessionCacheManager } from "../storage/session-cache.js";
@@ -14,13 +14,13 @@ import { statSync } from "fs";
 import { logger } from "./logger.js";
 
 export class SessionAnalyzer {
-  private parser: JSONLParser;
+  private parser: UnifiedSessionParser;
   private confidenceCalc: ConfidenceCalculator;
   private cacheManager: SessionCacheManager;
   private compactCache: CompactCacheManager;
 
   constructor() {
-    this.parser = new JSONLParser();
+    this.parser = new UnifiedSessionParser();
     this.confidenceCalc = new ConfidenceCalculator();
     this.cacheManager = new SessionCacheManager();
     this.compactCache = new CompactCacheManager();

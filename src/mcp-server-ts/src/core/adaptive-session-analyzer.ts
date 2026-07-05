@@ -3,7 +3,7 @@
  */
 
 import { Pattern, PatternType, createPattern } from "./models.js";
-import { JSONLParser, SessionData } from "./jsonl-parser.js";
+import { UnifiedSessionParser, SessionData } from "./unified-session-parser.js";
 import { ConfidenceCalculator } from "./confidence.js";
 import { SessionCacheManager } from "../storage/session-cache.js";
 import { CompactCacheManager } from "../storage/compact-cache.js";
@@ -48,7 +48,7 @@ export interface AdaptiveAnalysisResult {
 }
 
 export class AdaptiveSessionAnalyzer {
-  private parser: JSONLParser;
+  private parser: UnifiedSessionParser;
   private confidenceCalc: ConfidenceCalculator;
   private cacheManager: SessionCacheManager;
   private compactCache: CompactCacheManager;
@@ -60,7 +60,7 @@ export class AdaptiveSessionAnalyzer {
   private db: SignalDictionaryDB;
 
   constructor() {
-    this.parser = new JSONLParser();
+    this.parser = new UnifiedSessionParser();
     this.confidenceCalc = new ConfidenceCalculator();
     this.cacheManager = new SessionCacheManager();
     this.compactCache = new CompactCacheManager();
