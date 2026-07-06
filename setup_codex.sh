@@ -12,7 +12,7 @@ NC='\033[0m' # No Color
 
 # Paths
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-AUTOIMPROVE_DIR="$SCRIPT_DIR"
+AUTOIMPROVE_DIR="$SCRIPT_DIR/src/mcp-server-ts"
 CODEX_DIR="$HOME/.codex"
 CODEX_GUIDANCE="$CODEX_DIR/guidance.md"
 MCP_SETTINGS_FILE="$CODEX_DIR/mcp_settings.json"
@@ -43,8 +43,8 @@ echo -e "${GREEN}[OK]${NC} Directories created"
 # Copy guidance template
 echo ""
 echo "Configuring Codex guidance..."
-if [ -f "$AUTOIMPROVE_DIR/templates/claude-guidance-template.md" ]; then
-    cp "$AUTOIMPROVE_DIR/templates/claude-guidance-template.md" "$CODEX_GUIDANCE"
+if [ -f "$SCRIPT_DIR/templates/claude-guidance-template.md" ]; then
+    cp "$SCRIPT_DIR/templates/claude-guidance-template.md" "$CODEX_GUIDANCE"
     echo -e "${GREEN}[OK]${NC} Guidance file created: $CODEX_GUIDANCE"
 else
     echo -e "${YELLOW}[WARNING]${NC} Template not found, creating basic guidance..."
@@ -73,7 +73,7 @@ cat > "$MCP_SETTINGS_FILE" << EOF
   "mcpServers": {
     "autoimprove": {
       "command": "node",
-      "args": ["$AUTOIMPROVE_DIR/dist/mcp-server.js"],
+      "args": ["$AUTOIMPROVE_DIR/dist/index.js"],
       "env": {
         "AUTOIMPROVE_DIR": "$AUTOIMPROVE_DIR"
       }
@@ -126,7 +126,7 @@ echo -e "${GREEN}[OK]${NC} Skill file created: $SKILL_FILE"
 # Build MCP server if needed
 echo ""
 echo "Checking MCP Server build..."
-if [ ! -f "$AUTOIMPROVE_DIR/dist/mcp-server.js" ]; then
+if [ ! -f "$AUTOIMPROVE_DIR/dist/index.js" ]; then
     echo "Building MCP Server..."
     cd "$AUTOIMPROVE_DIR"
     npm run build
