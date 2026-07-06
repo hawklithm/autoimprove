@@ -37,3 +37,10 @@ venv/
 
 # User-specific paths (don't commit absolute paths)
 *.local.sh
+# Personal and temporary files
+.mcp.json
+codex-settings.json
+*.bak
+*.bak[0-9]
+*.before_fix
+*.original

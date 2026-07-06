@@ -1,0 +1,11 @@
+{
+  "mcpServers": {
+    "autoimprove": {
+      "command": "node",
+      "args": ["${AUTOIMPROVE_DIR}/src/mcp-server-ts/dist/index.js"],
+      "env": {
+        "AUTOIMPROVE_SKILLS_PATH": "${AUTOIMPROVE_DIR}/skills-internal"
+      }
+    }
+  }
+}
