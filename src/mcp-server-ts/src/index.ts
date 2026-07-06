@@ -1480,27 +1480,32 @@ async function handleSearchKnowledge(args: any) {
         });
       }
 
+      // Format as markdown
+      let markdown = `# ${content?.title || ruleId}\n\n`;
+
+      if (content?.description) {
+        markdown += `## Description\n\n${content.description}\n\n`;
+      }
+
+      if (content?.how_to_apply) {
+        markdown += `## How to Apply\n\n${content.how_to_apply}\n\n`;
+      }
+
+      if (content?.when_to_use) {
+        markdown += `## When to Use\n\n${content.when_to_use}\n\n`;
+      }
+
+      if (content?.exceptions) {
+        markdown += `## Exceptions\n\n${content.exceptions}\n\n`;
+      }
+
+      markdown += `---\n*Rule ID: ${ruleId}*`;
+
       return {
         content: [
           {
             type: "text",
-            text: JSON.stringify({
-              success: true,
-              matches_count: 1,
-              matches: [
-                {
-                  id: rule.id,
-                  priority: rule.priority,
-                  confidence: rule.confidence,
-                  title: content?.title,
-                  description: content?.description,
-                  how_to_apply: content?.how_to_apply,
-                  when_to_use: content?.when_to_use,
-                  exceptions: content?.exceptions,
-                  examples: content?.examples,
-                },
-              ],
-            }),
+            text: markdown,
           },
         ],
       };
@@ -1583,37 +1588,54 @@ async function handleSearchKnowledge(args: any) {
       });
     }
 
+    // Format results as markdown
+    if (matches.length === 0) {
+      return {
+        content: [
+          {
+            type: "text",
+            text: "No matching rules found for the given scene and keywords.",
+          },
+        ],
+      };
+    }
+
+    let markdown = `# Found ${matches.length} Matching Rule${matches.length > 1 ? 's' : ''}\n\n`;
+
+    matches.forEach((m, idx) => {
+      const ruleContent = contentManager.loadContent(m.rule.id);
+
+      if (!ruleContent) {
+        logger.warn("search_knowledge", `Failed to load content for rule ${m.rule.id}`);
+        return;
+      }
+
+      markdown += `## ${idx + 1}. ${ruleContent.title || m.rule.id}\n\n`;
+
+      if (ruleContent.description) {
+        markdown += `${ruleContent.description}\n\n`;
+      }
+
+      if (ruleContent.how_to_apply) {
+        markdown += `**How to Apply:**\n\n${ruleContent.how_to_apply}\n\n`;
+      }
+
+      if (ruleContent.when_to_use) {
+        markdown += `**When to Use:**\n\n${ruleContent.when_to_use}\n\n`;
+      }
+
+      if (ruleContent.exceptions) {
+        markdown += `**Exceptions:**\n\n${ruleContent.exceptions}\n\n`;
+      }
+
+      markdown += `*Rule ID: ${m.rule.id}*\n\n---\n\n`;
+    });
+
     return {
       content: [
         {
           type: "text",
-          text: JSON.stringify({
-            success: true,
-            matches_count: matches.length,
-            matches: matches.map((m) => {
-              // Load full content for each matched rule
-              const ruleContent = contentManager.loadContent(m.rule.id);
-
-              // Debug log
-              if (!ruleContent) {
-                logger.warn("search_knowledge", `Failed to load content for rule ${m.rule.id}`);
-              }
-
-              // Return only actionable fields for LLM
-              return {
-                id: m.rule.id,
-                priority: m.rule.priority,
-                confidence: m.rule.confidence,
-                relevance: m.relevance_score,
-                title: ruleContent?.title,
-                description: ruleContent?.description,
-                how_to_apply: ruleContent?.how_to_apply,
-                when_to_use: ruleContent?.when_to_use,
-                exceptions: ruleContent?.exceptions,
-                examples: ruleContent?.examples,
-              };
-            }),
-          }),
+          text: markdown,
         },
       ],
     };
@@ -1636,28 +1658,49 @@ async function handleSearchKnowledge(args: any) {
       : 0,
   });
 
+  // Format as markdown
+  if (rules.length === 0) {
+    return {
+      content: [
+        {
+          type: "text",
+          text: "No rules found in the knowledge base.",
+        },
+      ],
+    };
+  }
+
+  let markdown = `# All Rules (${rules.length} total)\n\n`;
+
+  rules.forEach((r, idx) => {
+    const ruleContent = contentManager.loadContent(r.id);
+
+    markdown += `## ${idx + 1}. ${ruleContent?.title || r.id}\n\n`;
+
+    if (ruleContent?.description) {
+      markdown += `${ruleContent.description}\n\n`;
+    }
+
+    if (ruleContent?.how_to_apply) {
+      markdown += `**How to Apply:**\n\n${ruleContent.how_to_apply}\n\n`;
+    }
+
+    if (ruleContent?.when_to_use) {
+      markdown += `**When to Use:**\n\n${ruleContent.when_to_use}\n\n`;
+    }
+
+    if (ruleContent?.exceptions) {
+      markdown += `**Exceptions:**\n\n${ruleContent.exceptions}\n\n`;
+    }
+
+    markdown += `*Rule ID: ${r.id}*\n\n---\n\n`;
+  });
+
   return {
     content: [
       {
         type: "text",
-        text: JSON.stringify({
-          success: true,
-          matches_count: rules.length,
-          matches: rules.map((r) => {
-            const ruleContent = contentManager.loadContent(r.id);
-            return {
-              id: r.id,
-              priority: r.priority,
-              confidence: r.confidence,
-              title: ruleContent?.title,
-              description: ruleContent?.description,
-              how_to_apply: ruleContent?.how_to_apply,
-              when_to_use: ruleContent?.when_to_use,
-              exceptions: ruleContent?.exceptions,
-              examples: ruleContent?.examples,
-            };
-          }),
-        }),
+        text: markdown,
       },
     ],
   };
