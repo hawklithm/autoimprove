@@ -96,6 +96,16 @@ export class HybridRuleGenerator {
       project_id: scopeContext.project_id
     });
 
+    // Phase 1.6: Extract scenes and keywords from pattern
+    const sceneData = this.extractSceneFromPattern(pattern);
+    basicRule.indexEntry.scenes = sceneData.scene;
+    basicRule.indexEntry.keywords = sceneData.keywords;
+
+    logger.debug("hybrid-ion", `Scene and keywords extracted for ${ruleId}`, {
+      scenes: sceneData.scene,
+      keywords: sceneData.keywords
+    });
+
     // Phase 2: LLM enhancement (if enabled and available)
     let enhancedContent: RuleContent;
     if (useLLMEnhancement && this.anthropic) {
@@ -613,5 +623,133 @@ Be specific and actionable.`;
 
     // Default: moderate complexity
     return 900;
+  }
+
+  /**
+   * Extract scene and keywords from pattern
+   */
+  private extractSceneFromPattern(pattern: Pattern): { scene: Scene; keywords: string[] } {
+    // Collect all text from pattern for analysis
+    const texts: string[] = [];
+
+    // Add description
+    if (pattern.description) {
+      texts.push(pattern.description);
+    }
+
+    // Add user inputs and contexts from occurrences
+    for (const occurrence of pattern.occurrences) {
+      if (occurrence.user_input) {
+        texts.push(occurrence.user_input);
+      }
+      if (occurrence.context) {
+        texts.push(occurrence.context);
+      }
+    }
+
+    const combinedText = texts.join(' ').toLowerCase();
+
+    // Extract tech stack
+    const tech: string[] = [];
+    const techKeywords: Record<string, string[]> = {
+      react: ['react', 'jsx', 'tsx', 'useeffect', 'usestate', 'component', 'hook'],
+      vue: ['vue', 'vuex', 'composition api', '.vue'],
+      nextjs: ['next.js', 'nextjs', 'getserversideprops', 'getstaticprops'],
+      typescript: ['typescript', 'ts', 'type', 'interface', '.ts', '.tsx'],
+      javascript: ['javascript', 'js', '.js', '.jsx'],
+      python: ['python', '.py', 'def ', 'import '],
+      prisma: ['prisma', 'schema.prisma', '@prisma'],
+      graphql: ['graphql', 'query', 'mutation', 'resolver'],
+      express: ['express', 'app.get', 'app.post', 'middleware'],
+      fastapi: ['fastapi', 'fastapi', '@app.get', '@app.post'],
+      nodejs: ['node', 'nodejs', 'npm', 'package.json'],
+      jest: ['jest', 'describe(', 'test(', 'expect('],
+      vitest: ['vitest', 'describe(', 'test(', 'expect(']
+    };
+
+    for (const [techName, keywords] of Object.entries(techKeywords)) {
+      if (keywords.some(kw => combinedText.includes(kw))) {
+        tech.push(techName);
+      }
+    }
+
+    // Extract functional domain
+    const functional: string[] = [];
+    const functionalKeywords: Record<string, string[]> = {
+      auth: ['auth', 'login', 'logout', 'jwt', 'token', 'session', 'password'],
+      api: ['api', 'endpoint', 'route', 'handler', 'request', 'response', 'rest'],
+      database: ['database', 'db', 'query', 'migration', 'schema', 'sql', 'select', 'insert'],
+      ui: ['ui', 'component', 'button', 'modal', 'form', 'layout', 'style', 'css'],
+      testing: ['test', 'spec', 'jest', 'vitest', 'cypress', 'mock', 'assert'],
+      performance: ['performance', 'optimization', 'memo', 'cache', 'slow', 'fast'],
+      security: ['security', 'xss', 'csrf', 'injection', 'sanitize', 'validate'],
+      'error-handling': ['error', 'exception', 'try', 'catch', 'throw'],
+      state: ['state', 'redux', 'store', 'context', 'useState']
+    };
+
+    for (const [funcName, keywords] of Object.entries(functionalKeywords)) {
+      if (keywords.some(kw => combinedText.includes(kw))) {
+        functional.push(funcName);
+      }
+    }
+
+    // Extract business domain (less common, more specific)
+    const business: string[] = [];
+    const businessKeywords: Record<string, string[]> = {
+      'e-commerce': ['shop', 'cart', 'checkout', 'product', 'order', 'payment'],
+      payment: ['stripe', 'paypal', 'transaction', 'billing'],
+      crm: ['customer', 'lead', 'contact', 'crm'],
+      'user-management': ['user', 'profile', 'account', 'registration', 'signup']
+    };
+
+    for (const [bizName, keywords] of Object.entries(businessKeywords)) {
+      if (keywords.some(kw => combinedText.includes(kw))) {
+        business.push(bizName);
+      }
+    }
+
+    // Extract keywords (important terms from pattern)
+    const keywords = new Set<string>();
+
+    // Add pattern type as keyword
+    keywords.add(pattern.type);
+
+    // Add existing keywords from pattern
+    if (pattern.keywords) {
+      pattern.keywords.forEach(kw => keywords.add(kw));
+    }
+
+    // Extract important technical terms (camelCase, PascalCase, snake_case identifiers)
+    const identifierRegex = /\b([a-z][a-zA-Z0-9_]*|[A-Z][a-zA-Z0-9]*)\b/g;
+    const matches = combinedText.match(identifierRegex);
+    if (matches) {
+      // Take most frequent terms (simple heuristic)
+      const termCounts = new Map<string, number>();
+      for (const match of matches) {
+        if (match.length > 3 && !['this', 'that', 'from', 'with', 'have', 'should'].includes(match)) {
+          termCounts.set(match, (termCounts.get(match) || 0) + 1);
+        }
+      }
+
+      // Add top 5 most frequent terms
+      const topTerms = Array.from(termCounts.entries())
+        .sort((a, b) => b[1] - a[1])
+        .slice(0, 5)
+        .map(([term]) => term);
+      topTerms.forEach(term => keywords.add(term));
+    }
+
+    // Add tech and functional domains as keywords
+    tech.forEach(t => keywords.add(t));
+    functional.forEach(f => keywords.add(f));
+
+    return {
+      scene: {
+        tech: [...new Set(tech)],
+        functional: [...new Set(functional)],
+        business: [...new Set(business)]
+      },
+      keywords: Array.from(keywords).slice(0, 15) // Limit to 15 keywords
+    };
   }
 }

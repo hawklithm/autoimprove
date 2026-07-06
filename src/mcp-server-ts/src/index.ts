@@ -1454,7 +1454,7 @@ async function handleSearchKnowledge(args: any) {
     has_scope_filter: !!(scopesStr || currentProject || organizationId),
   });
 
-  // Search by ID
+  // Search by ID (returns summary and guide to get full details)
   if (ruleId) {
     logger.info("search_knowledge", "Searching by rule ID", { rule_id: ruleId });
     const rule = indexManager.getRule(ruleId);
@@ -1480,26 +1480,21 @@ async function handleSearchKnowledge(args: any) {
         });
       }
 
-      // Format as markdown
-      let markdown = `# ${content?.title || ruleId}\n\n`;
+      // Format as markdown (summary only)
+      let markdown = `## Get Full Details\n\n`;
+      markdown += `To see the complete rule with application guidance, use the MCP tool **get_rule_details** with the rule ID.\n\n`;
+      markdown += `**get_rule_details** returns:\n`;
+      markdown += `- **How to Apply:** Step-by-step application guide\n`;
+      markdown += `- **When to Use:** Specific scenarios where this rule applies\n`;
+      markdown += `- **Exceptions:** Edge cases where the rule should NOT be applied\n\n`;
+      markdown += `---\n\n`;
+
+      markdown += `# ${content?.title || ruleId}\n\n`;
+      markdown += `**Rule ID:** \`${ruleId}\`\n\n`;
 
       if (content?.description) {
-        markdown += `## Description\n\n${content.description}\n\n`;
+        markdown += `**Description:** ${content.description}\n\n`;
       }
-
-      if (content?.how_to_apply) {
-        markdown += `## How to Apply\n\n${content.how_to_apply}\n\n`;
-      }
-
-      if (content?.when_to_use) {
-        markdown += `## When to Use\n\n${content.when_to_use}\n\n`;
-      }
-
-      if (content?.exceptions) {
-        markdown += `## Exceptions\n\n${content.exceptions}\n\n`;
-      }
-
-      markdown += `---\n*Rule ID: ${ruleId}*`;
 
       return {
         content: [
@@ -1517,10 +1512,7 @@ async function handleSearchKnowledge(args: any) {
         content: [
           {
             type: "text",
-            text: JSON.stringify({
-              success: false,
-              error: `Rule not found: ${ruleId}`,
-            }),
+            text: `Error: Rule not found: ${ruleId}`,
           },
         ],
       };
@@ -1588,7 +1580,7 @@ async function handleSearchKnowledge(args: any) {
       });
     }
 
-    // Format results as markdown
+    // Format results as markdown (summary only)
     if (matches.length === 0) {
       return {
         content: [
@@ -1600,7 +1592,14 @@ async function handleSearchKnowledge(args: any) {
       };
     }
 
-    let markdown = `# Found ${matches.length} Matching Rule${matches.length > 1 ? 's' : ''}\n\n`;
+    let markdown = `## Get Full Details\n\n`;
+    markdown += `To see the complete rule with application guidance, use the MCP tool **get_rule_details** with the rule ID.\n\n`;
+    markdown += `**get_rule_details** returns:\n`;
+    markdown += `- **How to Apply:** Step-by-step application guide\n`;
+    markdown += `- **When to Use:** Specific scenarios where this rule applies\n`;
+    markdown += `- **Exceptions:** Edge cases where the rule should NOT be applied\n\n`;
+    markdown += `---\n\n`;
+    markdown += `# Found ${matches.length} Matching Rule${matches.length > 1 ? 's' : ''}\n\n`;
 
     matches.forEach((m, idx) => {
       const ruleContent = contentManager.loadContent(m.rule.id);
@@ -1613,22 +1612,11 @@ async function handleSearchKnowledge(args: any) {
       markdown += `## ${idx + 1}. ${ruleContent.title || m.rule.id}\n\n`;
 
       if (ruleContent.description) {
-        markdown += `${ruleContent.description}\n\n`;
+        markdown += `**Description:** ${ruleContent.description}\n\n`;
       }
 
-      if (ruleContent.how_to_apply) {
-        markdown += `**How to Apply:**\n\n${ruleContent.how_to_apply}\n\n`;
-      }
-
-      if (ruleContent.when_to_use) {
-        markdown += `**When to Use:**\n\n${ruleContent.when_to_use}\n\n`;
-      }
-
-      if (ruleContent.exceptions) {
-        markdown += `**Exceptions:**\n\n${ruleContent.exceptions}\n\n`;
-      }
-
-      markdown += `*Rule ID: ${m.rule.id}*\n\n---\n\n`;
+      markdown += `**Rule ID:** \`${m.rule.id}\`\n\n`;
+      markdown += `---\n\n`;
     });
 
     return {
@@ -1670,7 +1658,14 @@ async function handleSearchKnowledge(args: any) {
     };
   }
 
-  let markdown = `# All Rules (${rules.length} total)\n\n`;
+  let markdown = `## Get Full Details\n\n`;
+  markdown += `To see the complete rule with application guidance, use the MCP tool **get_rule_details** with the rule ID.\n\n`;
+  markdown += `**get_rule_details** returns:\n`;
+  markdown += `- **How to Apply:** Step-by-step application guide\n`;
+  markdown += `- **When to Use:** Specific scenarios where this rule applies\n`;
+  markdown += `- **Exceptions:** Edge cases where the rule should NOT be applied\n\n`;
+  markdown += `---\n\n`;
+  markdown += `# All Rules (${rules.length} total)\n\n`;
 
   rules.forEach((r, idx) => {
     const ruleContent = contentManager.loadContent(r.id);
@@ -1678,22 +1673,11 @@ async function handleSearchKnowledge(args: any) {
     markdown += `## ${idx + 1}. ${ruleContent?.title || r.id}\n\n`;
 
     if (ruleContent?.description) {
-      markdown += `${ruleContent.description}\n\n`;
+      markdown += `**Description:** ${ruleContent.description}\n\n`;
     }
 
-    if (ruleContent?.how_to_apply) {
-      markdown += `**How to Apply:**\n\n${ruleContent.how_to_apply}\n\n`;
-    }
-
-    if (ruleContent?.when_to_use) {
-      markdown += `**When to Use:**\n\n${ruleContent.when_to_use}\n\n`;
-    }
-
-    if (ruleContent?.exceptions) {
-      markdown += `**Exceptions:**\n\n${ruleContent.exceptions}\n\n`;
-    }
-
-    markdown += `*Rule ID: ${r.id}*\n\n---\n\n`;
+    markdown += `**Rule ID:** \`${r.id}\`\n\n`;
+    markdown += `---\n\n`;
   });
 
   return {
@@ -1716,10 +1700,7 @@ async function handleGetRuleDetails(args: any) {
       content: [
         {
           type: "text",
-          text: JSON.stringify({
-            success: false,
-            error: `Rule not found: ${ruleId}`,
-          }),
+          text: `Error: Rule not found: ${ruleId}`,
         },
       ],
     };
@@ -1731,31 +1712,54 @@ async function handleGetRuleDetails(args: any) {
       content: [
         {
           type: "text",
-          text: JSON.stringify({
-            success: false,
-            error: `Rule content file not found for: ${ruleId}`,
-          }),
+          text: `Error: Rule content file not found for: ${ruleId}`,
         },
       ],
     };
+  }
+
+  // Format as markdown with full details
+  let markdown = `# ${content.title || ruleId}\n\n`;
+
+  markdown += `**Rule ID:** \`${ruleId}\`\n\n`;
+  markdown += `**Priority:** ${rule.priority} | **Confidence:** ${(rule.confidence * 100).toFixed(0)}%\n\n`;
+  markdown += `---\n\n`;
+
+  if (content.description) {
+    markdown += `## Description\n\n${content.description}\n\n`;
+  }
+
+  if (content.how_to_apply) {
+    markdown += `## How to Apply\n\n${content.how_to_apply}\n\n`;
+  }
+
+  if (content.when_to_use) {
+    markdown += `## When to Use\n\n${content.when_to_use}\n\n`;
+  }
+
+  if (content.exceptions) {
+    markdown += `## Exceptions\n\n${content.exceptions}\n\n`;
+  }
+
+  if (includeExamples && content.examples && content.examples.length > 0) {
+    markdown += `## Examples\n\n`;
+    content.examples.forEach((example, idx) => {
+      markdown += `### Example ${idx + 1}\n\n`;
+      if (example.bad) {
+        markdown += `**Bad (avoid this):**\n\`\`\`${example.language || ''}\n${example.bad}\n\`\`\`\n\n`;
+      }
+      markdown += `**Good (do this):**\n\`\`\`${example.language || ''}\n${example.good}\n\`\`\`\n\n`;
+      if (example.explanation) {
+        markdown += `**Explanation:** ${example.explanation}\n\n`;
+      }
+    });
   }
 
   return {
     content: [
       {
         type: "text",
-        text: JSON.stringify({
-          success: true,
-          id: rule.id,
-          priority: rule.priority,
-          confidence: rule.confidence,
-          title: content.title,
-          description: content.description,
-          how_to_apply: content.how_to_apply,
-          when_to_use: content.when_to_use,
-          exceptions: content.exceptions,
-          examples: includeExamples ? content.examples : undefined,
-        }),
+        text: markdown,
       },
     ],
   };

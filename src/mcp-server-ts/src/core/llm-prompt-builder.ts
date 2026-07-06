@@ -411,10 +411,10 @@ Generate 1 rule following the output format below.`;
     let section = `Output ${outputType}: `;
 
     if (isBatchMode) {
-      section += `[{"title":"...","description":"...","rationale":"...","scope":"global","how_to_apply":[...],"when_to_use":[...],"exceptions":[...],"source_patterns":["pattern 1","pattern 2"],"merged_count":2}]\n\n`;
+      section += `[{"title":"...","description":"...","rationale":"...","scope":"global","scenes":{"tech":[],"functional":[],"business":[]},"how_to_apply":[...],"when_to_use":[...],"exceptions":[...],"source_patterns":["pattern 1","pattern 2"],"merged_count":2}]\n\n`;
       section += `If all patterns are similar, return 1 rule. If distinct, return multiple rules.\n\n`;
     } else {
-      section += `{"title":"...","description":"...","rationale":"...","scope":"global","how_to_apply":[...],"when_to_use":[...],"exceptions":[]}\n\n`;
+      section += `{"title":"...","description":"...","rationale":"...","scope":"global","scenes":{"tech":[],"functional":[],"business":[]},"how_to_apply":[...],"when_to_use":[...],"exceptions":[]}\n\n`;
     }
 
     section += `Rules:
@@ -422,6 +422,7 @@ Generate 1 rule following the output format below.`;
 - description: what to do/avoid, 3-5 sentences, specific
 - rationale: why (2-4 sentences, concrete benefits/risks)
 - scope: rule applicability scope (required, see Scope Determination below)
+- scenes: applicable technology/domain context (required, see Scene Tagging below)
 - how_to_apply: 3-6 actionable steps (array)
 - when_to_use: 3-5 conditions (array)
 - exceptions: 2-4 edge cases (array, optional)`;
@@ -457,7 +458,42 @@ REQUIRED: Every rule must include a "scope" field with one of these exact values
 
 When in doubt, choose the BROADEST applicable scope (prefer global over organization, organization over project).
 
-CRITIhe "scope" field is REQUIRED. Always include it in your JSON output.`;
+CRITICAL: The "scope" field is REQUIRED. Always include it in your JSON output.
+
+## Scene Tagging
+
+REQUIRED: Every rule must include a "scenes" field with three dimensions:
+
+**"tech"**: Array of technology stacks/frameworks involved
+- Examples: ["react", "typescript", "graphql", "prisma", "nextjs"]
+- Include: programming languages, frameworks, libraries, tools mentioned
+- Common values: react, vue, angular, typescript, javascript, python, nodejs, express, prisma, graphql, jest, vitest
+
+**"functional"**: Array of functional domains addressed
+- Examples: ["auth", "api", "database", "ui", "testing"]
+- Include: what area of functionality this rule affects
+- Common values: auth, api, database, ui, testing, performance, security, error-handling, state
+
+**"business"**: Array of business domains (if applicable)
+- Examples: ["e-commerce", "payment", "crm"]
+- Include ONLY if rule is specific to a business domain
+- Common values: e-commerce, payment, crm, user-management
+- Most rules leave this empty
+
+**How to tag:**
+1. **tech**: List all mentioned technologies - be specific (e.g., if React hooks are mentioned, add "react")
+2. **functional**: Identify what functional area the rule addresses (authentication? API design? testing?)
+3. **business**: Only add if rule is specific to a business domain (most rules leave this empty)
+
+**Examples:**
+- "Use parameterized queries to prevent SQL injection in Express APIs"
+  → {"tech": ["express", "nodejs"], "functional": ["api", "database", "security"], "business": []}
+- "Memoize expensive React component renders with useMemo"
+  → {"tech": ["react", "typescript"], "functional": ["ui", "performance"], "business": []}
+- "Validate JWT tokens before processing authenticated requests"
+  → {"tech": [], "functional": ["auth", "security", "api"], "business": []}
+
+CRITICAL: The "scenes" field is REQUIRED. Always include it with all three dimensions (tech, functional, business).`;
 
     section += `\n\nCRITICAL: Do NOT include "examples" field. Focus on clear descriptions and actionable steps.`;
 

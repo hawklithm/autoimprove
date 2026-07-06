@@ -5,7 +5,7 @@
 import Anthropic from "@anthropic-ai/sdk";
 import { SignalDictionaryDB, LabeledContent } from "../storage/signal-dictionary-db.js";
 import { PatternCluster } from "./pattern-clusterer.js";
-import { PatternType, Priority, RuleScope, RuleIndexEntry, RuleContent } from "./models.js";
+import { PatternType, Priority, RuleScope, RuleIndexEntry, RuleContent, Scene, createScene } from "./models.js";
 import { logger } from "./logger.js";
 import { LLMPromptBuilder, PromptEvidence } from "./llm-prompt-builder.js";
 import { JSONExtractor } from "./json-extractor.js";
@@ -35,11 +35,7 @@ export interface GeneratedRule {
   source_signals: string[];
   source_sessions: string[];
   evidence_count: number;
-  scenes: {
-    tech: string[];
-    business: string[];
-    generic: boolean;
-  };
+  scenes: Scene;  // Use standard Scene type (tech, functional, business)
   confidence: number;
   priority: "critical" | "high" | "medium" | "low";
   created_at: string;
@@ -125,6 +121,16 @@ export class LLMRuleGenerator {
 
       const parsed = this.parseRuleResponse(responseText);
 
+      // Extract scenes from cluster if LLM didn't provide them
+      let scenes: Scene;
+      if (parsed.scenes) {
+        scenes = parsed.scenes;
+      } else {
+        // Fallback: extract scenes from cluster content
+        scenes = this.extractScenesFromCluster(cluster, fullContents);
+        logger.debug("llm-generation", `LLM did not provide scenes, extracted from content`, { scenes });
+      }
+
       // Extract session IDs from labeled content
       const sessionIds = new Set(fullContents.map(c => c.session_id));
 
@@ -145,7 +151,7 @@ export class LLMRuleGenerator {
         source_signals: cluster.common_signals,
         source_sessions: Array.from(sessionIds),
         evidence_count: cluster.total_occurrences,
-        scenes: parsed.scenes,
+        scenes: scenes,
         confidence: cluster.avg_confidence,
         priority: this.determinePriority(cluster),
         created_at: now,
@@ -217,7 +223,7 @@ export class LLMRuleGenerator {
     when_to_use: string[];
     exceptions?: string[];
     related_patterns?: string[];
-    scenes: { tech: string[]; business: string[]; generic: boolean };
+    scenes?: Scene;  // Optional, fallback to extraction if not provided
   } {
     try {
       // Check for truncation first
@@ -264,17 +270,23 @@ export class LLMRuleGenerator {
         scope = parsed.scope as "global" | "organization" | "project";
       }
 
-      // Ensure scenes has correct structure
-      if (!parsed.scenes) {
-        parsed.scenes = { tech: [], business: [], generic: false };
-      }
-
       // Ensure arrays exist
       if (!parsed.how_to_apply || !Array.isArray(parsed.how_to_apply)) {
         parsed.how_to_apply = [];
       }
       if (!parsed.when_to_use || !Array.isArray(parsed.when_to_use)) {
         parsed.when_to_use = [];
+      }
+
+      // Parse and normalize scenes
+      let scenes: Scene | undefined;
+      if (parsed.scenes) {
+        // LLM might return partial scene data, normalize it
+        scenes = createScene({
+          tech: Array.isArray(parsed.scenes.tech) ? parsed.scenes.tech : [],
+          functional: Array.isArray(parsed.scenes.functional) ? parsed.scenes.functional : [],
+          business: Array.isArray(parsed.scenes.business) ? parsed.scenes.business : []
+        });
       }
 
       return {
@@ -287,11 +299,7 @@ export class LLMRuleGenerator {
         when_to_use: parsed.when_to_use,
         exceptions: parsed.exceptions,
         related_patterns: parsed.related_patterns,
-        scenes: {
-          tech: parsed.scenes.tech || [],
-          business: parsed.scenes.business || [],
-          generic: parsed.scenes.generic || false
-        }
+        scenes: scenes
       };
     } catch (error) {
       logger.warn("llm-generation", "Failed to parse rule response", { error: error instanceof Error ? error.message : String(error), response: String(response) });
@@ -478,8 +486,8 @@ export class LLMRuleGenerator {
     }
 
     // Check scenes
-    if (rule.scenes.tech.length === 0 && !rule.scenes.generic) {
-      issues.push("Rule must have either tech tags or be marked as generic");
+    if (rule.scenes.tech.length === 0 && rule.scenes.functional.length === 0 && rule.scenes.business.length === 0) {
+      issues.push("Rule should have at least one scene dimension (tech, functional, or business)");
     }
 
     // Check confidence
@@ -491,6 +499,79 @@ export class LLMRuleGenerator {
       isValid: issues.length === 0,
       issues
     };
+  }
+
+  /**
+   * Extract scenes from cluster content (fallback when LLM doesn't provide)
+   */
+  private extractScenesFromCluster(cluster: PatternCluster, contents: LabeledContent[]): Scene {
+    const combinedText = [
+      cluster.representative_description || '',
+      ...cluster.common_signals,
+      ...contents.map(c => c.content)
+    ].join(' ').toLowerCase();
+
+    // Extract tech stack
+    const tech: string[] = [];
+    const techKeywords: Record<string, string[]> = {
+      react: ['react', 'jsx', 'tsx', 'useeffect', 'usestate', 'component', 'hook'],
+      vue: ['vue', 'vuex', 'composition api', '.vue'],
+      nextjs: ['next.js', 'nextjs', 'getserversideprops'],
+      typescript: ['typescript', 'ts', 'interface', '.ts', '.tsx'],
+      javascript: ['javascript', 'js', '.js', '.jsx'],
+      python: ['python', '.py', 'def ', 'import '],
+      prisma: ['prisma', 'schema.prisma', '@prisma'],
+      graphql: ['graphql', 'query', 'mutation', 'resolver'],
+      express: ['express', 'app.get', 'app.post'],
+      nodejs: ['node', 'nodejs', 'npm']
+    };
+
+    for (const [techName, keywords] of Object.entries(techKeywords)) {
+      if (keywords.some(kw => combinedText.includes(kw))) {
+        tech.push(techName);
+      }
+    }
+
+    // Extract functional domain
+    const functional: string[] = [];
+    const functionalKeywords: Record<string, string[]> = {
+      auth: ['auth', 'login', 'logout', 'jwt', 'token', 'session'],
+      api: ['api', 'endpoint', 'route', 'handler', 'request', 'response'],
+      database: ['database', 'db', 'query', 'migration', 'schema', 'sql'],
+      ui: ['ui', 'component', 'button', 'modal', 'form', 'layout'],
+      testing: ['test', 'spec', 'jest', 'vitest', 'mock'],
+      performance: ['performance', 'optimization', 'cache', 'memo'],
+      security: ['security', 'xss', 'csrf', 'injection', 'sanitize'],
+      'error-handling': ['error', 'exception', 'try', 'catch', 'throw'],
+      state: ['state', 'redux', 'store', 'context']
+    };
+
+    for (const [funcName, keywords] of Object.entries(functionalKeywords)) {
+      if (keywords.some(kw => combinedText.includes(kw))) {
+        functional.push(funcName);
+      }
+    }
+
+    // Extract business domain
+    const business: string[] = [];
+    const businessKeywords: Record<string, string[]> = {
+      'e-commerce': ['shop', 'cart', 'checkout', 'product', 'order'],
+      payment: ['stripe', 'paypal', 'transaction', 'billing'],
+      crm: ['customer', 'lead', 'contact', 'crm'],
+      'user-management': ['user', 'profile', 'account', 'registration']
+    };
+
+    for (const [bizName, keywords] of Object.entries(businessKeywords)) {
+      if (keywords.some(kw => combinedText.includes(kw))) {
+        business.push(bizName);
+      }
+    }
+
+    return createScene({
+      tech: [...new Set(tech)],
+      functional: [...new Set(functional)],
+      business: [...new Set(business)]
+    });
   }
 
   close() {
