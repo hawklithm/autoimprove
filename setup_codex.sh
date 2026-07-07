@@ -26,12 +26,13 @@ echo ""
 
 # Check if Codex CLI is installed
 if ! command -v codex &> /dev/null; then
-    echo -e "${RED}[ERROR] OpenAI Codex CLI not found${NC}"
-    echo "Please install it first: https://github.com/openai/codex"
-    exit 1
+    echo -e "${YELLOW}[WARNING]${NC} OpenAI Codex CLI not found"
+    echo "Setup will continue, but you'll need to install Codex to use it:"
+    echo "  https://github.com/openai/codex"
+    echo ""
+else
+    echo -e "${GREEN}[OK]${NC} Codex CLI found"
 fi
-
-echo -e "${GREEN}[OK]${NC} Codex CLI found"
 
 # Create Codex directories
 echo ""
