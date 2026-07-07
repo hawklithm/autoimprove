@@ -130,7 +130,7 @@ let _patternClusterer: PatternClusterer;
 let _llmRuleGenerator: LLMRuleGenerator;
 let _adaptiveAnalyzer: AdaptiveSessionAnalyzer;
 
-function ensureInitialized() {
+async function ensureInitialized() {
   if (!indexManager) {
     // Initialize storage if needed
     initStorage();
@@ -138,6 +138,22 @@ function ensureInitialized() {
     const config = loadConfig();
 
     indexManager = new RuleIndexManager();
+
+    // Trigger migration if needed (JSON → SQLite)
+    const migrationStatus = indexManager.getMigrationStatus();
+    if (migrationStatus.needsMigration) {
+      logger.info("server", "Detected JSON storage backend, triggering migration to SQLite...");
+      try {
+        await indexManager.triggerMigration();
+        logger.info("server", "Migration to SQLite completed successfully");
+      } catch (error) {
+        logger.error("server", `Migration failed: ${error}`);
+        logger.warn("server", "Continuing with JSON backend as fallback");
+      }
+    } else {
+      logger.info("server", `Storage backend: ${migrationStatus.backend}`);
+    }
+
     contentManager = new RuleContentManager();
     versionControl = new RuleVersionControl();
     analysisTracker = new SessionAnalysisTracker();
@@ -1020,7 +1036,7 @@ Returns: Rule metadata + full content (title, description, how_to_apply, when_to
 
 server.setRequestHandler(CallToolRequestSchema, async (request) => {
   try {
-    ensureInitialized();
+    await ensureInitialized();
 
     switch (request.params.name) {
       case "analyze_session":
@@ -3484,7 +3500,7 @@ async function handleBatchRebuild(args: any) {
 // ============================================================================
 
 server.setRequestHandler(ListResourcesRequestSchema, async () => {
-  ensureInitialized();
+  await ensureInitialized();
 
   // Get proactive rule resources (scene-specific bundles)
   const proactiveResources = proactiveRuleProvider.listResources();
@@ -3516,7 +3532,7 @@ server.setRequestHandler(ListResourcesRequestSchema, async () => {
 });
 
 server.setRequestHandler(ReadResourceRequestSchema, async (request) => {
-  ensureInitialized();
+  await ensureInitialized();
 
   const uri = request.params.uri;
 

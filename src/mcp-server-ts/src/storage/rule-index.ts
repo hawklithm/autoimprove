@@ -9,6 +9,8 @@ import { join } from "path";
 import { homedir } from "os";
 import { RuleIndex, RuleIndexEntry, createRuleIndex, createScene } from "../core/models.js";
 import { logger } from "./../core/logger.js";
+import { RuleStorageSQLite } from "./rule-storage-sqlite.js";
+import { SQLiteMigration } from "./migrate-to-sqlite.js";
 
 /**
  * Normalize rule entry to ensure all fields are valid.
@@ -25,6 +27,10 @@ function normalizeRuleIndexEntry(entry: RuleIndexEntry | undefined | null): Rule
 }
 
 export class RuleIndexManager {
+  private sqliteStorage: RuleStorageSQLite | null = null;
+  private useSQLite: boolean = false;
+  private needsMigration: boolean = false;
+
   private getStorageRoot(): string {
     return process.env.AUTOIMPROVE_STORAGE_ROOT || join(homedir(), ".autoimprove");
   }
@@ -37,8 +43,71 @@ export class RuleIndexManager {
     return join(this.getRulesDir(), "index.json");
   }
 
+  private getDBPath(): string {
+    return join(this.getRulesDir(), "rules.db");
+  }
+
   constructor() {
     this.ensureDirectory();
+    this.detectStorageBackend();
+  }
+
+  /**
+   * Synchronously detect storage backend
+   * Migration is deferred to explicit triggerMigration() call
+   */
+  private detectStorageBackend(): void {
+    const dbExists = existsSync(this.getDBPath());
+    const jsonExists = existsSync(this.getIndexPath());
+
+    if (dbExists) {
+      this.useSQLite = true;
+      this.sqliteStorage = new RuleStorageSQLite();
+      logger.info("rule-index", "Using SQLite storage backend");
+    } else if (jsonExists) {
+      this.useSQLite = false;
+      this.needsMigration = true;
+      logger.info("rule-index", "Using JSON storage (legacy). Call triggerMigration() to migrate to SQLite");
+    } else {
+      this.useSQLite = true;
+      this.sqliteStorage = new RuleStorageSQLite();
+      logger.info("rule-index", "Initializing new SQLite storage");
+    }
+  }
+
+  async triggerMigration(): Promise<{success: boolean; migratedCount: number; errors: string[]}> {
+    if (!this.needsMigration) {
+      return { success: true, migratedCount: 0, errors: [] };
+    }
+
+    const migration = new SQLiteMigration();
+    try {
+      const result = await migration.migrate();
+      if (result.success) {
+        this.useSQLite = true;
+        this.sqliteStorage = new RuleStorageSQLite();
+        this.needsMigration = false;
+        logger.info("rule-index", `Migration completed: ${result.migratedCount} rules`);
+      }
+      return result;
+    } catch (error) {
+      const errorMsg = error instanceof Error ? error.message : String(error);
+      logger.error("rule-index", "Migration error", error as Error);
+      return { success: false, migratedCount: 0, errors: [errorMsg] };
+    }
+  }
+
+  getMigrationStatus(): {needsMigration: boolean; backend: string; dbPath?: string; jsonPath?: string} {
+    return {
+      needsMigration: this.needsMigration,
+      backend: this.useSQLite ? 'SQLite' : 'JSON',
+      dbPath: this.useSQLite ? this.getDBPath() : undefined,
+      jsonPath: !this.useSQLite ? this.getIndexPath() : undefined
+    };
+  }
+
+  getSQLiteStorage(): RuleStorageSQLite | null {
+    return this.sqliteStorage;
   }
 
   private ensureDirectory(): void {
@@ -49,6 +118,16 @@ export class RuleIndexManager {
   }
 
   loadIndex(): RuleIndex {
+    if (this.useSQLite && this.sqliteStorage) {
+      // Load from SQLite
+      const rules = this.sqliteStorage.listAllRules();
+      return {
+        version: "2.0",
+        rules
+      };
+    }
+
+    // Legacy JSON loading
     const indexPath = this.getIndexPath();
     if (!existsSync(indexPath)) {
       return createRuleIndex();
@@ -87,7 +166,35 @@ export class RuleIndexManager {
     renameSync(tempPath, indexPath);
   }
 
-  addRule(entry: RuleIndexEntry): void {
+  addRule(entry: RuleIndexEntry, content?: any): void {
+    if (this.useSQLite && this.sqliteStorage) {
+      // Check if rule exists
+      const existing = this.sqliteStorage.getRule(entry.id);
+      if (existing) {
+        throw new Error(`Rule with ID ${entry.id} already exists`);
+      }
+
+      // Normalize before persisting
+      const normalized = normalizeRuleIndexEntry(entry);
+      if (!normalized) {
+        throw new Error("Failed to normalize rule entry");
+      }
+
+      // For SQLite, we need content. If not provided, try to load it
+      if (!content) {
+        const { RuleContentManager } = require("./rule-content-manager.js");
+        const contentManager = new RuleContentManager();
+        content = contentManager.getContent(entry.id);
+        if (!content) {
+          throw new Error(`Content not found for rule ${entry.id}`);
+        }
+      }
+
+      this.sqliteStorage.addRule(normalized, content);
+      return;
+    }
+
+    // Legacy JSON
     const index = this.loadIndex();
 
     // Check if rule ID already exists
@@ -106,6 +213,17 @@ export class RuleIndexManager {
   }
 
   updateRule(ruleId: string, updates: Partial<RuleIndexEntry>): void {
+    if (this.useSQLite && this.sqliteStorage) {
+      const existing = this.sqliteStorage.getRule(ruleId);
+      if (!existing) {
+        throw new Error(`Rule with ID ${ruleId} not found`);
+      }
+
+      this.sqliteStorage.updateRule(ruleId, updates);
+      return;
+    }
+
+    // Legacy JSON
     const index = this.loadIndex();
 
     // Find rule
@@ -124,6 +242,17 @@ export class RuleIndexManager {
   }
 
   removeRule(ruleId: string): void {
+    if (this.useSQLite && this.sqliteStorage) {
+      const existing = this.sqliteStorage.getRule(ruleId);
+      if (!existing) {
+        throw new Error(`Rule with ID ${ruleId} not found`);
+      }
+
+      this.sqliteStorage.deleteRule(ruleId);
+      return;
+    }
+
+    // Legacy JSON
     const index = this.loadIndex();
 
     const originalCount = index.rules.length;
@@ -137,6 +266,11 @@ export class RuleIndexManager {
   }
 
   getRule(ruleId: string): RuleIndexEntry | null {
+    if (this.useSQLite && this.sqliteStorage) {
+      return this.sqliteStorage.getRule(ruleId);
+    }
+
+    // Legacy JSON
     const index = this.loadIndex();
     return index.rules.find(r => r.id === ruleId) || null;
   }
@@ -146,6 +280,26 @@ export class RuleIndexManager {
     priorityFilter?: string;
     minConfidence?: number;
   } = {}): RuleIndexEntry[] {
+    if (this.useSQLite && this.sqliteStorage) {
+      // SQLite backend
+      let rules = this.sqliteStorage.listAllRules();
+
+      if (options.typeFilter) {
+        rules = rules.filter(r => r.type === options.typeFilter);
+      }
+
+      if (options.priorityFilter) {
+        rules = rules.filter(r => r.priority === options.priorityFilter);
+      }
+
+      if (options.minConfidence !== undefined) {
+        rules = rules.filter(r => r.confidence >= options.minConfidence!);
+      }
+
+      return rules;
+    }
+
+    // Legacy JSON
     const index = this.loadIndex();
     let rules = index.rules;
 
@@ -204,7 +358,37 @@ export class RuleIndexManager {
   /**
    * Replace a rule with updated version (for merging)
    */
-  replaceRule(ruleId: string, updatedEntry: RuleIndexEntry): void {
+  replaceRule(ruleId: string, updatedEntry: RuleIndexEntry, content?: any): void {
+    if (this.useSQLite && this.sqliteStorage) {
+      const existing = this.sqliteStorage.getRule(ruleId);
+      if (!existing) {
+        throw new Error(`Rule with ID ${ruleId} not found`);
+      }
+
+      // Normalize before replacing
+      const normalized = normalizeRuleIndexEntry(updatedEntry);
+      if (!normalized) {
+        throw new Error("Failed to normalize rule entry");
+      }
+
+      // Delete old and add new (ensures all indexes are updated)
+      this.sqliteStorage.deleteRule(ruleId);
+
+      // Load content if not provided
+      if (!content) {
+        const { RuleContentManager } = require("./rule-content-manager.js");
+        const contentManager = new RuleContentManager();
+        content = contentManager.getContent(ruleId);
+        if (!content) {
+          throw new Error(`Content not found for rule ${ruleId}`);
+        }
+      }
+
+      this.sqliteStorage.addRule(normalized, content);
+      return;
+    }
+
+    // Legacy JSON
     const index = this.loadIndex();
 
     const ruleIndex = index.rules.findIndex(r => r.id === ruleId);
@@ -220,5 +404,31 @@ export class RuleIndexManager {
 
     index.rules[ruleIndex] = normalized;
     this.saveIndex(index);
+  }
+
+  /**
+   * Get storage backend statistics
+   */
+  getStorageStats() {
+    if (this.useSQLite && this.sqliteStorage) {
+      return this.sqliteStorage.getStats();
+    }
+
+    const index = this.loadIndex();
+    return {
+      backend: "JSON",
+      total_rules: index.rules.length,
+      index_path: this.getIndexPath()
+    };
+  }
+
+  /**
+   * Close storage connections (cleanup)
+   */
+  close(): void {
+    if (this.sqliteStorage) {
+      this.sqliteStorage.close();
+      this.sqliteStorage = null;
+    }
   }
 }

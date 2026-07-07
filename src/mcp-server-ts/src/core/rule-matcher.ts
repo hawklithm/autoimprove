@@ -2,19 +2,61 @@
  * Rule matching for AutoImprove.
  *
  * Matches rules to current scene based on scene overlap, confidence, and keywords.
+ * Enhanced with:
+ * - KeywordSegmentIndex for fuzzy matching
+ * - SceneThesaurus for synonym expansion
+ * - ImprovedScorer for better relevance ranking
  */
 
 import { Scene, RuleIndexEntry, RuleMatch, RuleScope } from "./models.js";
 import { RuleIndexManager } from "../storage/rule-index.js";
+import { KeywordSegmentIndex } from "./keyword-segment-index.js";
+import { SceneThesaurus } from "./scene-thesaurus.js";
+import { ImprovedScorer } from "./improved-scorer.js";
+import { RuleContentManager } from "../storage/rule-content.js";
+import { logger } from "./logger.js";
 
 export class RuleMatcher {
   private matchCache: Map<string, RuleMatch[]> = new Map();
+  private keywordIndex: KeywordSegmentIndex;
+  private sceneThesaurus: SceneThesaurus;
+  private scorer: ImprovedScorer;
+  private contentManager: RuleContentManager;
+  private initialized: boolean = false;
 
   constructor(
     private indexManager: RuleIndexManager,
     private maxResults: number = 10,
     private minConfidence: number = 0.3
-  ) {}
+  ) {
+    this.contentManager = new RuleContentManager();
+    this.keywordIndex = new KeywordSegmentIndex();
+    this.sceneThesaurus = new SceneThesaurus();
+    this.scorer = new ImprovedScorer(this.contentManager);
+    this.ensureInitialized();
+  }
+
+  /**
+   * Ensure indexes are built (lazy initialization)
+   */
+  private ensureInitialized(): void {
+    if (this.initialized) return;
+
+    const rules = this.indexManager.getAllRules();
+
+    // Build keyword segment index
+    this.keywordIndex.build(rules);
+
+    // Build scorer statistics
+    this.scorer.buildStatistics(rules);
+
+    this.initialized = true;
+
+    logger.info("rule-matcher", `Initialized with ${rules.length} rules`, {
+      keyword_segments: this.keywordIndex.getStats().total_segments,
+      unique_terms: this.scorer.getStats().unique_terms
+    });
+  }
 
   matchRules(
     scene: Scene,
@@ -27,45 +69,109 @@ export class RuleMatcher {
       organization_id?: string;
     }
   ): RuleMatch[] {
-    // Check cache
+    this.ensureInitialized();
+
     const cacheKey = this.getCacheKey(scene, keywords, scopeFilter);
     if (this.matchCache.has(cacheKey)) {
       return this.matchCache.get(cacheKey)!;
     }
 
-    // Load all rules
+    const expandedScene = this.sceneThesaurus.expandScene(scene);
     const effectiveMinConfidence = minConfidence ?? this.minConfidence;
-    const allRules = this.indexManager.listRules({ minConfidence: effectiveMinConfidence });
+    const effectiveMaxResults = maxResults ?? this.maxResults;
 
-    // Calculate relevance for each rule
-    const matches: RuleMatch[] = [];
-    for (const rule of allRules) {
-      // Apply scope filtering
-      if (scopeFilter && !this.matchesScope(rule, scopeFilter)) {
-        continue;
-      }
+    // Try SQLite-optimized query first
+    const sqliteStorage = this.indexManager.getSQLiteStorage();
+    let candidates: RuleIndexEntry[];
 
-      const { relevance, reason } = this.calculateRelevance(rule, scene, keywords);
-      if (relevance > 0) {
-        matches.push({
-          rule,
-          relevance_score: relevance,
-          match_reason: reason
-        });
+    if (sqliteStorage) {
+      candidates = this.querySQLiteCandidates(
+        sqliteStorage,
+        expandedScene,
+        keywords,
+        effectiveMaxResults * 2, // Fetch 2x for secondary scoring
+        effectiveMinConfidence
+      );
+      logger.info("rule-matcher", `SQLite query returned ${candidates.length} candidates`);
+    } else {
+      candidates = this.queryMemoryCandidates(
+        expandedScene,
+        keywords,
+        effectiveMinConfidence
+      );
+      logger.info("rule-matcher", `Memory query returned ${candidates.length} candidates`);
+    }
+
+    // Apply scope filtering
+    candidates = candidates.filter(rule =>
+      !scopeFilter || this.matchesScope(rule, scopeFilter)
+    );
+
+    // Calculate relevance and rank
+    const matches = candidates.map(rule => {
+      const { relevance, reason } = this.calculateRelevance(rule, expandedScene, keywords);
+      return { rule, relevance_score: relevance, match_reason: reason };
+    }).filter(m => m.relevance_score > 0);
+
+    const sorted = this.sortMatches(matches);
+    const limited = sorted.slice(0, effectiveMaxResults);
+
+    this.matchCache.set(cacheKey, limited);
+    logger.info("rule-matcher", `Matched ${limited.length} rules from ${candidates.length} candidates`);
+
+    return limited;
+  }
+
+  /**
+   * Query candidates using SQLite (optimized)
+   */
+  private querySQLiteCandidates(
+    storage: any,
+    scene: Scene,
+    keywords: string[] | undefined,
+    fetchLimit: number,
+    minConfidence: number
+  ): RuleIndexEntry[] {
+    if (keywords && keywords.length > 0) {
+      return storage.searchByKeywords(keywords, fetchLimit);
+    } else if (this.hasSceneTerms(scene)) {
+      return storage.searchByScene(scene, fetchLimit);
+    } else {
+      return storage.listAllRules(fetchLimit).filter((r: RuleIndexEntry) => r.confidence >= minConfidence);
+    }
+  }
+
+  /**
+   * Query candidates using in-memory index (fallback)
+   */
+  private queryMemoryCandidates(
+    scene: Scene,
+    keywords: string[] | undefined,
+    minConfidence: number
+  ): RuleIndexEntry[] {
+    let candidateIds: Set<string> | null = null;
+
+    if (keywords && keywords.length > 0) {
+      candidateIds = new Set();
+      for (const kw of keywords) {
+        this.keywordIndex.search(kw).forEach(id => candidateIds!.add(id));
       }
     }
 
-    // Sort by priority then relevance
-    const sortedMatches = this.sortMatches(matches);
+    let allRules = this.indexManager.listRules({ minConfidence });
 
-    // Limit results
-    const effectiveMaxResults = maxResults ?? this.maxResults;
-    const limitedMatches = sortedMatches.slice(0, effectiveMaxResults);
+    if (candidateIds && candidateIds.size > 0) {
+      allRules = allRules.filter(r => candidateIds!.has(r.id));
+    }
 
-    // Cache results
-    this.matchCache.set(cacheKey, limitedMatches);
+    return allRules;
+  }
 
-    return limitedMatches;
+  /**
+   * Check if scene has any terms
+   */
+  private hasSceneTerms(scene: Scene): boolean {
+    return scene.tech.length > 0 || scene.functional.length > 0 || scene.business.length > 0;
   }
 
   /**
@@ -123,21 +229,23 @@ export class RuleMatcher {
     let score = 0.0;
     const reasons: string[] = [];
 
-    // Scene overlap score
+    // Scene overlap score (weighted 0.6)
     const { score: overlapScore, reason: overlapReason } = this.calculateSceneOverlap(
       rule,
       scene
     );
-    score += overlapScore;
+    const weightedSceneScore = overlapScore * 0.6;
+    score += weightedSceneScore;
     if (overlapScore > 0) {
       reasons.push(overlapReason);
     }
 
-    // Keyword boost
-    if (keywords && rule.keywords.length > 0) {
-      const keywordBoost = this.calculateKeywordBoost(rule.keywords, keywords);
+    // Improved keyword boost (weighted 0.4)
+    if (keywords && keywords.length > 0) {
+      const keywordBoost = this.scorer.calculateKeywordBoost(rule, keywords);
+      const weightedKeywordScore = keywordBoost * 0.4;
+      score += weightedKeywordScore;
       if (keywordBoost > 0) {
-        score += keywordBoost;
         reasons.push(`keyword match (+${keywordBoost.toFixed(2)})`);
       }
     }
@@ -192,20 +300,6 @@ export class RuleMatcher {
     return { score: matchRatio, reason };
   }
 
-  private calculateKeywordBoost(ruleKeywords: string[], contextKeywords: string[]): number {
-    if (ruleKeywords.length === 0 || contextKeywords.length === 0) {
-      return 0.0;
-    }
-
-    // Check for keyword matches (case-insensitive)
-    const ruleKwLower = ruleKeywords.map(kw => kw.toLowerCase());
-    const contextKwLower = contextKeywords.map(kw => kw.toLowerCase());
-
-    const matches = this.countSetIntersection(ruleKwLower, contextKwLower);
-
-    return matches > 0 ? 0.2 : 0.0;
-  }
-
   private sortMatches(matches: RuleMatch[]): RuleMatch[] {
     const priorityOrder: Record<string, number> = {
       critical: 0,
@@ -250,6 +344,10 @@ export class RuleMatcher {
 
   invalidateCache(): void {
     this.matchCache.clear();
+    this.initialized = false;
+
+    // Rebuild indexes on next search
+    logger.info("rule-matcher", "Cache invalidated, indexes will be rebuilt on next search");
   }
 
   getRulesByPriority(priority: string): RuleIndexEntry[] {

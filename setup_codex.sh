@@ -12,7 +12,8 @@ NC='\033[0m' # No Color
 
 # Paths
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-AUTOIMPROVE_DIR="$SCRIPT_DIR/src/mcp-server-ts"
+AUTOIMPROVE_DIR="$HOME/.autoimprove"
+MCP_SERVER_DIR="$SCRIPT_DIR/src/mcp-server-ts"
 CODEX_DIR="$HOME/.codex"
 CODEX_GUIDANCE="$CODEX_DIR/guidance.md"
 MCP_SETTINGS_FILE="$CODEX_DIR/mcp_settings.json"
@@ -39,7 +40,32 @@ echo ""
 echo "Creating Codex directories..."
 mkdir -p "$CODEX_DIR"
 mkdir -p "$SKILL_DIR"
+mkdir -p "$AUTOIMPROVE_DIR"
+mkdir -p "$AUTOIMPROVE_DIR/rules/content"
+mkdir -p "$AUTOIMPROVE_DIR/sessions"
+mkdir -p "$AUTOIMPROVE_DIR/cache"
+mkdir -p "$AUTOIMPROVE_DIR/logs"
 echo -e "${GREEN}[OK]${NC} Directories created"
+
+# Initialize storage
+echo ""
+echo "Initializing AutoImprove storage..."
+DB_PATH="$AUTOIMPROVE_DIR/rules.db"
+INDEX_PATH="$AUTOIMPROVE_DIR/rules/index.json"
+
+if [ -f "$DB_PATH" ]; then
+  echo -e "${GREEN}[OK]${NC} SQLite storage detected"
+  STORAGE_BACKEND="sqlite"
+elif [ -f "$INDEX_PATH" ]; then
+  echo -e "${YELLOW}[WARNING]${NC} JSON storage detected, migration recommended"
+  STORAGE_BACKEND="json"
+else
+  echo -e "${GREEN}[OK]${NC} Initializing SQLite storage"
+  STORAGE_BACKEND="sqlite"
+
+  # Create empty index for fallback compatibility
+  echo '{"version":"1.0","rules":[]}' > "$INDEX_PATH"
+fi
 
 # Copy guidance template
 echo ""
@@ -72,12 +98,10 @@ echo "Configuring MCP Server settings..."
 cat > "$MCP_SETTINGS_FILE" << EOF
 {
   "mcpServers": {
-    "autoimprove": {
+    "autoimprove-core": {
       "command": "node",
-      "args": ["$AUTOIMPROVE_DIR/dist/index.js"],
-      "env": {
-        "AUTOIMPROVE_DIR": "$AUTOIMPROVE_DIR"
-      }
+      "args": ["$MCP_SERVER_DIR/dist/index.js"],
+      "env": {}
     }
   }
 }
@@ -127,13 +151,25 @@ echo -e "${GREEN}[OK]${NC} Skill file created: $SKILL_FILE"
 # Build MCP server if needed
 echo ""
 echo "Checking MCP Server build..."
-if [ ! -f "$AUTOIMPROVE_DIR/dist/index.js" ]; then
+if [ ! -f "$MCP_SERVER_DIR/dist/index.js" ]; then
     echo "Building MCP Server..."
-    cd "$AUTOIMPROVE_DIR"
+    cd "$MCP_SERVER_DIR"
+    npm install
     npm run build
     echo -e "${GREEN}[OK]${NC} MCP Server built"
 else
     echo -e "${GREEN}[OK]${NC} MCP Server already built"
+fi
+
+cd "$SCRIPT_DIR"
+
+# Check SQLite dependency
+if ! npm list better-sqlite3 --depth=0 --prefix="$MCP_SERVER_DIR" &> /dev/null; then
+    echo -e "${YELLOW}[WARNING]${NC} better-sqlite3 not found, installing..."
+    cd "$MCP_SERVER_DIR"
+    npm install better-sqlite3
+    echo -e "${GREEN}[OK]${NC} better-sqlite3 installed"
+    cd "$SCRIPT_DIR"
 fi
 
 # Final summary

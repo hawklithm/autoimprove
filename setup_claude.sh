@@ -139,6 +139,45 @@ mkdir -p "$AUTOIMPROVE_DIR/cache"
 mkdir -p "$AUTOIMPROVE_DIR/logs"
 mkdir -p "$AUTOIMPROVE_DIR/versions"
 
+# Detect storage backend
+DB_PATH="$AUTOIMPROVE_DIR/rules.db"
+INDEX_PATH="$AUTOIMPROVE_DIR/rules/index.json"
+
+if [ -f "$DB_PATH" ]; then
+  echo "✓ Detected SQLite storage backend (rules.db exists)"
+  STORAGE_BACKEND="sqlite"
+
+  # Check if better-sqlite3 is installed
+  if ! npm list better-sqlite3 --depth=0 --prefix="$MCP_SERVER_DIR" &> /dev/null; then
+    echo "⚠ Warning: better-sqlite3 not found in dependencies"
+    echo "  Installing better-sqlite3..."
+    cd "$MCP_SERVER_DIR"
+    npm install better-sqlite3
+    echo "✓ Iner-sqlite3"
+    cd "$SCRIPT_DIR"
+  else
+    echo "✓ better-sqlite3 dependency verified"
+  fi
+
+elif [ -f "$INDEX_PATH" ]; then
+  echo "⚠ Detected JSON storage backend (rules/index.json exists)"
+  echo "  Migration to SQLite recommended for better performance"
+  echo "  Run: node $SCRIPT_DIR/scripts/migrate-to-sqlite.js"
+  STORAGE_BACKEND="json"
+else
+  echo "✓ No existing storage detected, will use SQLite backend"
+  STORAGE_BACKEND="sqlite"
+
+  # Ensure better-sqlite3 is installed for new setups
+  if ! npm list better-sqlite3 --depth=0 --prefix="$MCP_SERVER_DIR" &> /dev/null; then
+    echo "  Installing better-sqlite3..."
+    cd "$MCP_SERVER_DIR"
+    npm install better-sqlite3
+    echo "✓ Installed better-sqlite3"
+    cd "$SCRIPT_DIR"
+  fi
+fi
+
 # Create default config if not exists
 if [ ! -f "$AUTOIMPROVE_DIR/config.json" ]; then
   if [ -f "$TEMPLATES_DIR/config.json" ]; then
@@ -150,13 +189,13 @@ if [ ! -f "$AUTOIMPROVE_DIR/config.json" ]; then
   fi
 fi
 
-# Create empty rule index if not exists
-if [ ! -f "$AUTOIMPROVE_DIR/rules/index.json" ]; then
+# Create empty rule index if not exists (for JSON fallback compatibility)
+if [ ! -f "$INDEX_PATH" ] && [ "$STORAGE_BACKEND" = "json" ]; then
   if [ -f "$TEMPLATES_DIR/rules-index.json" ]; then
-    cp "$TEMPLATES_DIR/rules-index.json" "$AUTOIMPROVE_DIR/rules/index.json"
+    cp "$TEMPLATES_DIR/rules-index.json" "$INDEX_PATH"
     echo "✓ Initialized rule index from template"
   else
-    echo '{"version":"1.0","rules":[]}' > "$AUTOIMPROVE_DIR/rules/index.json"
+    echo '{"version":"1.0","rules":[]}' > "$INDEX_PATH"
     echo "✓ Initialized rule index"
   fi
 fi
@@ -172,6 +211,15 @@ if [ -f "$AUTOIMPROVE_DIR/rules/claude-index.md" ]; then
   echo "✓ Created initial claude-index.md"
 else
   echo "⚠ Warning: Failed to create claude-index.md"
+fi
+
+# Check migration status if using JSON backend
+if [ "$STORAGE_BACKEND" = "json" ]; then
+  echo ""
+  echo "Migration Status:"
+  echo "  Current backend: JSON (rules/index.json)"
+  echo "  Recommended: SQLite for better performance and full-text search"
+  echo "  To migrate: Run the MCP tool 'analyze_session' or manually trigger migration"
 fi
 
 echo ""
