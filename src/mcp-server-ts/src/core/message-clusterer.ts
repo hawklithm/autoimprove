@@ -224,6 +224,11 @@ export class MessageClusterer {
    * Tokenize text into terms (simple word-based)
    */
   private tokenize(text: string): string[] {
+    // Handle undefined or null text
+    if (!text) {
+      return [];
+    }
+
     // Remove punctuation and convert to lowercase
     const normalized = text
       .toLowerCase()
