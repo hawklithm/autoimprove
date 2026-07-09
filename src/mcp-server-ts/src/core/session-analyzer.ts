@@ -10,6 +10,7 @@ import { Pattern, PatternType, PatternOccurrence, createPattern } from "./models
 import { ConfidenceCalculator } from "./confidence.js";
 import { SessionCacheManager } from "../storage/session-cache.js";
 import { CompactCacheManager } from "../storage/compact-cache.js";
+import { MessageClusterer, MessageCandidate, MessageCluster } from "./message-clusterer.js";
 import { statSync } from "fs";
 import { logger } from "./logger.js";
 
@@ -18,12 +19,14 @@ export class SessionAnalyzer {
   private confidenceCalc: ConfidenceCalculator;
   private cacheManager: SessionCacheManager;
   private compactCache: CompactCacheManager;
+  private clusterer: MessageClusterer;
 
   constructor() {
     this.parser = new UnifiedSessionParser();
     this.confidenceCalc = new ConfidenceCalculator();
     this.cacheManager = new SessionCacheManager();
     this.compactCache = new CompactCacheManager();
+    this.clusterer = new MessageClusterer();
   }
 
   /**
@@ -264,15 +267,38 @@ export class SessionAnalyzer {
       correctionKeywords.some(kw => msg.content.toLowerCase().includes(kw))
     );
 
-    if (corrections.length > 0) {
+    if (corrections.length === 0) {
+      return patterns;
+    }
+
+    // Extract meaningful text and create candidates
+    const candidates: MessageCandidate[] = corrections.map(msg => {
+      const extractedText = this.extractMeaningfulDescription(msg, "repeated-correction");
+      return {
+        message: msg,
+        occurrence: this.createOccurrence(sessionData, msg, "explicit_correction"),
+        extractedText: extractedText || msg.content  // Fallback to full content
+      };
+    }).filter(c => c.extractedText.length > 0);  // Filter out empty extractions
+
+    if (candidates.length === 0) {
+      return patterns;
+    }
+
+    // Cluster similar corrections
+    const clusters = this.clusterer.clusterMessages(candidates);
+
+    logger.info("session-analysis", `Clustered ${corrections.length} corrections into ${clusters.length} patterns`);
+
+    // Convert clusters to patterns
+    for (const cluster of clusters) {
       const pattern = createPattern({
         type: PatternType.REPEATED_CORRECTION,
-        description: this.extractCorrectionDescription(corrections),
-        occurrences: corrections.map(msg =>
-          this.createOccurrence(sessionData, msg, "explicit_correction")
-        ),
-        first_seen: corrections[0].timestamp || new Date().toISOString(),
-        last_seen: corrections[corrections.length - 1].timestamp || new Date().toISOString()
+        description: this.generateClusterDescription(cluster),
+        occurrences: cluster.candidates.map(c => c.occurrence),
+        first_seen: cluster.candidates[0].occurrence.timestamp,
+        last_seen: cluster.candidates[cluster.candidates.length - 1].occurrence.timestamp,
+        keywords: cluster.keywords
       });
       patterns.push(pattern);
     }
@@ -297,24 +323,44 @@ export class SessionAnalyzer {
       "crash"
     ];
 
-    for (const msg of userMessages) {
-      if (antiPatternKeywords.some(kw => msg.content.toLowerCase().includes(kw))) {
-        const description = this.extractAntiPatternDescription(msg);
+    const antiPatternMessages = userMessages.filter(msg =>
+      antiPatternKeywords.some(kw => msg.content.toLowerCase().includes(kw))
+    );
 
-        // Skip if description is empty (filtered as noise)
-        if (!description || description.trim().length === 0) {
-          continue;
-        }
+    if (antiPatternMessages.length === 0) {
+      return patterns;
+    }
 
-        const pattern = createPattern({
-          type: PatternType.ANTI_PATTERN,
-          description,
-          occurrences: [this.createOccurrence(sessionData, msg, "explicit_correction")],
-          first_seen: msg.timestamp || new Date().toISOString(),
-          last_seen: msg.timestamp || new Date().toISOString()
-        });
-        patterns.push(pattern);
-      }
+    // Extract meaningful text and create candidates
+    const candidates: MessageCandidate[] = antiPatternMessages.map(msg => {
+      const extractedText = this.extractMeaningfulDescription(msg, "anti-pattern");
+      return {
+        message: msg,
+        occurrence: this.createOccurrence(sessionData, msg, "explicit_correction"),
+        extractedText: extractedText || msg.content
+      };
+    }).filter(c => c.extractedText.length > 0);
+
+    if (candidates.length === 0) {
+      return patterns;
+    }
+
+    // Cluster similar anti-patterns
+    const clusters = this.clusterer.clusterMessages(candidates);
+
+    logger.info("session-analysis", `Clustered ${antiPatternMessages.length} anti-patterns into ${clusters.length} patterns`);
+
+    // Convert clusters to patterns
+    for (const cluster of clusters) {
+      const pattern = createPattern({
+        type: PatternType.ANTI_PATTERN,
+        description: this.generateClusterDescription(cluster),
+        occurrences: cluster.candidates.map(c => c.occurrence),
+        first_seen: cluster.candidates[0].occurrence.timestamp,
+        last_seen: cluster.candidates[cluster.candidates.length - 1].occurrence.timestamp,
+        keywords: cluster.keywords
+      });
+      patterns.push(pattern);
     }
 
     return patterns;
@@ -337,24 +383,44 @@ export class SessionAnalyzer {
       "规范"
     ];
 
-    for (const msg of userMessages) {
-      if (preferenceKeywords.some(kw => msg.content.toLowerCase().includes(kw))) {
-        const description = this.extractPreferenceDescription(msg);
+    const preferenceMessages = userMessages.filter(msg =>
+      preferenceKeywords.some(kw => msg.content.toLowerCase().includes(kw))
+    );
 
-        // Skip if description is empty (filtered as noise)
-        if (!description || description.trim().length === 0) {
-          continue;
-        }
+    if (preferenceMessages.length === 0) {
+      return patterns;
+    }
 
-        const pattern = createPattern({
-          type: PatternType.PREFERENCE,
-          description,
-          occurrences: [this.createOccurrence(sessionData, msg, "accept")],
-          first_seen: msg.timestamp || new Date().toISOString(),
-          last_seen: msg.timestamp || new Date().toISOString()
-        });
-        patterns.push(pattern);
-      }
+    // Extract meaningful text and create candidates
+    const candidates: MessageCandidate[] = preferenceMessages.map(msg => {
+      const extractedText = this.extractMeaningfulDescription(msg, "preference");
+      return {
+        message: msg,
+        occurrence: this.createOccurrence(sessionData, msg, "accept"),
+        extractedText: extractedText || msg.content
+      };
+    }).filter(c => c.extractedText.length > 0);
+
+    if (candidates.length === 0) {
+      return patterns;
+    }
+
+    // Cluster similar preferences
+    const clusters = this.clusterer.clusterMessages(candidates);
+
+    logger.info("session-analysis", `Clustered ${preferenceMessages.length} preferences into ${clusters.length} patterns`);
+
+    // Convert clusters to patterns
+    for (const cluster of clusters) {
+      const pattern = createPattern({
+        type: PatternType.PREFERENCE,
+        description: this.generateClusterDescription(cluster),
+        occurrences: cluster.candidates.map(c => c.occurrence),
+        first_seen: cluster.candidates[0].occurrence.timestamp,
+        last_seen: cluster.candidates[cluster.candidates.length - 1].occurrence.timestamp,
+        keywords: cluster.keywords
+      });
+      patterns.push(pattern);
     }
 
     return patterns;
@@ -378,29 +444,47 @@ export class SessionAnalyzer {
       "优化"
     ];
 
-    for (const msg of userMessages) {
-      if (performanceKeywords.some(kw => msg.content.toLowerCase().includes(kw))) {
-        const description = this.extractPerformanceDescription(msg);
+    const performanceMessages = userMessages.filter(msg =>
+      performanceKeywords.some(kw => msg.content.toLowerCase().includes(kw))
+    );
 
-        // Skip if description is empty (filtered as noise)
-        if (!description || description.trim().length === 0) {
-          continue;
-        }
+    if (performanceMessages.length === 0) {
+      return patterns;
+    }
 
-        const pattern = createPattern({
-          type: PatternType.PERFORMANCE,
-          description,
-          occurrences: [
-            {
-              ...this.createOccurrence(sessionData, msg, "explicit_correction"),
-              performance_improved: true  // Hardcoded: actual performance validation not implemented
-            }
-          ],
-          first_seen: msg.timestamp || new Date().toISOString(),
-          last_seen: msg.timestamp || new Date().toISOString()
-        });
-        patterns.push(pattern);
-      }
+    // Extract meaningful text and create candidates
+    const candidates: MessageCandidate[] = performanceMessages.map(msg => {
+      const extractedText = this.extractMeaningfulDescription(msg, "performance");
+      return {
+        message: msg,
+        occurrence: {
+          ...this.createOccurrence(sessionData, msg, "explicit_correction"),
+          performance_improved: true
+        },
+        extractedText: extractedText || msg.content
+      };
+    }).filter(c => c.extractedText.length > 0);
+
+    if (candidates.length === 0) {
+      return patterns;
+    }
+
+    // Cluster similar performance patterns
+    const clusters = this.clusterer.clusterMessages(candidates);
+
+    logger.info("session-analysis", `Clustered ${performanceMessages.length} performance patterns into ${clusters.length} patterns`);
+
+    // Convert clusters to patterns
+    for (const cluster of clusters) {
+      const pattern = createPattern({
+        type: PatternType.PERFORMANCE,
+        description: this.generateClusterDescription(cluster),
+        occurrences: cluster.candidates.map(c => c.occurrence),
+        first_seen: cluster.candidates[0].occurrence.timestamp,
+        last_seen: cluster.candidates[cluster.candidates.length - 1].occurrence.timestamp,
+        keywords: cluster.keywords
+      });
+      patterns.push(pattern);
     }
 
     return patterns;
@@ -435,54 +519,67 @@ export class SessionAnalyzer {
       "validate input"
     ];
 
+    const securityMessages: { msg: Message; keyword: string }[] = [];
+
     for (const msg of userMessages) {
       const content = msg.content.toLowerCase();
 
       // Check for specific security keywords (high confidence)
-      const hasSpecificKeyword = specificSecurityKeywords.some(kw => content.includes(kw));
+      const specificMatch = specificSecurityKeywords.find(kw => content.includes(kw));
+      if (specificMatch) {
+        securityMessages.push({ msg, keyword: specificMatch });
+        continue;
+      }
 
       // Check for generic security keywords (need additional validation)
-      const hasGenericKeyword = genericSecurityKeywords.some(kw => content.includes(kw));
-
-      // For generic keywords, require additional evidence:
-      // 1. Must contain technical details (code, functions, file paths)
-      // 2. Must contain corrective language (not just questions)
-      if (hasGenericKeyword && !hasSpecificKeyword) {
+      const genericMatch = genericSecurityKeywords.find(kw => content.includes(kw));
+      if (genericMatch) {
         const hasTechnical = this.hasSecurityTechnicalContext(msg.content);
         const hasCorrective = this.hasCorrectiveLanguage(msg.content);
 
-        if (!hasTechnical || !hasCorrective) {
-          continue;  // Skip generic security mentions without context
+        if (hasTechnical && hasCorrective) {
+          securityMessages.push({ msg, keyword: genericMatch });
         }
       }
+    }
 
-      // If we have specific keyword or validated generic keyword
-      if (hasSpecificKeyword || hasGenericKeyword) {
-        const matchedKeyword = specificSecurityKeywords.find(kw => content.includes(kw)) ||
-                               genericSecurityKeywords.find(kw => content.includes(kw)) ||
-                               "security";
+    if (securityMessages.length === 0) {
+      return patterns;
+    }
 
-        const description = this.extractSecurityDescription(msg);
+    // Extract meaningful text and create candidates
+    const candidates: MessageCandidate[] = securityMessages.map(({ msg, keyword }) => {
+      const extractedText = this.extractMeaningfulDescription(msg, "security");
+      return {
+        message: msg,
+        occurrence: {
+          ...this.createOccurrence(sessionData, msg, "explicit_correction"),
+          security_issue: keyword
+        },
+        extractedText: extractedText || msg.content
+      };
+    }).filter(c => c.extractedText.length > 0);
 
-        // Skip if description is empty (filtered as noise)
-        if (!description || description.trim().length === 0) {
-          continue;
-        }
+    if (candidates.length === 0) {
+      return patterns;
+    }
 
-        const pattern = createPattern({
-          type: PatternType.SECURITY,
-          description,
-          occurrences: [
-            {
-              ...this.createOccurrence(sessionData, msg, "explicit_correction"),
-              security_issue: matchedKeyword
-            }
-          ],
-          first_seen: msg.timestamp || new Date().toISOString(),
-          last_seen: msg.timestamp || new Date().toISOString()
-        });
-        patterns.push(pattern);
-      }
+    // Cluster similar security patterns
+    const clusters = this.clusterer.clusterMessages(candidates);
+
+    logger.info("session-analysis", `Clustered ${securityMessages.length} security patterns into ${clusters.length} patterns`);
+
+    // Convert clusters to patterns
+    for (const cluster of clusters) {
+      const pattern = createPattern({
+        type: PatternType.SECURITY,
+        description: this.generateClusterDescription(cluster),
+        occurrences: cluster.candidates.map(c => c.occurrence),
+        first_seen: cluster.candidates[0].occurrence.timestamp,
+        last_seen: cluster.candidates[cluster.candidates.length - 1].occurrence.timestamp,
+        keywords: cluster.keywords
+      });
+      patterns.push(pattern);
     }
 
     return patterns;
@@ -721,5 +818,25 @@ export class SessionAnalyzer {
     ];
 
     return technicalIndicators.some(pattern => pattern.test(content));
+  }
+
+  /**
+   * Generate description from message cluster
+   */
+  private generateClusterDescription(cluster: MessageCluster): string {
+    // Use centroid as primary description
+    let description = cluster.centroid;
+
+    // Truncate if too long
+    if (description.length > 200) {
+      description = description.substring(0, 200) + '...';
+    }
+
+    // Add occurrence count if multiple
+    if (cluster.candidates.length > 1) {
+      description += ` (${cluster.candidates.length} similar occurrences)`;
+    }
+
+    return description;
   }
 }

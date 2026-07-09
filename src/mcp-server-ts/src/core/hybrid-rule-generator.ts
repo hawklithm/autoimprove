@@ -7,10 +7,11 @@
  * Phase 4: Structured storage with rich metadata
  */
 
-import { Pattern, RuleIndexEntry, RuleContent, Scene, CodeExample } from "./models.js";
+import { Pattern, RuleIndexEntry, RuleContent, Scene, CodeExample, RuleScope } from "./models.js";
 import { RuleGenerator } from "./rule-generator.js";
 import { CodeExampleExtractor } from "./code-example-extractor.js";
 import { ScopeDetector } from "./scope-detector.js";
+import { SceneExtractor } from "./scene-extractor.js";
 import { SessionData } from "./jsonl-parser.js";
 import { logger } from "./logger.js";
 import Anthropic from "@anthropic-ai/sdk";
@@ -107,10 +108,48 @@ export class HybridRuleGenerator {
     });
 
     // Phase 2: LLM enhancement (if enabled and available)
-    let enhancedContent: RuleContent;
+    let enhancedContent: RuleContent & { scope?: RuleScope; scope_context?: any; scope_confidence?: number; scope_reason?: string; scenes?: Scene };
     if (useLLMEnhancement && this.anthropic) {
       try {
-        enhancedContent = await this.enhanceWithLLM(pattern, basicRule.content, ruleId);
+        // Pass Phase 1 scope as preliminary analysis to Phase 2
+        const preliminaryScope = {
+          scope: scopeContext.scope,
+          scopeContext: {
+            project_path: scopeContext.project_path,
+            project_id: scopeContext.project_id,
+            organization_id: scopeContext.organization_id
+          }
+        };
+        enhancedContent = await this.enhanceWithLLM(pattern, basicRule.content, ruleId, preliminaryScope);
+
+        // Phase 2 LLM has final say on scope - override Phase 1 result if LLM provided scope
+        if (enhancedContent.scope) {
+          basicRule.indexEntry.scope = enhancedContent.scope;
+          logger.info("hybrid-generation", `Scope determined by LLM for ${ruleId}: ${enhancedContent.scope} (confidence: ${enhancedContent.scope_confidence?.toFixed(2) || 'N/A'})`);
+
+          // Update scope_context if LLM provided it
+          if (enhancedContent.scope_context) {
+            basicRule.indexEntry.scope_context = enhancedContent.scope_context;
+          }
+        } else {
+          logger.warn("hybrid-generation", `LLM did not provide scope for ${ruleId}, keeping Phase 1 result: ${basicRule.indexEntry.scope}`);
+        }
+
+        // ✅ NEW: Phase 2 LLM has final say on scenes - override Phase 1.6 result if LLM provided scenes
+        if (enhancedContent.scenes) {
+          basicRule.indexEntry.scenes = enhancedContent.scenes;
+          logger.info("hybrid-generation", `Scenes determined by LLM for ${ruleId}:`, {
+            tech: enhancedContent.scenes.tech,
+            functional: enhancedContent.scenes.functional,
+            business: enhancedContent.scenes.business
+          });
+        } else {
+          logger.warn("hybrid-generation", `LLM did not provide scenes for ${ruleId}, keeping Phase 1.6 result:`, {
+            tech: basicRule.indexEntry.scenes.tech,
+            functional: basicRule.indexEntry.scenes.functional,
+            business: basicRule.indexEntry.scenes.business
+          });
+        }
       } catch (error) {
         logger.warn("hybrid-generation", `LLM enhancement failed for ${ruleId}, using basic content`, { error: error instanceof Error ? error.message : String(error) });
         enhancedContent = basicRule.content;
@@ -163,6 +202,17 @@ export class HybridRuleGenerator {
       };
     }
     enhancedContent.metadata.quality_score = qualityScore;
+
+    // Add scope metadata from LLM if available
+    if (enhancedContent.scope_confidence !== undefined) {
+      enhancedContent.metadata.scope_confidence = enhancedContent.scope_confidence;
+    }
+    if (enhancedContent.scope_reason) {
+      enhancedContent.metadata.scope_reason = enhancedContent.scope_reason;
+    }
+
+    // ✅ NEW: Sync scenes from indexEntry to metadata (ensure consistency)
+    enhancedContent.metadata.scenes = basicRule.indexEntry.scenes;
 
     // Phase 5: Return structured rule with rich metadata
     return {
@@ -234,17 +284,18 @@ export class HybridRuleGenerator {
   private async enhanceWithLLM(
     pattern: Pattern,
     basicContent: RuleContent,
-    ruleId: string
-  ): Promise<RuleContent> {
+    ruleId: string,
+    preliminaryScope?: { scope: RuleScope; scopeContext?: any }
+  ): Promise<RuleContent & { scope?: RuleScope; scope_context?: any; scope_confidence?: number; scope_reason?: string; scenes?: Scene }> {
     if (!this.anthropic) {
       throw new Error("Anthropic API key not available");
     }
 
-    // Build enhancement prompt with full pattern context
-    const prompt = this.buildEnhancementPrompt(pattern, basicContent);
+    // Build enhancement prompt with full pattern context and preliminary scope
+    const prompt = this.buildEnhancementPrompt(pattern, basicContent, preliminaryScope);
 
-    // Dynamic max_tokens based on pattern complexity
-    const maxTokens = this.calculateMaxTokens(pattern);
+    // Dynamic max_tokens based on pattern complexity (add tokens for scope analysis)
+    const maxTokens = this.calculateMaxTokens(pattern) + 200;
 
     // Use environment variable for model configuration
     const model = process.env.ANTHROPIC_DEFAULT_SONNET_MODEL
@@ -313,14 +364,23 @@ export class HybridRuleGenerator {
       how_to_apply: enhanced.how_to_apply,
       when_to_use: enhanced.when_to_use,
       exceptions: enhanced.exceptions,
-      related_rules: enhanced.related_patterns
+      related_rules: enhanced.related_patterns,
+      scope: enhanced.scope,
+      scope_context: enhanced.scope_context,
+      scope_confidence: enhanced.scope_confidence,
+      scope_reason: enhanced.scope_reason,
+      scenes: enhanced.scenes  // ✅ NEW: return scenes from LLM
     };
   }
 
   /**
    * Build enhancement prompt (optimized for token efficiency)
    */
-  private buildEnhancementPrompt(pattern: Pattern, basicContent: RuleContent): string {
+  private buildEnhancementPrompt(
+    pattern: Pattern,
+    basicContent: RuleContent,
+    preliminaryScope?: { scope: RuleScope; scopeContext?: any }
+  ): string {
     // Extract full context from occurrences (not just user_input)
     // Include: user message + context (file paths, action taken)
     const contextExamples = pattern.occurrences
@@ -360,7 +420,25 @@ export class HybridRuleGenerator {
     // Fallback to description if no user inputs
     const contextToUse = contextExamples || `Pattern description: ${pattern.description}`;
 
-    return `Enhance coding rule from user corrections.
+    // Build scope analysis context
+    const scopeContext = preliminaryScope
+      ? `\nPreliminary Scope Analysis (Phase 1):
+- Detected: ${preliminaryScope.scope}
+- Project: ${preliminaryScope.scopeContext?.project_path || 'N/A'}
+- Project ID: ${preliminaryScope.scopeContext?.project_id || 'N/A'}
+- Organization: ${preliminaryScope.scopeContext?.organization_id || 'N/A'}`
+      : '\nNo preliminary scope analysis available.';
+
+    // Extract file paths from occurrences for scene hints
+    const filePaths = pattern.occurrences
+      .map(o => o.context)
+      .filter(ctx => ctx && ctx !== "unknown")
+      .slice(0, 5);
+    const filePathsHint = filePaths.length > 0
+      ? `\nFile paths: ${filePaths.join(', ')}`
+      : '';
+
+    return `Enhance coding rule from user corrections and determine its scope and scene.
 
 Basic: ${basicContent.content.slice(0, 200)}...
 
@@ -369,6 +447,53 @@ Keywords: ${pattern.keywords.slice(0, 5).join(', ')}
 
 Evidence from sessions:
 ${contextToUse}
+${scopeContext}
+${filePathsHint}
+
+**Task 1: Scope Determination**
+Analyze if this rule is:
+- "global": Universal pattern applicable to all projects (e.g., SQL injection prevention, DRY principle, common security issues)
+- "organization": Company-specific framework/convention (e.g., "our team uses X", org-wide ESLint config)
+- "project": Project-specific implementation (e.g., "this codebase's AuthService", custom project modules)
+
+Indicators for GLOBAL:
+- Programming principles (SOLID, DRY, KISS)
+- Common security vulnerabilities (SQL injection, XSS, CSRF)
+- Universal performance patterns (memory leaks, race conditions)
+- Standard error handling practices
+- Generic naming conventions
+
+Indicators for PROJECT:
+- References "this project", "this codebase", "this repository"
+- Mentions specific custom modules/services unique to one codebase
+- Low occurrence count (1-2) with specific file paths
+- Custom implementation details
+
+Indicators for ORGANIZATION:
+- Explicitly mentions "our team", "company standard", "org-wide"
+- Framework choices consistent across multiple projects
+- Shared tooling/linting configurations
+
+**Task 2: Scene Detection**
+Identify the technical context in 3 dimensions:
+
+1. **tech** (array): Technologies/frameworks/languages involved
+   Examples: ["react", "typescript", "nodejs", "python", "sql", "graphql", "prisma", "nextjs", "express"]
+   Extract from: file extensions (.tsx→react, .py→python), framework names, library references
+
+2. **functional** (array): Functional/technical domains
+   Examples: ["auth", "api", "database", "testing", "error-handling", "performance", "security", "state-management"]
+   Extract from: what the code does (authentication, API calls, database queries, etc.)
+
+3. **business** (array): Business/product domains (often empty for technical rules)
+   Examples: ["e-commerce", "payment", "analytics", "user-management"]
+   Extract from: business context mentioned by user
+
+Guidelines:
+- Include 2-4 items per dimension (don't over-specify)
+- Use lowercase, hyphenated names (e.g., "error-handling" not "Error Handling")
+- Focus on what's explicitly mentioned or clearly implied
+- tech + functional are usually non-empty; business often empty for technical rules
 
 Output JSON:
 - title: imperative, 60-80 chars
@@ -378,8 +503,13 @@ Output JSON:
 - when_to_use: 3-5 conditions (array)
 - exceptions: 2-4 cases (array, optional)
 - related_patterns: related rule names (array, optional)
+- scope: "global" | "organization" | "project" (REQUIRED)
+- scope_confidence: 0.0-1.0, how certain are you about the scope (REQUIRED)
+- scope_reason: 1-2 sentences explaining why you chose this scope (REQUIRED)
+- scope_context: object with organization_id, project_id, project_path if scope is organization/project (optional)
+- scenes: {"tech":[],"functional":[],"business":[]} (REQUIRED)
 
-Format: {"title":"...","description":"...","rationale":"...","how_to_apply":[...],"when_to_use":[...],"exceptions":[...]}
+Format: {"title":"...","description":"...","rationale":"...","how_to_apply":[...],"when_to_use":[...],"exceptions":[...],"scope":"global","scope_confidence":0.85,"scope_reason":"...","scope_context":{},"scenes":{"tech":["react"],"functional":["auth"],"business":[]}}
 
 Be specific and actionable.`;
   }
@@ -395,6 +525,15 @@ Be specific and actionable.`;
     when_to_use: string[];
     exceptions?: string[];
     related_patterns?: string[];
+    scope?: RuleScope;
+    scope_confidence?: number;
+    scope_reason?: string;
+    scope_context?: {
+      organization_id?: string;
+      project_id?: string;
+      project_path?: string;
+    };
+    scenes?: Scene;  // ← Added: LLM-detected scenes
   } {
     try {
       // Extract JSON from markdown code block if present
@@ -411,6 +550,29 @@ Be specific and actionable.`;
         throw new Error("Missing required fields in enhanced response");
       }
 
+      // Validate scope fields
+      if (parsed.scope && !["global", "organization", "project"].includes(parsed.scope)) {
+        logger.warn("hybrid-generation", `Invalid scope value: ${parsed.scope}, defaulting to global`);
+        parsed.scope = "global";
+      }
+
+      // Validate and normalize scenes
+      let scenes: Scene | undefined;
+      if (parsed.scenes) {
+        // Normalize scene arrays (ensure they are arrays)
+        scenes = {
+          tech: Array.isArray(parsed.scenes.tech) ? parsed.scenes.tech : [],
+          functional: Array.isArray(parsed.scenes.functional) ? parsed.scenes.functional : [],
+          business: Array.isArray(parsed.scenes.business) ? parsed.scenes.business : []
+        };
+
+        // Validate scene has at least one dimension
+        if (scenes.tech.length === 0 && scenes.functional.length === 0 && scenes.business.length === 0) {
+          logger.warn("hybrid-generation", `LLM returned empty scenes, will use fallback extraction`);
+          scenes = undefined;
+        }
+      }
+
       return {
         title: parsed.title,
         description: parsed.description,
@@ -418,7 +580,12 @@ Be specific and actionable.`;
         how_to_apply: parsed.how_to_apply || [],
         when_to_use: parsed.when_to_use || [],
         exceptions: parsed.exceptions,
-        related_patterns: parsed.related_patterns
+        related_patterns: parsed.related_patterns,
+        scope: parsed.scope as RuleScope,
+        scope_confidence: typeof parsed.scope_confidence === 'number' ? parsed.scope_confidence : undefined,
+        scope_reason: parsed.scope_reason,
+        scope_context: parsed.scope_context,
+        scenes: scenes  // ← Added: return parsed scenes
       };
     } catch (error) {
       // Log detailed error information with full response string
@@ -629,8 +796,11 @@ Be specific and actionable.`;
    * Extract scene and keywords from pattern
    */
   private extractSceneFromPattern(pattern: Pattern): { scene: Scene; keywords: string[] } {
+    const sceneExtractor = SceneExtractor.getInstance();
+
     // Collect all text from pattern for analysis
     const texts: string[] = [];
+    const filePaths: string[] = [];
 
     // Add description
     if (pattern.description) {
@@ -642,71 +812,17 @@ Be specific and actionable.`;
       if (occurrence.user_input) {
         texts.push(occurrence.user_input);
       }
-      if (occurrence.context) {
-        texts.push(occurrence.context);
+      if (occurrence.context && occurrence.context !== "unknown") {
+        filePaths.push(occurrence.context);
       }
     }
 
-    const combinedText = texts.join(' ').toLowerCase();
-
-    // Extract tech stack
-    const tech: string[] = [];
-    const techKeywords: Record<string, string[]> = {
-      react: ['react', 'jsx', 'tsx', 'useeffect', 'usestate', 'component', 'hook'],
-      vue: ['vue', 'vuex', 'composition api', '.vue'],
-      nextjs: ['next.js', 'nextjs', 'getserversideprops', 'getstaticprops'],
-      typescript: ['typescript', 'ts', 'type', 'interface', '.ts', '.tsx'],
-      javascript: ['javascript', 'js', '.js', '.jsx'],
-      python: ['python', '.py', 'def ', 'import '],
-      prisma: ['prisma', 'schema.prisma', '@prisma'],
-      graphql: ['graphql', 'query', 'mutation', 'resolver'],
-      express: ['express', 'app.get', 'app.post', 'middleware'],
-      fastapi: ['fastapi', 'fastapi', '@app.get', '@app.post'],
-      nodejs: ['node', 'nodejs', 'npm', 'package.json'],
-      jest: ['jest', 'describe(', 'test(', 'expect('],
-      vitest: ['vitest', 'describe(', 'test(', 'expect(']
-    };
-
-    for (const [techName, keywords] of Object.entries(techKeywords)) {
-      if (keywords.some(kw => combinedText.includes(kw))) {
-        tech.push(techName);
-      }
-    }
-
-    // Extract functional domain
-    const functional: string[] = [];
-    const functionalKeywords: Record<string, string[]> = {
-      auth: ['auth', 'login', 'logout', 'jwt', 'token', 'session', 'password'],
-      api: ['api', 'endpoint', 'route', 'handler', 'request', 'response', 'rest'],
-      database: ['database', 'db', 'query', 'migration', 'schema', 'sql', 'select', 'insert'],
-      ui: ['ui', 'component', 'button', 'modal', 'form', 'layout', 'style', 'css'],
-      testing: ['test', 'spec', 'jest', 'vitest', 'cypress', 'mock', 'assert'],
-      performance: ['performance', 'optimization', 'memo', 'cache', 'slow', 'fast'],
-      security: ['security', 'xss', 'csrf', 'injection', 'sanitize', 'validate'],
-      'error-handling': ['error', 'exception', 'try', 'catch', 'throw'],
-      state: ['state', 'redux', 'store', 'context', 'useState']
-    };
-
-    for (const [funcName, keywords] of Object.entries(functionalKeywords)) {
-      if (keywords.some(kw => combinedText.includes(kw))) {
-        functional.push(funcName);
-      }
-    }
-
-    // Extract business domain (less common, more specific)
-    const business: string[] = [];
-    const businessKeywords: Record<string, string[]> = {
-      'e-commerce': ['shop', 'cart', 'checkout', 'product', 'order', 'payment'],
-      payment: ['stripe', 'paypal', 'transaction', 'billing'],
-      crm: ['customer', 'lead', 'contact', 'crm'],
-      'user-management': ['user', 'profile', 'account', 'registration', 'signup']
-    };
-
-    for (const [bizName, keywords] of Object.entries(businessKeywords)) {
-      if (keywords.some(kw => combinedText.includes(kw))) {
-        business.push(bizName);
-      }
-    }
+    // Use unified SceneExtractor (with caching)
+    const scene = sceneExtractor.extractScene({
+      text: texts.join(' '),
+      filePaths: filePaths,
+      keywords: pattern.keywords
+    });
 
     // Extract keywords (important terms from pattern)
     const keywords = new Set<string>();
@@ -720,6 +836,7 @@ Be specific and actionable.`;
     }
 
     // Extract important technical terms (camelCase, PascalCase, snake_case identifiers)
+    const combinedText = texts.join(' ').toLowerCase();
     const identifierRegex = /\b([a-z][a-zA-Z0-9_]*|[A-Z][a-zA-Z0-9]*)\b/g;
     const matches = combinedText.match(identifierRegex);
     if (matches) {
@@ -740,15 +857,11 @@ Be specific and actionable.`;
     }
 
     // Add tech and functional domains as keywords
-    tech.forEach(t => keywords.add(t));
-    functional.forEach(f => keywords.add(f));
+    scene.tech.forEach(t => keywords.add(t));
+    scene.functional.forEach(f => keywords.add(f));
 
     return {
-      scene: {
-        tech: [...new Set(tech)],
-        functional: [...new Set(functional)],
-        business: [...new Set(business)]
-      },
+      scene,
       keywords: Array.from(keywords).slice(0, 15) // Limit to 15 keywords
     };
   }

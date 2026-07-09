@@ -231,6 +231,144 @@ export class IndexedRuleMatcher {
   }
 
   /**
+   * Fast rule matching using multiple scenes (fuzzy multi-scene matching)
+   * Supports weighted scene matching where scenes with weight >= threshold are included
+   */
+  fastMatchMultiScene(
+    scenes: Array<{ scene: Scene; weight: number }>,
+    keywords?: string[],
+    maxResults: number = 20,
+    minConfidence: number = 0.3,
+    weightThreshold: number = 0.3,
+    scopeFilter?: {
+      scopes?: RuleScope[];
+      current_project?: string;
+      organization_id?: string;
+    }
+  ): RuleMatch[] {
+    // Filter scenes by weight threshold
+    const relevantScenes = scenes.filter(sw => sw.weight >= weightThreshold);
+
+    if (relevantScenes.length === 0) {
+      return [];
+    }
+
+    // Rebuild index if needed
+    if (!this.indexBuilt || Date.now() - this.lastIndexBuildTime > 60000) {
+      const rules = this.indexManager.listRules();
+      this.buildIndex(rules);
+    }
+
+    // Collect candidate rule IDs from all relevant scenes
+    const candidateScores = new Map<string, { score: number; reasons: string[]; sceneWeights: number[] }>();
+
+    for (const sceneWeight of relevantScenes) {
+      const scene = sceneWeight.scene;
+      const weight = sceneWeight.weight;
+
+      // Match by tech stack (weighted by scene weight)
+      for (const tech of scene.tech) {
+        const normalizedTech = tech.toLowerCase().trim();
+        const ruleIds = this.techIndex.get(normalizedTech);
+        if (ruleIds) {
+          for (const ruleId of ruleIds) {
+            this.addCandidateScoreWeighted(
+              candidateScores,
+              ruleId,
+              0.4 * weight,
+              `tech: ${tech} (scene weight: ${weight.toFixed(2)})`,
+              weight
+            );
+          }
+        }
+      }
+
+      // Match by functional domain (weighted by scene weight)
+      for (const func of scene.functional) {
+        const normalizedFunc = func.toLowerCase().trim();
+        const ruleIds = this.functionalIndex.get(normalizedFunc);
+        if (ruleIds) {
+          for (const ruleId of ruleIds) {
+            this.addCandidateScoreWeighted(
+              candidateScores,
+              ruleId,
+              0.5 * weight,
+              `functional: ${func} (scene weight: ${weight.toFixed(2)})`,
+              weight
+            );
+          }
+        }
+      }
+
+      // Match by business domain (weighted by scene weight)
+      for (const biz of scene.business) {
+        const normalizedBiz = biz.toLowerCase().trim();
+        const ruleIds = this.businessIndex.get(normalizedBiz);
+        if (ruleIds) {
+          for (const ruleId of ruleIds) {
+            this.addCandidateScoreWeighted(
+              candidateScores,
+              ruleId,
+              0.3 * weight,
+              `business: ${biz} (scene weight: ${weight.toFixed(2)})`,
+              weight
+            );
+          }
+        }
+      }
+    }
+
+    // Match by keywords (not weighted by scene)
+    if (keywords) {
+      for (const keyword of keywords) {
+        const normalizedKeyword = keyword.toLowerCase().trim();
+        const ruleIds = this.keywordIndex.get(normalizedKeyword);
+        if (ruleIds) {
+          for (const ruleId of ruleIds) {
+            this.addCandidateScoreWeighted(
+              candidateScores,
+              ruleId,
+              0.6,
+              `keyword: ${keyword}`,
+              1.0
+            );
+          }
+        }
+      }
+    }
+
+    // Convert candidates to matches
+    const matches: RuleMatch[] = [];
+    for (const [ruleId, scoreInfo] of candidateScores.entries()) {
+      const rule = this.indexManager.getRule(ruleId);
+      if (!rule) continue;
+
+      // Filter by confidence
+      if (rule.confidence < minConfidence) continue;
+
+      // Apply scope filtering
+      if (scopeFilter) {
+        if (!this.matchesScope(rule, scopeFilter)) {
+          continue;
+        }
+      }
+
+      // Adjust score by rule confidence
+      const relevanceScore = scoreInfo.score * (0.7 + rule.confidence * 0.3);
+
+      matches.push({
+        rule,
+        relevance_score: relevanceScore,
+        match_reason: scoreInfo.reasons.join(", "),
+      });
+    }
+
+    // Sort by relevance and return top N
+    matches.sort((a, b) => b.relevance_score - a.relevance_score);
+    return matches.slice(0, maxResults);
+  }
+
+  /**
    * Search by keyword with fuzzy matching
    */
   searchByKeyword(query: string, maxResults: number = 10): RuleMatch[] {
@@ -327,6 +465,30 @@ export class IndexedRuleMatcher {
       map.set(ruleId, {
         score: scoreIncrement,
         reasons: [reason],
+      });
+    }
+  }
+
+  /**
+   * Add or increment candidate score with scene weight tracking (for multi-scene matching)
+   */
+  private addCandidateScoreWeighted(
+    map: Map<string, { score: number; reasons: string[]; sceneWeights: number[] }>,
+    ruleId: string,
+    scoreIncrement: number,
+    reason: string,
+    sceneWeight: number
+  ): void {
+    const existing = map.get(ruleId);
+    if (existing) {
+      existing.score += scoreIncrement;
+      existing.reasons.push(reason);
+      existing.sceneWeights.push(sceneWeight);
+    } else {
+      map.set(ruleId, {
+        score: scoreIncrement,
+        reasons: [reason],
+        sceneWeights: [sceneWeight],
       });
     }
   }

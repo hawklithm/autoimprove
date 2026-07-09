@@ -6,6 +6,7 @@
  */
 
 import { Scene, createScene } from "./models.js";
+import { SceneExtractor } from "./scene-extractor.js";
 import { existsSync, readFileSync } from "fs";
 import { join } from "path";
 import { execSync } from "child_process";
@@ -103,6 +104,7 @@ export class EnhancedSceneDetector {
     }
 
     try {
+      const sceneExtractor = SceneExtractor.getInstance();
       const packageJson = JSON.parse(readFileSync(packageJsonPath, "utf-8"));
       const deps = {
         ...packageJson.dependencies,
@@ -110,54 +112,20 @@ export class EnhancedSceneDetector {
       };
 
       const techStack: string[] = [];
+      const config = sceneExtractor.getKeywordConfig();
 
-      // Map dependencies to tech stack
-      const techMap: Record<string, string> = {
-        react: "react",
-        "react-dom": "react",
-        vue: "vue",
-        "@vue/": "vue",
-        angular: "angular",
-        "@angular/": "angular",
-        next: "nextjs",
-        nuxt: "nuxtjs",
-        svelte: "svelte",
-        express: "express",
-        koa: "koa",
-        fastify: "fastify",
-        nestjs: "nestjs",
-        "@nestjs/": "nestjs",
-        prisma: "prisma",
-        "@prisma/": "prisma",
-        typeorm: "typeorm",
-        mongoose: "mongoose",
-        sequelize: "sequelize",
-        graphql: "graphql",
-        "@graphql": "graphql",
-        "apollo-server": "graphql",
-        "@apollo/": "graphql",
-        typescript: "typescript",
-        "@types/": "typescript",
-        tailwindcss: "tailwind",
-        "styled-components": "styled-components",
-        "@emotion/": "emotion",
-        jest: "jest",
-        vitest: "vitest",
-        cypress: "cypress",
-        playwright: "playwright",
-      };
-
+      // Use SceneExtractor's tech keyword config
       for (const dep in deps) {
-        for (const [pattern, tech] of Object.entries(techMap)) {
-          if (dep === pattern || dep.startsWith(pattern)) {
-            if (!techStack.includes(tech)) {
-              techStack.push(tech);
+        for (const [techName, keywords] of Object.entries(config.tech)) {
+          if (keywords.some(kw => dep.includes(kw))) {
+            if (!techStack.includes(techName)) {
+              techStack.push(techName);
             }
           }
         }
       }
 
-      return techStack;
+      return [...new Set(techStack)];
     } catch (error) {
       return [];
     }

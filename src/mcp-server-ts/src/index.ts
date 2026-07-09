@@ -1544,19 +1544,68 @@ async function handleSearchKnowledge(args: any) {
     const scene = createScene(parsedScene); // Normalize to ensure all fields exist
     const kwList = parseCommaSeparated(keywords);
 
-    // 🆕 Log scene search parameters
-    const techStr = (scene.tech || []).join(",") || "none";
-    const funcStr = (scene.functional || []).join(",") || "none";
-    const bizStr = (scene.business || []).join(",") || "none";
-    logger.info("search_knowledge", "Searching by scene", {
-      tech: techStr,
-      functional: funcStr,
-      business: bizStr,
-      keywords: kwList,
-      scope_filter: scopeFilter,
+    // 🆕 Detect multi-scenes for fuzzy matching (Optimization 4)
+    const sceneWeights = sceneDetector.detectMultiScenes({
+      userInput: keywords,
+      filePaths: [], // No file paths in scene-based search
+      projectRoot: currentProject,
     });
 
-    const matches = matcher.matchRules(scene, kwList, undefined, undefined, scopeFilter);
+    // 🆕 Use multi-scene fuzzy matching if multiple scenes detected
+    let matches: Array<{ rule: any; relevance_score: number; match_reason: string }>;
+    let techStr: string;
+    let funcStr: string;
+    let bizStr: string;
+
+    if (sceneWeights.length > 1) {
+      // Multi-scene fuzzy matching (weight threshold: 0.3)
+      const WEIGHT_THRESHOLD = 0.3;
+
+      // Extract scene info from primary scene (highest weight)
+      const primaryScene = sceneWeights[0].scene;
+      techStr = (primaryScene.tech || []).join(",") || "none";
+      funcStr = (primaryScene.functional || []).join(",") || "none";
+      bizStr = (primaryScene.business || []).join(",") || "none";
+
+      logger.info("search_knowledge", "Using multi-scene fuzzy matching", {
+        scenes_count: sceneWeights.length,
+        relevant_scenes: sceneWeights.filter(sw => sw.weight >= WEIGHT_THRESHOLD).length,
+        weight_threshold: WEIGHT_THRESHOLD,
+        primary_scene: {
+          tech: techStr,
+          functional: funcStr,
+          business: bizStr,
+        },
+        all_scenes: sceneWeights.map(sw => ({
+          tech: sw.scene.tech.join(","),
+          functional: sw.scene.functional.join(","),
+          weight: sw.weight.toFixed(2),
+        })),
+      });
+
+      matches = matcher.fastMatchMultiScene(
+        sceneWeights,
+        kwList,
+        20, // maxResults
+        0.3, // minConfidence
+        WEIGHT_THRESHOLD,
+        scopeFilter
+      );
+    } else {
+      // Single scene matching (original logic)
+      techStr = (scene.tech || []).join(",") || "none";
+      funcStr = (scene.functional || []).join(",") || "none";
+      bizStr = (scene.business || []).join(",") || "none";
+      logger.info("search_knowledge", "Searching by single scene", {
+        tech: techStr,
+        functional: funcStr,
+        business: bizStr,
+        keywords: kwList,
+        scope_filter: scopeFilter,
+      });
+
+      matches = matcher.matchRules(scene, kwList, undefined, undefined, scopeFilter);
+    }
 
     // 🆕 Log search results
     const topRelevance = matches.length > 0 ? matches[0].relevance_score : 0;

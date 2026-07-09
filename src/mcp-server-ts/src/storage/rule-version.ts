@@ -222,8 +222,10 @@ export class RuleVersionControl {
       changes.push("Reason changed");
     }
     if (confidenceChanged) {
+      const conf1 = v1.content.metadata.confidence ?? 0;
+      const conf2 = v2.content.metadata.confidence ?? 0;
       changes.push(
-        `Confidence: ${v1.content.metadata.confidence.toFixed(2)} → ${v2.content.metadata.confidence.toFixed(2)}`
+        `Confidence: ${conf1.toFixed(2)} → ${conf2.toFixed(2)}`
       );
     }
 

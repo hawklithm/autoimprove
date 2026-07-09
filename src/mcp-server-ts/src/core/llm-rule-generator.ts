@@ -9,6 +9,7 @@ import { PatternType, Priority, RuleScope, RuleIndexEntry, RuleContent, Scene, c
 import { logger } from "./logger.js";
 import { LLMPromptBuilder, PromptEvidence } from "./llm-prompt-builder.js";
 import { JSONExtractor } from "./json-extractor.js";
+import { SceneExtractor } from "./scene-extractor.js";
 import { appendFileSync } from "fs";
 import { homedir } from "os";
 import { join } from "path";
@@ -505,72 +506,17 @@ export class LLMRuleGenerator {
    * Extract scenes from cluster content (fallback when LLM doesn't provide)
    */
   private extractScenesFromCluster(cluster: PatternCluster, contents: LabeledContent[]): Scene {
+    const sceneExtractor = SceneExtractor.getInstance();
+
     const combinedText = [
       cluster.representative_description || '',
       ...cluster.common_signals,
       ...contents.map(c => c.content)
-    ].join(' ').toLowerCase();
+    ].join(' ');
 
-    // Extract tech stack
-    const tech: string[] = [];
-    const techKeywords: Record<string, string[]> = {
-      react: ['react', 'jsx', 'tsx', 'useeffect', 'usestate', 'component', 'hook'],
-      vue: ['vue', 'vuex', 'composition api', '.vue'],
-      nextjs: ['next.js', 'nextjs', 'getserversideprops'],
-      typescript: ['typescript', 'ts', 'interface', '.ts', '.tsx'],
-      javascript: ['javascript', 'js', '.js', '.jsx'],
-      python: ['python', '.py', 'def ', 'import '],
-      prisma: ['prisma', 'schema.prisma', '@prisma'],
-      graphql: ['graphql', 'query', 'mutation', 'resolver'],
-      express: ['express', 'app.get', 'app.post'],
-      nodejs: ['node', 'nodejs', 'npm']
-    };
-
-    for (const [techName, keywords] of Object.entries(techKeywords)) {
-      if (keywords.some(kw => combinedText.includes(kw))) {
-        tech.push(techName);
-      }
-    }
-
-    // Extract functional domain
-    const functional: string[] = [];
-    const functionalKeywords: Record<string, string[]> = {
-      auth: ['auth', 'login', 'logout', 'jwt', 'token', 'session'],
-      api: ['api', 'endpoint', 'route', 'handler', 'request', 'response'],
-      database: ['database', 'db', 'query', 'migration', 'schema', 'sql'],
-      ui: ['ui', 'component', 'button', 'modal', 'form', 'layout'],
-      testing: ['test', 'spec', 'jest', 'vitest', 'mock'],
-      performance: ['performance', 'optimization', 'cache', 'memo'],
-      security: ['security', 'xss', 'csrf', 'injection', 'sanitize'],
-      'error-handling': ['error', 'exception', 'try', 'catch', 'throw'],
-      state: ['state', 'redux', 'store', 'context']
-    };
-
-    for (const [funcName, keywords] of Object.entries(functionalKeywords)) {
-      if (keywords.some(kw => combinedText.includes(kw))) {
-        functional.push(funcName);
-      }
-    }
-
-    // Extract business domain
-    const business: string[] = [];
-    const businessKeywords: Record<string, string[]> = {
-      'e-commerce': ['shop', 'cart', 'checkout', 'product', 'order'],
-      payment: ['stripe', 'paypal', 'transaction', 'billing'],
-      crm: ['customer', 'lead', 'contact', 'crm'],
-      'user-management': ['user', 'profile', 'account', 'registration']
-    };
-
-    for (const [bizName, keywords] of Object.entries(businessKeywords)) {
-      if (keywords.some(kw => combinedText.includes(kw))) {
-        business.push(bizName);
-      }
-    }
-
-    return createScene({
-      tech: [...new Set(tech)],
-      functional: [...new Set(functional)],
-      business: [...new Set(business)]
+    return sceneExtractor.extractScene({
+      text: combinedText,
+      keywords: cluster.common_signals
     });
   }
 

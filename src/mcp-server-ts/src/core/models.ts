@@ -128,7 +128,20 @@ export interface RuleContent {
   exceptions?: string[];
   related_rules?: string[];
 
-  metadata: Record<string, any>;
+  metadata: {
+    type?: string;
+    priority?: string;
+    confidence?: number;
+    source?: string;
+    pattern_occurrences?: number;
+    first_seen?: string;
+    last_seen?: string;
+    keywords?: string[];
+    quality_score?: number;
+    scope_confidence?: number;  // LLM's confidence in scope determination (0.0-1.0)
+    scope_reason?: string;      // LLM's explanation for scope choice
+    [key: string]: any;
+  };
 }
 
 export interface RuleMatch {

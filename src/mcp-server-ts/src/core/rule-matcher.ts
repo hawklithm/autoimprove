@@ -357,4 +357,84 @@ export class RuleMatcher {
   getRulesByType(patternType: string): RuleIndexEntry[] {
     return this.indexManager.listRules({ typeFilter: patternType });
   }
+
+  /**
+   * Match rules using multiple scenes with weighted fuzzy matching
+   * Optimization 4: Multi-scene fuzzy matching support
+   */
+  fastMatchMultiScene(
+    sceneWeights: Array<{ scene: Scene; weight: number }>,
+    keywords?: string[],
+    maxResults?: number,
+    minConfidence?: number,
+    weightThreshold: number = 0.3,
+    scopeFilter?: {
+      scopes?: RuleScope[];
+      current_project?: string;
+      organization_id?: string;
+    }
+  ): RuleMatch[] {
+    // Filter scenes by weight threshold
+    const relevantScenes = sceneWeights.filter(sw => sw.weight >= weightThreshold);
+
+    if (relevantScenes.length === 0) {
+      logger.warn("rule-matcher", "No scenes above weight threshold", { weightThreshold });
+      return [];
+    }
+
+    logger.info("rule-matcher", "Multi-scene fuzzy matching", {
+      total_scenes: sceneWeights.length,
+      relevant_scenes: relevantScenes.length,
+      weight_threshold: weightThreshold,
+    });
+
+    // Collect matches from all relevant scenes
+    const allMatches: RuleMatch[] = [];
+    const seenRuleIds = new Set<string>();
+
+    for (const sceneWeight of relevantScenes) {
+      const scene = sceneWeight.scene;
+      const weight = sceneWeight.weight;
+
+      // Match rules for this scene
+      const matches = this.matchRules(
+        scene,
+        keywords,
+        maxResults ? maxResults * 2 : undefined, // Get more candidates
+        minConfidence,
+        scopeFilter
+      );
+
+      // Adjust relevance scores by scene weight
+      for (const match of matches) {
+        if (!seenRuleIds.has(match.rule.id)) {
+          seenRuleIds.add(match.rule.id);
+          allMatches.push({
+            ...match,
+            relevance_score: match.relevance_score * weight,
+            match_reason: `${match.match_reason} (scene weight: ${weight.toFixed(2)})`,
+          });
+        } else {
+          // Rule already matched by another scene, boost its score
+          const existing = allMatches.find(m => m.rule.id === match.rule.id);
+          if (existing) {
+            existing.relevance_score += match.relevance_score * weight * 0.5; // 50% boost for multi-scene match
+            existing.match_reason += ` + multi-scene(${weight.toFixed(2)})`;
+          }
+        }
+      }
+    }
+
+    // Sort by adjusted relevance score and return top N
+    allMatches.sort((a, b) => b.relevance_score - a.relevance_score);
+    const finalResults = allMatches.slice(0, maxResults || this.maxResults);
+
+    logger.info("rule-matcher", "Multi-scene matching completed", {
+      total_candidates: allMatches.length,
+      returned_results: finalResults.length,
+      top_relevance: finalResults.length > 0 ? finalResults[0].relevance_score.toFixed(3) : "N/A",
+    });
+
+    return finalResults;
+  }
 }
