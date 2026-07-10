@@ -11,6 +11,7 @@ import { RuleIndex, RuleIndexEntry, createRuleIndex, createScene } from "../core
 import { logger } from "./../core/logger.js";
 import { RuleStorageSQLite } from "./rule-storage-sqlite.js";
 import { SQLiteMigration } from "./migrate-to-sqlite.js";
+import { RuleContentManager } from "./rule-content.js";
 
 /**
  * Normalize rule entry to ensure all fields are valid.
@@ -182,9 +183,8 @@ export class RuleIndexManager {
 
       // For SQLite, we need content. If not provided, try to load it
       if (!content) {
-        const { RuleContentManager } = require("./rule-content-manager.js");
         const contentManager = new RuleContentManager();
-        content = contentManager.getContent(entry.id);
+        content = contentManager.loadContent(entry.id);
         if (!content) {
           throw new Error(`Content not found for rule ${entry.id}`);
         }
@@ -376,9 +376,8 @@ export class RuleIndexManager {
 
       // Load content if not provided
       if (!content) {
-        const { RuleContentManager } = require("./rule-content-manager.js");
         const contentManager = new RuleContentManager();
-        content = contentManager.getContent(ruleId);
+        content = contentManager.loadContent(ruleId);
         if (!content) {
           throw new Error(`Content not found for rule ${ruleId}`);
         }
