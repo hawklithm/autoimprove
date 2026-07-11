@@ -50,7 +50,10 @@
     "test": "cd src/mcp-server-ts && npm test",
     "lint": "cd src/mcp-server-ts && npm run lint",
     "dev": "npm run build && npm link",
-    "prepublishOnly": "npm run build && npm test"
+    "prepublishOnly": "npm run build && npm test",
+    "summarize": "tsx summarize.ts",
+    "summarize:force": "tsx summarize.ts --force",
+    "summarize:dry-run": "tsx summarize.ts --dry-run"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.0.4",
@@ -58,6 +61,7 @@
   },
   "devDependencies": {
     "@types/node": "^22.10.2",
+    "tsx": "^4.23.0",
     "typescript": "^5.7.2"
   }
 }
