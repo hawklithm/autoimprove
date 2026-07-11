@@ -140,6 +140,7 @@ export abstract class SessionExtractor {
 
   /**
    * Extract text content from various content formats
+   * FIX 2: Added support for output_text type
    */
   protected extractTextContent(content: any): string {
     if (typeof content === "string") {
@@ -152,6 +153,7 @@ export abstract class SessionExtractor {
           if (typeof block === "string") return block;
           if (block.type === "text") return block.text;
           if (block.type === "input_text") return block.text;
+          if (block.type === "output_text") return block.text;  // FIX 2: Added this line
           return "";
         })
         .filter(Boolean)

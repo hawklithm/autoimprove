@@ -971,7 +971,7 @@ Returns: Rule metadata + full content (title, description, how_to_apply, when_to
       },
       {
         name: "batch_rebuild",
-        description: "Batch rebuild all rules from session files with incremental caching and optional auto-cleanup",
+        description: "Batch rebuild all rules from session files with incremental caching and optional auto-cleanup. Cleanup uses sensible defaults: merge duplicates (true), optimize low-quality (true), delete very low-quality (false).",
         inputSchema: {
           type: "object",
           properties: {
@@ -979,9 +979,17 @@ Returns: Rule metadata + full content (title, description, how_to_apply, when_to
               type: "boolean",
               description: "Force full rebuild (ignore cache)",
             },
-            incremental: {
+            use_llm_enhancement: {
               type: "boolean",
-              description: "Use incremental analysis (default: true)",
+              description: "Enable LLM enhancement for rules (recommended)",
+            },
+            extract_code_examples: {
+              type: "boolean",
+              description: "Extract code examples from sessions (recommended)",
+            },
+            auto_cleanup: {
+              type: "boolean",
+              description: "Automatically cleanup duplicates and optimize rules after generation (recommended)",
             },
             min_confidence: {
               type: "number",
@@ -989,7 +997,7 @@ Returns: Rule metadata + full content (title, description, how_to_apply, when_to
             },
             session_limit: {
               type: "number",
-              description: "Limit number of sessions to analyze",
+              description: "Limit number of sessions to analyze (for testing)",
             },
             dry_run: {
               type: "boolean",
@@ -999,35 +1007,8 @@ Returns: Rule metadata + full content (title, description, how_to_apply, when_to
               type: "string",
               description: "Custom session directory path",
             },
-            use_llm_enhancement: {
-              type: "boolean",
-              description: "Enable LLM enhancement for rules",
-            },
-            extract_code_examples: {
-              type: "boolean",
-              description: "Extract code examples from sessions",
-            },
-            auto_cleanup: {
-              type: "boolean",
-              description: "Automatically cleanup duplicates and optimize rules after generation",
-            },
-            merge_duplicates: {
-              type: "boolean",
-              description: "Merge duplicate rules during cleanup (default: true)",
-            },
-            optimize_low_quality: {
-              type: "boolean",
-              description: "Optimize low-quality rules during cleanup (default: true)",
-            },
-            delete_very_low_quality: {
-              type: "boolean",
-              description: "Delete very low quality rules during cleanup (default: false)",
-            },
-            very_low_quality_threshold: {
-              type: "number",
-              description: "Quality threshold for deletion (default: 0.3)",
-            },
           },
+          required: [],
         },
       },
     ],
@@ -3480,20 +3461,21 @@ async function handleBatchRebuild(args: any) {
   try {
     const result = await batchRebuildEngine.rebuild({
       force: args.force === true,
-      incremental: args.incremental !== false,
+      incremental: !args.force, // Use incremental mode unless force is set
       minConfidence: args.min_confidence || 0.6,
       sessionLimit: args.session_limit,
       dryRun: args.dry_run === true,
       sessionDir: args.session_dir,
       enhancedRuleOptions: {
-        useLLMEnhancement: args.use_llm_enhancement === true,
-        extractCodeExamples: args.extract_code_examples === true,
+        useLLMEnhancement: !!args.use_llm_enhancement,
+        extractCodeExamples: !!args.extract_code_examples,
       },
-      autoCleanup: args.auto_cleanup === true,
-      mergeDuplicates: args.merge_duplicates !== false,
-      optimizeLowQuality: args.optimize_low_quality !== false,
-      deleteVeryLowQuality: args.delete_very_low_quality === true,
-      veryLowQualityThreshold: args.very_low_quality_threshold || 0.3,
+      autoCleanup: !!args.auto_cleanup,
+      // Use sensible defaults for cleanup options (not exposed in schema to reduce parameter count)
+      mergeDuplicates: true,
+      optimizeLowQuality: true,
+      deleteVeryLowQuality: false,
+      veryLowQualityThreshold: 0.3,
     });
 
     // ===== AUTO-EXPORT PHASE =====

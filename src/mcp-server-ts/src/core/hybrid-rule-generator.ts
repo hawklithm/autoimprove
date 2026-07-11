@@ -14,7 +14,7 @@ import { ScopeDetector } from "./scope-detector.js";
 import { SceneExtractor } from "./scene-extractor.js";
 import { SessionData } from "./jsonl-parser.js";
 import { logger } from "./logger.js";
-import Anthropic from "@anthropic-ai/sdk";
+import OpenAI from "openai";
 import { appendFileSync } from "fs";
 import { homedir } from "os";
 import { join } from "path";
@@ -43,19 +43,42 @@ export class HybridRuleGenerator {
   private basicGenerator: RuleGenerator;
   private exampleExtractor: CodeExampleExtractor;
   private scopeDetector: ScopeDetector;
-  private anthropic: Anthropic | null;
+  private openai: OpenAI | null;
+  private model: string;
 
   constructor() {
     this.basicGenerator = new RuleGenerator();
     this.exampleExtractor = new CodeExampleExtractor();
     this.scopeDetector = new ScopeDetector();
 
-    // Initialize Anthropic client if API key available
-    const apiKey = process.env.ANTHROPIC_API_KEY;
-    if (apiKey) {
-      this.anthropic = new Anthropic({ apiKey });
+    // Support multiple API key sources: ANTHROPIC_API_KEY, ANTHROPIC_AUTH_TOKEN, LLM_API_KEY
+    const apiKey = process.env.ANTHROPIC_API_KEY
+      || process.env.ANTHROPIC_AUTH_TOKEN
+      || process.env.LLM_API_KEY;
+
+    // Support custom base URL for LLM API
+    let baseURL = process.env.LLM_BASE_URL || process.env.ANTHROPIC_BASE_URL;
+
+    // If baseURL doesn't end with /v1, add it (for OpenAI compatibility)
+    if (baseURL && !baseURL.endsWith('/v1')) {
+      baseURL = baseURL.replace(/\/$/, '') + '/v1';
+    }
+
+    // Priority: LLM_MODEL > ANTHROPIC_MODEL > default
+    this.model = process.env.LLM_MODEL || process.env.ANTHROPIC_MODEL || "claude-sonnet-4-6";
+
+    if (!apiKey) {
+      this.openai = null;
+      console.log(`[DEBUG] No API key found - LLM enhancement disabled`);
+      return;
+    }
+
+    if (baseURL) {
+      this.openai = new OpenAI({ apiKey, baseURL });
+      console.log(`[DEBUG] LLM initialized: baseURL=${baseURL}, model=${this.model}`);
     } else {
-      this.anthropic = null;
+      this.openai = new OpenAI({ apiKey });
+      console.log(`[DEBUG] LLM initialized with standard OpenAI, model=${this.model}`);
     }
   }
 
@@ -109,7 +132,7 @@ export class HybridRuleGenerator {
 
     // Phase 2: LLM enhancement (if enabled and available)
     let enhancedContent: RuleContent & { scope?: RuleScope; scope_context?: any; scope_confidence?: number; scope_reason?: string; scenes?: Scene };
-    if (useLLMEnhancement && this.anthropic) {
+    if (useLLMEnhancement && this.openai) {
       try {
         // Pass Phase 1 scope as preliminary analysis to Phase 2
         const preliminaryScope = {
@@ -287,8 +310,8 @@ export class HybridRuleGenerator {
     ruleId: string,
     preliminaryScope?: { scope: RuleScope; scopeContext?: any }
   ): Promise<RuleContent & { scope?: RuleScope; scope_context?: any; scope_confidence?: number; scope_reason?: string; scenes?: Scene }> {
-    if (!this.anthropic) {
-      throw new Error("Anthropic API key not available");
+    if (!this.openai) {
+      throw new Error("OpenAI client not initialized");
     }
 
     // Build enhancement prompt with full pattern context and preliminary scope
@@ -297,20 +320,15 @@ export class HybridRuleGenerator {
     // Dynamic max_tokens based on pattern complexity (add tokens for scope analysis)
     const maxTokens = this.calculateMaxTokens(pattern) + 200;
 
-    // Use environment variable for model configuration
-    const model = process.env.ANTHROPIC_DEFAULT_SONNET_MODEL
-      || process.env.ANTHROPIC_MODEL
-      || "claude-sonnet-4-6";
-
     const requestLog = `\n[${new Date().toISOString()}] [LLM] Requesting enhancement for ${ruleId}\n` +
-      `Model: ${model}, Max tokens: ${maxTokens}\n` +
+      `Model: ${this.model}, Max tokens: ${maxTokens}\n` +
       `Prompt (${prompt.length} chars):\n${prompt.slice(0, 500)}...\n`;
 
-    logger.debug("hybrid-generation", "LLM request sent", { rule_id: ruleId, model, max_tokens: maxTokens, prompt_length: prompt.length });
+    logger.debug("hybrid-generation", "LLM request sent", { rule_id: ruleId, model: this.model, max_tokens: maxTokens, prompt_length: prompt.length });
     appendFileSync(LLM_LOG_FILE, requestLog, "utf8");
 
-    const response = await this.anthropic.messages.create({
-      model,
+    const response = await this.openai.chat.completions.create({
+      model: this.model,
       max_tokens: maxTokens,
       messages: [{
         role: "user",
@@ -318,10 +336,13 @@ export class HybridRuleGenerator {
       }]
     });
 
-    const responseText = response.content[0].type === "text" ? response.content[0].text : "";
+    const responseText = response.choices[0]?.message?.content || "";
 
-    const responseLog = `[${new Date().toISOString()}] [LLM] Response received (${responseText.length} chars):\n${responseText.slice(0, 500)}...\n`;
-    logger.debug("hybrid-generation", "LLM response received", { rule_id: ruleId, response_length: responseText.length });
+    // Log cache performance metrics
+    const cacheStats = this.extractCacheStats(response);
+    const responseLog = `[${new Date().toISOString()}] [LLM] Response received (${responseText.length} chars):\n${responseText.slice(0, 500)}...\n` +
+      `Usage: ${JSON.stringify(cacheStats)}\n`;
+    logger.debug("hybrid-generation", "LLM response received", { rule_id: ruleId, response_length: responseText.length, cache_stats: cacheStats });
     appendFileSync(LLM_LOG_FILE, responseLog, "utf8");
 
     const enhanced = this.parseEnhancedResponse(responseText);
@@ -374,15 +395,85 @@ export class HybridRuleGenerator {
   }
 
   /**
-   * Build enhancement prompt (optimized for token efficiency)
+   * Build enhancement prompt (optimized for token efficiency and cache hit rate)
+   *
+   * CACHE OPTIMIZATION: Static instructions (~1400 tokens) are placed first,
+   * followed by dynamic pattern data (~400-600 tokens) at the end.
    */
   private buildEnhancementPrompt(
     pattern: Pattern,
     basicContent: RuleContent,
     preliminaryScope?: { scope: RuleScope; scopeContext?: any }
   ): string {
-    // Extract full context from occurrences (not just user_input)
-    // Include: user message + context (file paths, action taken)
+    // Step 1: Build static instructions (cacheable)
+    const staticInstructions = `# Coding Rule Enhancement System
+
+## Task 1: Scope Determination
+
+Analyze if this rule is:
+- "global": Universal pattern applicable to all projects
+- "organization": Company-specific framework/convention
+- "project": Project-specific implementation
+
+Indicators for GLOBAL:
+- Programming principles (SOLID, DRY, KISS)
+- Common security vulnerabilities (SQL injection, XSS, CSRF)
+- Universal performance patterns (memory leaks, race conditions)
+- Standard error handling practices
+- Generic naming conventions
+
+Indicators for PROJECT:
+- References "this project", "this codebase", "this repository"
+- Mentions specific custom modules/services unique to one codebase
+- Low occurrence count (1-2) with specific file paths
+- Custom implementation details
+
+Indicators for ORGANIZATION:
+- Explicitly mentions "our team", "company standard", "org-wide"
+- Framework choices consistent across multiple projects
+- Shared tooling/linting configurations
+
+## Task 2: Scene Detection
+
+Identify the technical context in 3 dimensions:
+
+1. **tech** (array): Technologies/frameworks/languages involved
+   Examples: ["react", "typescript", "nodejs", "python", "sql", "graphql", "prisma", "nextjs", "express"]
+   Extract from: file extensions (.tsx→react, .py→python), framework names, library references
+
+2. **functional** (array): Functional/technical domains
+   Examples: ["auth", "api", "database", "testing", "error-handling", "performance", "security", "state-management"]
+   Extract from: what the code does (authentication, API calls, database queries, etc.)
+
+3. **business** (array): Business/product domains (often empty for technical rules)
+   Examples: ["e-commerce", "payment", "analytics", "user-management"]
+   Extract from: business context mentioned by user
+
+Guidelines:
+- Include 2-4 items per dimension (don't over-specify)
+- Use lowercase, hyphenated names (e.g., "error-handling" not "Error Handling")
+- Focus on what's explicitly mentioned or clearly implied
+- tech + functional are usually non-empty; business often empty for technical rules
+
+## Output Format
+
+Return JSON with these fields:
+- title: imperative, 60-80 chars
+- description: what to do/avoid, 4-6 sentences, specific
+- rationale: why this matters, 3-5 sentences, concrete
+- how_to_apply: 4-6 actionable steps (array)
+- when_to_use: 3-5 conditions (array)
+- exceptions: 2-4 cases (array, optional)
+- related_patterns: related rule names (array, optional)
+- scope: "global" | "organization" | "project" (REQUIRED)
+- scope_confidence: 0.0-1.0, how certain are you about the scope (REQUIRED)
+- scope_reason: 1-2 sentences explaining why you chose this scope (REQUIRED)
+- scope_context: object with organization_id, project_id, project_path if scope is organization/project (optional)
+- scenes: {"tech":[],"functional":[],"business":[]} (REQUIRED)
+
+Be specific and actionable.`;
+
+    // Step 2: Extract dynamic pattern data
     const contextExamples = pattern.occurrences
       .filter(o => o.user_input && o.user_input.length > 20)
       .slice(-5)  // Last 5 meaningful occurrences
@@ -427,7 +518,7 @@ export class HybridRuleGenerator {
 - Project: ${preliminaryScope.scopeContext?.project_path || 'N/A'}
 - Project ID: ${preliminaryScope.scopeContext?.project_id || 'N/A'}
 - Organization: ${preliminaryScope.scopeContext?.organization_id || 'N/A'}`
-      : '\nNo preliminary scope analysis available.';
+      : '';
 
     // Extract file paths from occurrences for scene hints
     const filePaths = pattern.occurrences
@@ -438,80 +529,27 @@ export class HybridRuleGenerator {
       ? `\nFile paths: ${filePaths.join(', ')}`
       : '';
 
-    return `Enhance coding rule from user corrections and determine its scope and scene.
+    // Step 3: Combine static + dynamic (enables caching of static part)
+    return `${staticInstructions}
 
-Basic: ${basicContent.content.slice(0, 200)}...
+---
 
-Type: ${pattern.type} | Confidence: ${(pattern.confidence * 100).toFixed(0)}% | Count: ${pattern.occurrences.length}
-Keywords: ${pattern.keywords.slice(0, 5).join(', ')}
+## Input Data for This Enhancement Request
 
-Evidence from sessions:
+**Pattern Type**: ${pattern.type}
+**Confidence**: ${(pattern.confidence * 100).toFixed(0)}%
+**Occurrences**: ${pattern.occurrences.length}
+**Keywords**: ${pattern.keywords.slice(0, 5).join(', ')}
+
+**Basic Rule Content**:
+${basicContent.content.slice(0, 200)}...
+
+**Evidence from Sessions**:
 ${contextToUse}
 ${scopeContext}
 ${filePathsHint}
 
-**Task 1: Scope Determination**
-Analyze if this rule is:
-- "global": Universal pattern applicable to all projects (e.g., SQL injection prevention, DRY principle, common security issues)
-- "organization": Company-specific framework/convention (e.g., "our team uses X", org-wide ESLint config)
-- "project": Project-specific implementation (e.g., "this codebase's AuthService", custom project modules)
-
-Indicators for GLOBAL:
-- Programming principles (SOLID, DRY, KISS)
-- Common security vulnerabilities (SQL injection, XSS, CSRF)
-- Universal performance patterns (memory leaks, race conditions)
-- Standard error handling practices
-- Generic naming conventions
-
-Indicators for PROJECT:
-- References "this project", "this codebase", "this repository"
-- Mentions specific custom modules/services unique to one codebase
-- Low occurrence count (1-2) with specific file paths
-- Custom implementation details
-
-Indicators for ORGANIZATION:
-- Explicitly mentions "our team", "company standard", "org-wide"
-- Framework choices consistent across multiple projects
-- Shared tooling/linting configurations
-
-**Task 2: Scene Detection**
-Identify the technical context in 3 dimensions:
-
-1. **tech** (array): Technologies/frameworks/languages involved
-   Examples: ["react", "typescript", "nodejs", "python", "sql", "graphql", "prisma", "nextjs", "express"]
-   Extract from: file extensions (.tsx→react, .py→python), framework names, library references
-
-2. **functional** (array): Functional/technical domains
-   Examples: ["auth", "api", "database", "testing", "error-handling", "performance", "security", "state-management"]
-   Extract from: what the code does (authentication, API calls, database queries, etc.)
-
-3. **business** (array): Business/product domains (often empty for technical rules)
-   Examples: ["e-commerce", "payment", "analytics", "user-management"]
-   Extract from: business context mentioned by user
-
-Guidelines:
-- Include 2-4 items per dimension (don't over-specify)
-- Use lowercase, hyphenated names (e.g., "error-handling" not "Error Handling")
-- Focus on what's explicitly mentioned or clearly implied
-- tech + functional are usually non-empty; business often empty for technical rules
-
-Output JSON:
-- title: imperative, 60-80 chars
-- description: what to do/avoid, 4-6 sentences, specific
-- rationale: why this matters, 3-5 sentences, concrete
-- how_to_apply: 4-6 actionable steps (array)
-- when_to_use: 3-5 conditions (array)
-- exceptions: 2-4 cases (array, optional)
-- related_patterns: related rule names (array, optional)
-- scope: "global" | "organization" | "project" (REQUIRED)
-- scope_confidence: 0.0-1.0, how certain are you about the scope (REQUIRED)
-- scope_reason: 1-2 sentences explaining why you chose this scope (REQUIRED)
-- scope_context: object with organization_id, project_id, project_path if scope is organization/project (optional)
-- scenes: {"tech":[],"functional":[],"business":[]} (REQUIRED)
-
-Format: {"title":"...","description":"...","rationale":"...","how_to_apply":[...],"when_to_use":[...],"exceptions":[...],"scope":"global","scope_confidence":0.85,"scope_reason":"...","scope_context":{},"scenes":{"tech":["react"],"functional":["auth"],"business":[]}}
-
-Be specific and actionable.`;
+Generate enhanced rule following the format specified above.`;
   }
 
   /**
@@ -863,6 +901,22 @@ Be specific and actionable.`;
     return {
       scene,
       keywords: Array.from(keywords).slice(0, 15) // Limit to 15 keywords
+    };
+  }
+
+  /**
+   * Extract cache performance metrics from OpenAI API response
+   */
+  private extractCacheStats(response: any): {
+    prompt_tokens: number;
+    completion_tokens: number;
+    total_tokens: number;
+  } {
+    const usage = response.usage || {};
+    return {
+      prompt_tokens: usage.prompt_tokens || 0,
+      completion_tokens: usage.completion_tokens || 0,
+      total_tokens: usage.total_tokens || 0
     };
   }
 }

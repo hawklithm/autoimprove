@@ -61,40 +61,75 @@ export class CodexSessionExtractor extends SessionExtractor {
     if (data.type === "response_item" && data.payload) {
       const payload = data.payload;
 
-      // Extract message
-      if (payload.type === "message" && (payload.role === "user" || payload.role === "assistant")) {
-        const content = this.extractTextContent(payload.content);
+      // FIX 1: Extract messages from all roles (user, assistant, developer)
+      if (payload.type === "message" && payload.role) {
+        // Support user, assistant, and developer roles
+        const allowedRoles = ["user", "assistant", "developer"];
+        if (allowedRoles.includes(payload.role)) {
+          const content = this.extractTextContent(payload.content);
 
-        if (content) {
-          const message: Message = {
-            role: payload.role,
-            content: this.sanitizeContent(content),
-            timestamp: data.timestamp,
-            line_number: lineNum
-          };
-          messages.push(message);
-        }
-      }
-
-      // Extract tool calls from content blocks
-      if (payload.content && Array.isArray(payload.content)) {
-        for (const block of payload.content) {
-          if (block.type === "tool_use") {
-            const toolCall: ToolCall = {
-              tool_name: block.name || "unknown",
-              input: block.input || {},
+          if (content) {
+            // Map 'developer' to 'system' for compatibility with Message interface
+            const role = payload.role === "developer" ? "system" : payload.role;
+            
+            const message: Message = {
+              role: role as "user" | "assistant" | "system",
+              content: this.sanitizeContent(content),
               timestamp: data.timestamp,
               line_number: lineNum
             };
-            toolCalls.push(toolCall);
+            messages.push(message);
           }
         }
+      }
+
+      // FIX 3: Handle independent function_call type (NOT in message.content)
+      if (payload.type === "function_call") {
+        // Parse arguments (it's a JSON string in Codex format)
+        let parsedInput: Record<string, any> = {};
+        try {
+          if (typeof payload.arguments === "string") {
+            parsedInput = JSON.parse(payload.arguments);
+          } else if (typeof payload.arguments === "object") {
+            parsedInput = payload.arguments;
+          }
+        } catch (e) {
+          logger.warn("codex-extractor", `Failed to parse function arguments at line ${lineNum}`, {
+            error: e instanceof Error ? e.message : String(e),
+            arguments: payload.arguments
+          });
+          // Store raw arguments if parsing fails
+          parsedInput = { raw: payload.arguments };
+        }
+
+        const toolCall: ToolCall = {
+          tool_name: payload.name || "unknown",
+          input: parsedInput,
+          timestamp: data.timestamp,
+          line_number: lineNum
+        };
+        toolCalls.push(toolCall);
+      }
+
+      // FIX 4: Handle function_call_output
+      if (payload.type === "function_call_output") {
+        // Store tool outputs in metadata for later analysis
+        if (!metadata.tool_outputs) {
+          metadata.tool_outputs = {};
+        }
+        
+        const callId = payload.call_id || `line_${lineNum}`;
+        metadata.tool_outputs[callId] = {
+          content: payload.content,
+          timestamp: data.timestamp,
+          line_number: lineNum
+        };
       }
 
       return;
     }
 
-    // Hand event items (progress, tool results, etc.)
+    // Handle event items (progress, tool results, etc.)
     if (data.type === "event_item" && data.payload) {
       // These are typically tool execution events, we may extract additional context if needed
       return;

@@ -6,6 +6,7 @@
  */
 
 import { SessionExtractorFactory, SessionData } from "./extractors/index.js";
+import type { Message, ToolCall } from "./extractors/session-extractor.interface.js";
 
 export class UnifiedSessionParser {
   /**
@@ -25,4 +26,4 @@ export class UnifiedSessionParser {
 }
 
 // Export legacy interface for backward compatibility
-export { SessionData, Message, ToolCall } from "./extractors/index.js";
+export type { SessionData, Message, ToolCall };

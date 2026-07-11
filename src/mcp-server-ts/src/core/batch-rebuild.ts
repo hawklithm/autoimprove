@@ -33,7 +33,7 @@ export interface BatchRebuildOptions {
   /** Use cached results (default: true) */
   incremental?: boolean;
 
-  /** Minimum confidence threshold */
+  /** Minimum confidence threshold (default: 0.6) */
   minConfidence?: number;
 
   /** Maximum sessions to process (for testing) */
@@ -120,7 +120,7 @@ export class BatchRebuildEngine {
     const {
       force = false,
       incremental = true,
-      minConfidence = 0.40,
+      minConfidence = 0.6,
       sessionLimit,
       dryRun = false,
       sessionDir = join(homedir(), ".claude", "projects"),
@@ -308,7 +308,9 @@ export class BatchRebuildEngine {
 
     // Save rules and update evolution with rule IDs
     for (const rule of rules) {
-      this.indexManager.addRule(rule.indexEntry);
+      // Pass content to addRule for SQLite storage (saves content inline)
+      this.indexManager.addRule(rule.indexEntry, rule.content);
+      // Also save to content manager for backward compatibility with JSON storage
       this.contentManager.saveContent(rule.content);
 
       // Find corresponding pattern and update evolution

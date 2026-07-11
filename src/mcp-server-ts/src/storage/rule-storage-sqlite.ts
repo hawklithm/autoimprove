@@ -275,7 +275,7 @@ export class RuleStorageSQLite {
     const params: any[] = allSceneTerms.flatMap(t => [t.dimension, t.value.toLowerCase()]);
     params.push(limit);
 
-    const rows = this.db.prepare(query).all(...params) as any[];
+    const rows = this.db.prepare(query).all(params) as any[];
 
     return rows.map(row => this.rowToRuleEntry(row));
   }
@@ -301,8 +301,8 @@ export class RuleStorageSQLite {
       LIMIT ?
     `;
 
-    const params = [...segments.map(s => s.toLowerCase()), String(limit)];
-    const rows = this.db.prepare(query).all(...params) as any[];
+    const params = [...segments.map(s => s.toLowerCase()), limit];
+    const rows = this.db.prepare(query).all(params) as any[];
 
     return rows.map(row => this.rowToRuleEntry(row));
   }

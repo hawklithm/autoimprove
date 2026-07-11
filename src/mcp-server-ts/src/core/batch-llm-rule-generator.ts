@@ -13,13 +13,14 @@
  * - Better context for LLM (sees related patterns together)
  */
 
-import Anthropic from "@anthropic-ai/sdk";
+import OpenAI from "openai";
 import { Pattern, RuleIndexEntry, RuleContent, Scene, Priority } from "./models.js";
 import { PatternSimilarityClusterer, PatternClusterGroup } from "./pattern-similarity-clusterer.js";
 import { RuleGenerator } from "./rule-generator.js";
 import { logger } from "./logger.js";
 import { LLMPromptBuilder, PromptEvidence } from "./llm-prompt-builder.js";
 import { JSONExtractor } from "./json-extractor.js";
+import { LLMConfigManager } from "./llm-config-manager.js";
 import { appendFileSync } from "fs";
 import { homedir } from "os";
 import { join } from "path";
@@ -53,18 +54,12 @@ export interface BatchGeneratedRule {
 export class BatchLLMRuleGenerator {
   private clusterer: PatternSimilarityClusterer;
   private basicGenerator: RuleGenerator;
-  private anthropic: Anthropic | null;
+  private llmManager: LLMConfigManager;
 
   constructor() {
     this.clusterer = new PatternSimilarityClusterer();
     this.basicGenerator = new RuleGenerator();
-
-    const apiKey = process.env.ANTHROPIC_API_KEY;
-    if (apiKey) {
-      this.anthropic = new Anthropic({ apiKey });
-    } else {
-      this.anthropic = null;
-    }
+    this.llmManager = new LLMConfigManager();
   }
 
   /**
@@ -109,7 +104,7 @@ export class BatchLLMRuleGenerator {
     const allRules: BatchGeneratedRule[] = [];
     let currentId = startId;
 
-    if (enableParallel && this.anthropic) {
+    if (enableParallel && this.llmManager.isAvailable()) {
       // Parallel processing with concurrency limit
       allRules.push(...await this.processClustersConcurrently(
         clusters,
@@ -202,7 +197,7 @@ export class BatchLLMRuleGenerator {
     ruleId: string,
     scene?: Scene
   ): Promise<BatchGeneratedRule[]> {
-    if (!this.anthropic) {
+    if (!this.llmManager.isAvailable()) {
       // Fallback: generate basic rules without LLM
       return cluster.patterns.map((p, idx) => {
         const id = idx === 0 ? ruleId : `${ruleId}-${idx}`;
@@ -222,9 +217,7 @@ export class BatchLLMRuleGenerator {
       return shouldGenerate;
     });
 
-    if (qualifiedPatterns.length === 0) {
-      return [];
-    }
+    console.log(`[DEBUG] processCluster: ${cluster.patterns.length} patterns, ${qualifiedPatterns.length} qualified`);
 
     // Build unified prompt using LLMPromptBuilder
     const evidence: PromptEvidence[] = qualifiedPatterns.map(p =>
@@ -243,42 +236,48 @@ export class BatchLLMRuleGenerator {
 
     const maxTokens = this.calculateMaxTokens(cluster);
 
-    // Use environment variable for model configuration
-    const model = process.env.ANTHROPIC_DEFAULT_SONNET_MODEL
-      || process.env.ANTHROPIC_MODEL
-      || "claude-sonnet-4-6";
-
-    const requestLog = `\n${"=".repeat(80)}\n` +
-      `[${new Date().toISOString()}] [BATCH-LLM REQUEST] Cluster ${cluster.cluster_id}\n` +
-      `${"=".repeat(80)}\n` +
-      `Patterns: ${cluster.patterns.length}, Type: ${cluster.pattern_type}\n` +
-      `Model: ${model}, Max tokens: ${maxTokens}\n` +
-      `Prompt length: ${prompt.length} chars\n` +
-      `${"-".repeat(80)}\n` +
-      `FULL PROMPT:\n${prompt}\n` +
-      `${"-".repeat(80)}\n`;
-
-    logger.debug("batch-llm", "LLM request sent", { cluster_id: cluster.cluster_id, prompt_length: prompt.length });
-    appendFileSync(LLM_LOG_FILE, requestLog, "utf8");
-
+    console.log(`[DEBUG] Sending request to LLM, maxTokens: ${maxTokens}`);
     try {
-      const response = await this.anthropic.messages.create({
-        model,
-        max_tokens: maxTokens,
-        messages: [{
-          role: "user",
-          content: prompt
-        }]
-      });
+      const response = await this.llmManager.callWithFallback(async (client, model) => {
+        const requestLog = `\n${"=".repeat(80)}\n` +
+          `[${new Date().toISOString()}] [BATCH-LLM REQUEST] Cluster ${cluster.cluster_id}\n` +
+          `${"=".repeat(80)}\n` +
+          `Patterns: ${cluster.patterns.length}, Type: ${cluster.pattern_type}\n` +
+          `Model: ${model}, Max tokens: ${maxTokens}\n` +
+          `Prompt length: ${prompt.length} chars\n` +
+          `${"-".repeat(80)}\n` +
+          `FULL PROMPT:\n${prompt}\n` +
+          `${"-".repeat(80)}\n`;
 
-      const responseText = response.content[0].type === "text" ? response.content[0].text : "";
+        logger.debug("batch-llm", "LLM request sent", { cluster_id: cluster.cluster_id, prompt_length: prompt.length });
+        appendFileSync(LLM_LOG_FILE, requestLog, "utf8");
+
+        return await client.chat.completions.create({
+          model,
+          max_tokens: maxTokens,
+          messages: [{
+            role: "user",
+            content: prompt
+          }]
+        });
+      }, { fallbackOnError: true });
+
+      const responseText = response.choices[0]?.message?.content || "";
+      console.log(`[DEBUG] Response received, finish_reason: ${response.choices[0]?.finish_reason}`);
+      console.log(`[DEBUG] LLM call successful, response length: ${responseText.length}`);
+
+      logger.debug("batch-llm", "LLM response received", {
+        cluster_id: cluster.cluster_id,
+        response_length: responseText.length,
+        first_100_chars: responseText.substring(0, 100)
+      });
 
       const responseLog = `\n${"=".repeat(80)}\n` +
         `[${new Date().toISOString()}] [BATCH-LLM RESPONSE] Cluster ${cluster.cluster_id}\n` +
         `${"=".repeat(80)}\n` +
         `Response length: ${responseText.length} chars\n` +
-        `Stop reason: ${response.stop_reason}\n` +
-        `Usage: input=${response.usage.input_tokens}, output=${response.usage.output_tokens}\n` +
+        `Finish reason: ${response.choices[0]?.finish_reason}\n` +
+        `Usage: prompt=${response.usage?.prompt_tokens}, completion=${response.usage?.completion_tokens}\n` +
         `${"-".repeat(80)}\n` +
         `FULL RESPONSE:\n${responseText}\n` +
         `${"-".repeat(80)}\n\n`;
@@ -286,14 +285,25 @@ export class BatchLLMRuleGenerator {
       logger.debug("batch-llm", "LLM response received", {
         cluster_id: cluster.cluster_id,
         response_length: responseText.length,
-        stop_reason: response.stop_reason,
-        input_tokens: response.usage.input_tokens,
-        output_tokens: response.usage.output_tokens
+        finish_reason: response.choices[0]?.finish_reason,
+        prompt_tokens: response.usage?.prompt_tokens,
+        completion_tokens: response.usage?.completion_tokens
       });
       appendFileSync(LLM_LOG_FILE, responseLog, "utf8");
 
       // Parse response (may contain multiple rules)
-      const parsedRules = this.parseBatchResponse(responseText, cluster);
+      let parsedRules;
+      try {
+        parsedRules = this.parseBatchResponse(responseText, cluster);
+      } catch (parseError) {
+        // LLM explicitly declined to generate a rule or response cannot be parsed
+        logger.warn("batch-llm", `Cannot extract rule from LLM response for cluster ${cluster.cluster_id}`, {
+          error: parseError instanceof Error ? parseError.message : String(parseError),
+          responseSample: responseText.slice(0, 200)
+        });
+        // Return empty array - this cluster cannot be converted to a rule
+        return [];
+      }
 
       // Convert to storage format
       const rules: BatchGeneratedRule[] = [];
@@ -312,9 +322,15 @@ export class BatchLLMRuleGenerator {
       }
 
       return rules;
-    } catch (error) {
-      logger.warn("batch-llm", `LLM batch processing failed for cluster ${cluster.cluster_id}`, { error: error instanceof Error ? error.message : String(error) });
-      throw error;
+    } catch (err) {
+      const errorMsg = err instanceof Error ? err.message : String(err);
+      const errorStack = err instanceof Error ? err.stack : '';
+      console.log(`[DEBUG] LLM error: ${errorMsg}`);
+      console.log(`[DEBUG] Stack: ${errorStack}`);
+      const errorObj = err instanceof Error ? err : new Error(String(err));
+      logger.error("batch-llm", `LLM batch processing failed for cluster ${cluster.cluster_id}`, errorObj);
+      // Don't throw - return empty array to allow processing to continue
+      return [];
     }
   }
 
@@ -333,6 +349,24 @@ export class BatchLLMRuleGenerator {
     merged_count: number;
   }> {
     try {
+      // Check if LLM explicitly declined to generate a rule
+      const declinePatterns = [
+        /cannot generate.*rule/i,
+        /insufficient.*information/i,
+        /missing.*evidence/i,
+        /not enough.*context/i,
+        /unable to.*create.*rule/i,
+        /lacks.*critical information/i
+      ];
+
+      if (declinePatterns.some(pattern => pattern.test(response))) {
+        logger.warn("batch-llm", "LLM explicitly declined to generate rule", {
+          cluster_id: cluster.cluster_id,
+          responseSample: response.slice(0, 300)
+        });
+        throw new Error("LLM declined to generate rule due to insufficient information");
+      }
+
       // Check for truncation first
       if (JSONExtractor.isTruncated(response)) {
         logger.warn("batch-llm", "Potentially truncated LLM response detected", {
@@ -345,10 +379,10 @@ export class BatchLLMRuleGenerator {
       const extraction = JSONExtractor.extract(response);
 
       if (!extraction.success) {
-        logger.error("batch-llm", "Failed to extract JSON from response", undefined, {
-          error: extraction.error,
+        logger.warn("batch-llm", "Failed to parse batch LLM response", {
+          responseLength: response.length,
           responseSample: response.slice(0, 500),
-          responseEnd: response.slice(-500)
+          error: extraction.error
         });
         throw new Error(`JSON extraction failed: ${extraction.error}`);
       }

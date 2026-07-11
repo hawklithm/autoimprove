@@ -2,8 +2,9 @@
  * LLM-based signal extractor for discovering new signals from unmatched content
  */
 
-import Anthropic from "@anthropic-ai/sdk";
+import OpenAI from "openai";
 import { SignalDictionaryDB, SignalEntry } from "../storage/signal-dictionary-db.js";
+import { LLMConfigManager } from "./llm-config-manager.js";
 
 export interface ExtractedSignal {
   text: string;
@@ -24,17 +25,11 @@ export interface ExtractionResult {
 
 export class LLMSignalExtractor {
   private db: SignalDictionaryDB;
-  private anthropic: Anthropic;
+  private llmManager: LLMConfigManager;
 
   constructor() {
     this.db = new SignalDictionaryDB();
-
-    const apiKey = process.env.ANTHROPIC_API_KEY;
-    if (!apiKey) {
-      throw new Error("ANTHROPIC_API_KEY environment variable is required");
-    }
-
-    this.anthropic = new Anthropic({ apiKey });
+    this.llmManager = new LLMConfigManager();
   }
 
   /**
@@ -98,19 +93,25 @@ export class LLMSignalExtractor {
    * Extract signals from a batch of content
    */
   private async extractFromBatch(content: string[]): Promise<ExtractedSignal[]> {
+    if (!this.llmManager.isAvailable()) {
+      return [];
+    }
+
     const prompt = this.buildExtractionPrompt(content);
 
     try {
-      const response = await this.anthropic.messages.create({
-        model: "claude-haiku-4-5-20251001",
-        max_tokens: 1500, // Reduced from 2000
-        messages: [{
-          role: "user",
-          content: prompt
-        }]
-      });
+      const response = await this.llmManager.callWithFallback(async (client, model) => {
+        return await client.chat.completions.create({
+          model,
+          max_tokens: 1500,
+          messages: [{
+            role: "user",
+            content: prompt
+          }]
+        });
+      }, { fallbackOnError: true });
 
-      const responseText = response.content[0].type === "text" ? response.content[0].text : "";
+      const responseText = response.choices[0]?.message?.content || "";
       return this.parseExtractionResponse(responseText);
     } catch (error) {
       // console.error("LLM signal extraction failed:", error);

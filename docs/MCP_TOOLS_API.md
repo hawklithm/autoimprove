@@ -63,6 +63,77 @@ result = mcp.call_tool("generate_rules", {
 })
 ```
 
+### batch_rebuild
+
+Batch rebuild all rules from session files with incremental caching and optional auto-cleanup.
+
+**Parameters:**
+- `force` (boolean, optional): Force full rebuild (ignore cache). Default: false
+- `use_llm_enhancement` (boolean, optional): Enable LLM enhancement for rules (recommended). Default: false
+- `extract_code_examples` (boolean, optional): Extract code examples from sessions (recommended). Default: false
+- `auto_cleanup` (boolean, optional): Automatically cleanup duplicates and optimize rules after generation (recommended). Default: false
+- `min_confidence` (number, optional): Minimum confidence threshold. Default: 0.6
+- `session_limit` (number, optional): Limit number of sessions to analyze (for testing)
+- `dry_run` (boolean, optional): Dry run mode (don't save results). Default: false
+- `session_dir` (string, optional): Custom session directory path. Default: `~/.claude/projects`
+
+**Returns:**
+```json
+{
+  "success": true,
+  "result": {
+    "sessions_analyzed": 150,
+    "sessions_cached": 100,
+    "patterns_total": 450,
+    "patterns_qualified": 300,
+    "rules_generated": 45,
+    "rules_exported": 10,
+    "cache_hit_rate": 0.667,
+    "execution_time_ms": 12500,
+    "cleanup_performed": true,
+    "rules_merged": 5,
+    "rules_optimized": 8,
+    "rules_deleted": 0,
+    "auto_exported_to_claude_md": true,
+    "exported_rules_count": 10
+  }
+}
+```
+
+**Example:**
+```python
+# Full rebuild with all enhancements
+result = mcp.call_tool("batch_rebuild", {
+    "force": True,
+    "use_llm_enhancement": True,
+    "extract_code_examples": True,
+    "auto_cleanup": True,
+    "min_confidence": 0.6
+})
+
+# Incremental rebuild (use cache)
+result = mcp.call_tool("batch_rebuild", {
+    "force": False,
+    "use_llm_enhancement": True,
+    "auto_cleanup":)
+
+# Dry run preview
+result = mcp.call_tool("batch_rebuild", {
+    "dry_run": True,
+    "min_confidence": 0.7
+})
+```
+
+**Notes:**
+- **Auto-export**: After successful rebuild (non-dry-run), automatically exports top 10 rules (confidence ≥ 0.7) to `~/.autoimprove/rules/claude-index.md`
+- **Cleanup defaults**: When `auto_cleanup: true`, uses sensible defaults:
+  - Merge duplicates: ✅
+  - Optimize low-quality rules: ✅
+  - Delete very low-quality rules: ❌
+  - Quality threshold: 0.3
+- **Incremental mode**: Automatically enabled when `force: false` (uses session cache)
+- **Advanced features**: `useBatchLLM`, `batchLLMOptions`, `forceCleanup` are available in the Engine but not exposed through MCP. Use direct Engine calls for advanced control (see `run_batch_rebuild.ts`).
+
 ### search_knowledge
 
 Search rules by scene, keywords, or ID. Automatically records "used" feedback for matched rules.

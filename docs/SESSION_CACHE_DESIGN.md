@@ -294,7 +294,7 @@ evolutionManager.pruneStalePatterns(180);  // Remove patterns not seen in 6 mont
 - Document confidence boost factors
 
 ### Phase 4: Incremental Rebuild (Week 4)
-- Implement `batch_rebuild_all_rules` MCP tool
+- Implement `batch_rebuild` MCP tool
 - Add `--incremental` flag to skill
 - Benchmark performance improvements
 
@@ -302,17 +302,20 @@ evolutionManager.pruneStalePatterns(180);  // Remove patterns not seen in 6 mont
 
 ### New MCP Tools
 
-#### `batch_rebuild_all_rules`
+#### `batch_rebuild`
 
 ```typescript
 {
-  name: 'batch_rebuild_all_rules',
+  name: 'batch_rebuild',
   inputSchema: {
-    force: boolean,              // Clear cache before rebuild
-    incremental: boolean,        // Use cached results (default: true)
-    min_confidence: number,      // Filter threshold (default: 0.40)
-    session_limit: number,       // Max sessions to process (for testing)
-    dry_run: boolean,           // Preview without writing
+    force: boolean,                    // Clear cache before rebuild
+    use_llm_enhancement: boolean,      // Enable LLM enhancement for rules
+    extract_code_examples: boolean,    // Extract code examples from sessions
+    auto_cleanup: boolean,             // Automatically cleanup duplicates and optimize rules
+    min_confidence: number,            // Minimum confidence threshold (default: 0.6)
+    session_limit: number,             // Max sessions to process (for testing)
+    dry_run: boolean,                  // Preview without writing
+    session_dir: string,               // Custom session directory path
   },
   outputSchema: {
     sessions_analyzed: number,
@@ -321,11 +324,17 @@ evolutionManager.pruneStalePatterns(180);  // Remove patterns not seen in 6 mont
     patterns_qualified: number,
     rules_generated: number,
     rules_exported: number,
-    cache_hit_rate: number,      // Percentage
-    execution_time_ms: number
+    cache_hit_rate: number,            // Percentage
+    execution_time_ms: number,
+    cleanup_performed: boolean,        // Whether cleanup was performed
+    rules_merged: number,              // Number of rules merged
+    rules_optimized: number,           // Number of rules optimized
+    rules_deleted: number,             // Number of rules deleted
   }
 }
 ```
+
+**Note**: The `incremental` parameter is not exposed in the MCP schema. It is automatically derived from `force` (incremental mode is enabled when `force: false`).
 
 #### `get_pattern_evolution`
 

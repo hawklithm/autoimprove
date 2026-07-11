@@ -163,32 +163,62 @@ for (const cluster of clusters) {
 
 ## 使用方法
 
-### 通过MCP Tool
+### ⚠️ 重要说明
+
+**批量 LLM 优化功能当前仅通过直接调用 `BatchRebuildEngine` 可用，MCP 工具 `batch_rebuild` 暂不支持。**
+
+原因：为简化 MCP 接口，`useBatchLLM` 和 `batchLLMOptions` 参数未暴露到 MCP schema。
+
+### 通过直接调用 Engine（推荐）
 
 ```typescript
-// 调用batch_rebuild时启用
-await mcp.call("batch_rebuild", {
-  useBatchLLM: true,  // 启用批量优化
+import { BatchRebuildEngine } from './core/batch-rebuild.js';
+
+const engine = new BatchRebuildEngine(/* dependencies */);
+
+await engine.rebuild({
+  force: true,
   use_llm_enhancement: true,
-  batchLLMOptions: {
+  extract_code_examples: true,
+  useBatchLLM: true,  // ✅ Engine 支持
+  batchLLMOptions: {   // ✅ Engine 支持
     minSimilarity: 0.4,
     maxPatternsPerBatch: 8,
     enableParallel: true,
     maxConcurrent: 3
   },
-  autoCleanup: true,  // 批量优化后通常不需要cleanup
-  forceCleanup: false
+  autoCleanup: true,
+  forceCleanup: false  // ✅ Engine 支持
 });
 ```
+
+参考脚本：`run_batch_rebuild.ts`
+
+### 通过 MCP Tool（基础功能）
+
+```typescript
+// MCP batch_rebuild 工具使用标准参数
+await mcp.call("batch_rebuild", {
+  force: true,
+  use_llm_enhancement: true,      // ✅ 支持
+  extract_code_examples: true,    // ✅ 支持
+  auto_cleanup: true,              // ✅ 支持
+  min_confidence: 0.6
+  
+  // ❌ 以下参数在 MCP 中不可用：
+  // useBatchLLM
+  // batchLLMOptions
+  // forceCleanup
+});
+```
+
+**注意**：MCP 工具会使用内部默认的清理配置，无法自定义批量 LLM 行为。
 
 ### 通过Skill命令
 
 ```bash
-# 默认使用批量优化
+# Skills 使用 MCP 工具，因此不支持批量 LLM 配置
 /autoimprove-summarize rebuild all --enhance
-
-# 禁用批量优化（使用原流程）
-/autoimprove-summarize rebuild all --enhance --no-batch-llm
 ```
 
 ## 日志示例

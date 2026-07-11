@@ -2,7 +2,7 @@
  * LLM-based rule generator - generates rules from pattern clusters
  */
 
-import Anthropic from "@anthropic-ai/sdk";
+import OpenAI from "openai";
 import { SignalDictionaryDB, LabeledContent } from "../storage/signal-dictionary-db.js";
 import { PatternCluster } from "./pattern-clusterer.js";
 import { PatternType, Priority, RuleScope, RuleIndexEntry, RuleContent, Scene, createScene } from "./models.js";
@@ -10,6 +10,7 @@ import { logger } from "./logger.js";
 import { LLMPromptBuilder, PromptEvidence } from "./llm-prompt-builder.js";
 import { JSONExtractor } from "./json-extractor.js";
 import { SceneExtractor } from "./scene-extractor.js";
+import { LLMConfigManager } from "./llm-config-manager.js";
 import { appendFileSync } from "fs";
 import { homedir } from "os";
 import { join } from "path";
@@ -45,17 +46,11 @@ export interface GeneratedRule {
 
 export class LLMRuleGenerator {
   private db: SignalDictionaryDB;
-  private anthropic: Anthropic;
+  private llmManager: LLMConfigManager;
 
   constructor() {
     this.db = new SignalDictionaryDB();
-
-    const apiKey = process.env.ANTHROPIC_API_KEY;
-    if (!apiKey) {
-      throw new Error("ANTHROPIC_API_KEY environment variable is required");
-    }
-
-    this.anthropic = new Anthropic({ apiKey });
+    this.llmManager = new LLMConfigManager();
   }
 
   /**
@@ -93,30 +88,34 @@ export class LLMRuleGenerator {
     const maxTokens = this.calculateMaxTokens(cluster);
 
     try {
-      // Use environment variable for model configuration
-      const model = process.env.ANTHROPIC_DEFAULT_SONNET_MODEL
-        || process.env.ANTHROPIC_MODEL
-        || "claude-sonnet-4-6";
+      if (!this.llmManager.isAvailable()) {
+        throw new Error("No LLM configurations available");
+      }
 
-      const requestLog = `\n[${new Date().toISOString()}] [LLM] Requesting rule generation for ${ruleId}\n` +
-        `Model: ${model}, Max tokens: ${maxTokens}\n` +
-        `Prompt (${prompt.length} chars):\n${prompt.slice(0, 500)}...\n`;
+      const response = await this.llmManager.callWithFallback(async (client, model) => {
+        const requestLog = `\n[${new Date().toISOString()}] [LLM] Requesting rule generation for ${ruleId}\n` +
+          `Model: ${model}, Max tokens: ${maxTokens}\n` +
+          `Prompt (${prompt.length} chars):\n${prompt.slice(0, 500)}...\n`;
 
-      logger.info("llm-generation", requestLog);
-      appendFileSync(LLM_LOG_FILE, requestLog, "utf8");
+        logger.info("llm-generation", requestLog);
+        appendFileSync(LLM_LOG_FILE, requestLog, "utf8");
 
-      const response = await this.anthropic.messages.create({
-        model,
-        max_tokens: maxTokens,
-        messages: [{
-          role: "user",
-          content: prompt
-        }]
-      });
+        return await client.chat.completions.create({
+          model,
+          max_tokens: maxTokens,
+          messages: [{
+            role: "user",
+            content: prompt
+          }]
+        });
+      }, { fallbackOnError: true });
 
-      const responseText = response.content[0].type === "text" ? response.content[0].text : "";
+      const responseText = response.choices[0]?.message?.content || "";
 
-      const responseLog = `[${new Date().toISOString()}] [LLM] Response received (${responseText.length} chars):\n${responseText.slice(0, 500)}...\n`;
+      // Log cache performance metrics
+      const cacheStats = this.extractCacheStats(response);
+      const responseLog = `[${new Date().toISOString()}] [LLM] Response received (${responseText.length} chars):\n${responseText.slice(0, 500)}...\n` +
+        `Cache stats: ${JSON.stringify(cacheStats)}\n`;
       logger.info("llm-generation", responseLog);
       appendFileSync(LLM_LOG_FILE, responseLog, "utf8");
 
@@ -518,6 +517,22 @@ export class LLMRuleGenerator {
       text: combinedText,
       keywords: cluster.common_signals
     });
+  }
+
+  /**
+   * Extract cache performance metrics from OpenAI API response
+   */
+  private extractCacheStats(response: any): {
+    prompt_tokens: number;
+    completion_tokens: number;
+    total_tokens: number;
+  } {
+    const usage = response.usage || {};
+    return {
+      prompt_tokens: usage.prompt_tokens || 0,
+      completion_tokens: usage.completion_tokens || 0,
+      total_tokens: usage.total_tokens || 0
+    };
   }
 
   close() {

@@ -53,6 +53,10 @@ export interface PromptOptions {
 export class LLMPromptBuilder {
   /**
    * Build rule generation prompt from evidence
+   *
+   * CACHE OPTIMIZATION: Static sections (header, instructions, format, quality) are placed
+   * first to enable Anthropic prompt caching (~2000-2500 tokens). Dynamic pattern data is
+   * placed at the end to maximize cache hit rate in batch operations.
    */
   static buildPrompt(evidence: PromptEvidence[], options: PromptOptions): string {
     const {
@@ -67,34 +71,44 @@ export class LLMPromptBuilder {
 
     const isSinglePattern = evidence.length === 1;
 
-    // Build structured JSON context
+    // Build static prefix (cacheable - ~2000-2500 tokens)
+    const staticPrefix = this.buildStaticPrefix(isBatchMode, isSinglePattern);
+
+    // Build dynamic data (changes per request - ~500-1000 tokens)
     const jsonContext = this.buildStructuredContext(evidence, options, maxContentExamples);
 
-    // Build header with context
+    // Combine: static prefix + dynamic data
+    // This order enables Anthropic to cache the static prefix across multiple API calls
+    return `${staticPrefix}
+
+---
+
+## Input Data for Analysis
+
+Analyze the following pattern data and generate rules following the instructions above:
+
+\`\`\`json
+${jsonContext}
+\`\`\``;
+  }
+
+  /**
+   * Build static prefix (cacheable section)
+   * Contains all instructions, format specs, and quality standards
+   */
+  private static buildStaticPrefix(isBatchMode: boolean, isSinglePattern: boolean): string {
     const header = isBatchMode && !isSinglePattern
       ? this.buildBatchHeader()
       : this.buildSingleHeader();
 
-    // Build instructions section
     const instructionsSection = isBatchMode && !isSinglePattern
       ? this.buildBatchInstructions()
       : this.buildSingleInstructions();
 
-    // Build output format section
     const outputFormatSection = this.buildOutputFormat(isBatchMode && !isSinglePattern);
-
-    // Build quality standards section
     const qualitySection = this.buildQualityStandards();
 
     return `${header}
-
-## Pattern Data (Structured JSON)
-
-The following JSON contains all pattern information for analysis:
-
-\`\`\`json
-${jsonContext}
-\`\`\`
 
 ${instructionsSection}
 
