@@ -1,6 +1,6 @@
 ---
 name: autoimprove-summarize
-description: Analyze coding sessions and generate rules from detected patterns. Supports single session, batch analysis of all sessions, intelligent consolidation (default), and optional AI Agent enhancement (--enhance flag). Automatically tracks analyzed sessions to avoid redundant processing.
+description: Analyze coding sessions and generate rules from detected patterns. Supports single session, batch analysis of all sessions, intelligent consolidation (default), and AI Agent enhancement (default). Automatically tracks analyzed sessions to avoid redundant processing.
 allowed-tools: mcp__autoimprove-core__*
 ---
 
@@ -15,21 +15,19 @@ Analyze Claude Code session files and extract reusable patterns:
 /autoimprove-summarize
 ```
 
-**With AI Agent enhancement (recommended for highest quality):**
+**Disable AI Agent enhancement (not recommended):**
 ```bash
-/autoimprove-summarize --enhance
+/autoimprove-summarize --no-enhance
 ```
 
 **Batch analysis (all unanalyzed sessions):**
 ```bash
 /autoimprove-summarize --all
-/autoimprove-summarize --all --enhance
 ```
 
 **Rebuild all rules from scratch (clears existing rules):**
 ```bash
 /autoimprove-summarize --rebuild
-/autoimprove-summarize --rebuild --enhance
 ```
 
 **Force re-analyze all sessions:**
@@ -37,7 +35,7 @@ Analyze Claude Code session files and extract reusable patterns:
 /autoimprove-summarize --all --force
 ```
 
-**Disable intelligent consolidation (not recommended):**
+**Disable intelligent consolid recommended):**
 ```bash
 /autoimprove-summarize --no-consolidate
 ```
@@ -45,7 +43,7 @@ Analyze Claude Code session files and extract reusable patterns:
 ## Parameters
 
 - `--rebuild`: Clear all existing rules and rebuild from all sessions (creates backup)
-- `--enhance`: Use AI Agent for deep semantic analysis and quality enhancement
+- `--no-enhance`: Disable AI Agent for deep semantic analysis (enabled by default)
 - `--min-confidence <float>`: Set minimum confidence threshold (default: 0.85)
 - `--all` / `-a`: Analyze all unanalyzed sessions (batch mode)
 - `--force`: Force re-analyze even if session was already analyzed

@@ -66,7 +66,8 @@ async function run() {
     const args = process.argv.slice(2);
     // Consolidation is now enabled by default, can be disabled with --no-consolidate
     const useConsolidation = !args.includes("--no-consolidate");
-    const useAgentEnhancement = args.includes("--enhance");
+    // Enhancement is now enabled by default, can be disabled with --no-enhance
+    const useAgentEnhancement = !args.includes("--no-enhance");
     const analyzeAll = args.includes("--all") || args.includes("-a");
     const forceReanalyze = args.includes("--force");
     const rebuildAll = args.includes("--rebuild");
