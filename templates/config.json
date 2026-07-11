@@ -1,5 +1,5 @@
 {
-  "version": "1.0",
+  "version": "1.1",
   "confidence_thresholds": {
     "repeated-correction": 0.45,
     "anti-pattern": 0.45,
@@ -17,5 +17,10 @@
     "max_results": 10,
     "min_confidence": 0.3
   },
-  "business_domain_mappings": {}
+  "business_domain_mappings": {},
+  "rule_generation": {
+    "use_template_generation": true,
+    "template_hot_reload": true
+  }
 }
+

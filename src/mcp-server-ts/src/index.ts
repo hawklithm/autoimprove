@@ -22,6 +22,7 @@ import { SessionAnalysisTracker } from "./storage/session-analysis-tracker.js";
 import { SessionAnalyzer } from "./core/session-analyzer.js";
 import { RuleGenerator } from "./core/rule-generator.js";
 import { HybridRuleGenerator } from "./core/hybrid-rule-generator.js";
+import { TemplateBasedRuleGenerator } from "./core/template-based-rule-generator.js";
 import { RuleMatcher } from "./core/rule-matcher.js";
 import { RuleQualityController } from "./core/rule-quality.js";
 import { AdaptiveConfidenceCalculator } from "./core/adaptive-confidence.js";
@@ -110,6 +111,7 @@ let proactiveRuleProvider: ProactiveRuleResourceProvider;
 let analyzer: SessionAnalyzer;
 let generator: RuleGenerator;
 let hybridGenerator: HybridRuleGenerator;
+let templateGenerator: TemplateBasedRuleGenerator | null = null; // Lazy-initialized when enabled
 let deduplicator: RuleDeduplicator;
 let cleanupService: RuleCleanupService;
 let matcher: RuleMatcher;
@@ -1271,29 +1273,65 @@ async function handleGenerateRules(args: any) {
 
   const nextIdNum = parseInt(indexManager.getNextRuleId().split("-")[1], 10);
 
-  // Choose generation strategy based on options
-  const useEnhanced = useLLMEnhancement || extractCodeExamples;
+  // Check if template-based generation is enabled
+  const config = loadConfig();
+  const useTemplateGeneration = config.rule_generation?.use_template_generation || false;
+
+  // Choose generation strategy based on config and options
   let rules: Array<{ indexEntry: any; content: any }>;
 
-  if (useEnhanced) {
-    // Use hybrid generator (Phase 2-4)
-    logger.info("generate_rules", `Using enhanced generation: LLM=${useLLMEnhancement}, CodeExamples=${extractCodeExamples}`);
+  if (useTemplateGeneration) {
+    // Use template-based generator (SOP compiler, Phase 2+)
+    logger.info("generate_rules", "Using template-based generation (SOP compiler)");
 
-    rules = await hybridGenerator.batchGenerateEnhancedRules(
-      patterns,
-      nextIdNum,
-      scene,
-      {
-        useLLMEnhancement,
-        extractCodeExamples,
-        sessionDir,
-        maxExamples,
+    if (!templateGenerator) {
+      const hotReload = config.rule_generation?.template_hot_reload || false;
+      templateGenerator = new TemplateBasedRuleGenerator({ enableHotReload: hotReload });
+      logger.info("generate_rules", `Template generator initialized (hot reload: ${hotReload})`);
+    }
+
+    // Generate rules using templates
+    rules = [];
+    for (let i = 0; i < patterns.length; i++) {
+      const pattern = patterns[i];
+      const ruleId = `rule-${String(nextIdNum + i).padStart(3, "0")}`;
+
+      try {
+        const rule = await templateGenerator.generateRule(pattern, {
+          ruleId,
+          scene,
+          sessionDir,
+          maxExamples,
+        });
+        rules.push(rule);
+      } catch (error: any) {
+        logger.warn("generate_rules", `Template generation failed for pattern ${i}: ${error.message}`);
       }
-    );
+    }
   } else {
-    // Use basic generator (Phase 1 only - backward compatibility)
-    logger.info("generate_rules", "Using basic generation (fast mode)");
-    rules = generator.batchGenerateRules(patterns, nextIdNum, scene);
+    // Use legacy generators (backward compatibility)
+    const useEnhanced = useLLMEnhancement || extractCodeExamples;
+
+    if (useEnhanced) {
+      // Use hybrid generator (Phase 2-4)
+      logger.info("generate_rules", `Using hybrid generation: LLM=${useLLMEnhancement}, CodeExamples=${extractCodeExamples}`);
+
+      rules = await hybridGenerator.batchGenerateEnhancedRules(
+        patterns,
+        nextIdNum,
+        scene,
+        {
+          useLLMEnhancement,
+          extractCodeExamples,
+          sessionDir,
+          maxExamples,
+        }
+      );
+    } else {
+      // Use basic generator (Phase 1 only)
+      logger.info("generate_rules", "Using basic generation (fast mode)");
+      rules = generator.batchGenerateRules(patterns, nextIdNum, scene);
+    }
   }
 
   // ===== DEDUPLICATION PHASE =====
@@ -1404,6 +1442,16 @@ async function handleGenerateRules(args: any) {
     // Don't fail the entire generation if export fails
   }
 
+  // Determine generation mode string for response
+  let generationMode: string;
+  if (useTemplateGeneration) {
+    generationMode = "template";
+  } else if (useLLMEnhancement || extractCodeExamples) {
+    generationMode = "enhanced";
+  } else {
+    generationMode = "basic";
+  }
+
   return {
     content: [
       {
@@ -1411,17 +1459,18 @@ async function handleGenerateRules(args: any) {
         text: JSON.stringify({
           success: true,
           rules_count: finalRuleIds.length,
-     ids: finalRuleIds,
-          generation_mode: useEnhanced ? "enhanced" : "basic",
+          ids: finalRuleIds,
+          generation_mode: generationMode,
           llm_enhancement: useLLMEnhancement,
           code_examples_extracted: extractCodeExamples,
+          template_based: useTemplateGeneration,
           // Deduplication statistics
           deduplication: {
             total_generated: rules.length,
             added_new: addedCount,
             merged_into_existing: mergedCount,
             skipped: skippedCount,
-            final_count: finalRuleIds.length,
+           nal_count: finalRuleIds.length,
             reduction_rate: rules.length > 0 ? ((rules.length - finalRuleIds.length) / rules.length) : 0,
             details: deduplicationResults,
           },

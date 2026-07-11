@@ -131,41 +131,82 @@ export class TemplateExecutor {
    */
   private expandForEachLoops(steps: CompiledStep[]): CompiledStep[] {
     const expanded: CompiledStep[] = [];
+    const loopStepIds = new Set<string>(); // Track which steps have loop variables
+    const expandedStepMap = new Map<string, string[]>(); // original_id -> [expanded_id_0, expanded_id_1, ...]
 
+    // First pass: identify loop steps and expand them
     for (const step of steps) {
-      // Check if step contains loop variables ({{ item.* }})
       const hasLoopVar = this.hasLoopVariable(step);
 
-      if (!hasLoopVar) {
-        // No loop - pass through as-is
-        expanded.push(step);
-        continue;
+      if (hasLoopVar) {
+        loopStepIds.add(step.id);
+        const loopItems = this.extractLoopItems(step);
+
+        if (loopItems.length === 0) {
+          logger.warn('template-executor', `Step '${step.id}' has loop variables but no loop items found - skipping`);
+          continue;
+        }
+
+        logger.debug('template-executor', `Expanding step '${step.id}' into ${loopItems.length} iterations`);
+
+        const expandedIds: string[] = [];
+        for (let i = 0; i < loopItems.length; i++) {
+          const item = loopItems[i];
+
+          // Substitute loop variables in step ID
+          let expandedId = step.id.replace(/\{\{\s*item\.(\w+)\s*\}\}/g, (_, field) => {
+            return item[field] || '';
+          });
+
+          // If ID still contains variables or no substitution happened, append index
+          if (expandedId === step.id || expandedId.includes('{{')) {
+            expandedId = `${step.id.replace(/\{\{[^}]+\}\}/g, '')}_${i}`;
+          }
+
+          expandedIds.push(expandedId);
+
+          const expandedStep: CompiledStep = {
+            ...step,
+            id: expandedId,
+            inputs: this.substituteLoopVariables(step.inputs, item),
+            dependsOn: [], // Will fix dependencies in second pass
+          };
+          expanded.push(expandedStep);
+        }
+        expandedStepMap.set(step.id, expandedIds);
+      } else {
+        expanded.push({ ...step, dependsOn: [] }); // Will fix dependencies in second pass
       }
+    }
 
-      // Extract loop items from pattern context
-      const loopItems = this.extractLoopItems(step);
+    // Second pass: fix dependencies
+    for (const step of expanded) {
+      const originalStep = steps.find(s => s.id === step.id || step.id.startsWith(`${s.id}_`));
+      if (!originalStep) continue;
 
-      if (loopItems.length === 0) {
-        logger.warn('template-executor', `Step '${step.id}' has loop variables but no loop items found - skipping`);
-        continue;
+      const newDeps: string[] = [];
+      for (const dep of originalStep.dependsOn) {
+        if (loopStepIds.has(dep)) {
+          // Dependency is a loop step - need special handling
+          const expandedDeps = expandedStepMap.get(dep);
+          if (!expandedDeps) continue;
+
+          if (step.id.includes('_')) {
+            // Current step is also expanded - depend on same-index instance
+            const currentIndex = parseInt(step.id.split('_').pop() || '0', 10);
+            if (currentIndex < expandedDeps.length) {
+              newDeps.push(expandedDeps[currentIndex]);
+            }
+          } else {
+            // Current step is not expanded - depend on ALL instances
+            newDeps.push(...expandedDeps);
+          }
+        } else {
+          // Dependency is a regular step - keep as-is
+          newDeps.push(dep);
+        }
       }
-
-      logger.debug('template-executor', `Expanding step '${step.id}' into ${loopItems.length} iterations`);
-
-      // Expand step foeach loop item
-      for (let i = 0; i < loopItems.length; i++) {
-        const item = loopItems[i];
-        const expandedStep: CompiledStep = {
-          ...step,
-          id: `${step.id}_${i}`,
-          inputs: this.substituteLoopVariables(step.inputs, item),
-          dependsOn: step.dependsOn.map(dep =>
-            // If dependency also has loop vars, suffix with same index
-            this.hasLoopVariable(steps.find(s => s.id === dep) || step) ? `${dep}_${i}` : dep
-          ),
-        };
-        expanded.push(expandedStep);
-      }
+      step.dependsOn = newDeps;
     }
 
     return expanded;

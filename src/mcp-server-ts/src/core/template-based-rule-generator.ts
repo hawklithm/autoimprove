@@ -10,7 +10,7 @@ import { compile } from './rule-template-compiler.js';
 import { TemplateExecutor, ExecutionResult, StepFunction, LLMCaller } from './template-executor.js';
 import { registerStepFunctions } from './template-step-functions.js';
 import { logger } from './logger.js';
-import { readFileSync, readdirSync } from 'fs';
+import { readFileSync, readdirSync, watch, FSWatcher } from 'fs';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
 import OpenAI from 'openai';
@@ -38,8 +38,11 @@ export class TemplateBasedRuleGenerator {
   private llmCaller: LLMCaller | null;
   private openai: OpenAI | null;
   private model: string;
+  private watcher: FSWatcher | null = null;
+  private hotReloadEnabled: boolean;
 
-  constructor() {
+  constructor(options?: { enableHotReload?: boolean }) {
+    this.hotReloadEnabled = options?.enableHotReload || false;
     this.templates = new Map();
     this.stepFunctions = registerStepFunctions();
 
@@ -72,6 +75,10 @@ export class TemplateBasedRuleGenerator {
     }
 
     this.loadTemplates();
+
+    if (this.hotReloadEnabled) {
+      this.enableHotReload();
+    }
   }
 
   /**
@@ -100,6 +107,49 @@ export class TemplateBasedRuleGenerator {
       logger.info('template-generator', `Loaded ${this.templates.size} templates`);
     } catch (error: any) {
       logger.error('template-generator', `Failed to load templates: ${error.message}`);
+    }
+  }
+
+  /**
+   * Enable hot reload for template files.
+   * Watches rule-templates/*.md for changes and recompiles automatically.
+   */
+  private enableHotReload(): void {
+    try {
+      this.watcher = watch(TEMPLATE_DIR, { persistent: false }, (eventType, filename) => {
+        if (!filename || !filename.endsWith('.md')) {
+          return;
+        }
+
+        logger.info('template-hot-reload', `Template changed: ${filename} (${eventType})`);
+
+        const filePath = join(TEMPLATE_DIR, filename);
+
+        try {
+          const templateSource = readFileSync(filePath, 'utf-8');
+          const compiled = compile(templateSource);
+          this.templates.set(compiled.patternType, compiled);
+
+          logger.info('template-hot-reload', `✓ Recompiled: ${compiled.name} (${compiled.patternType})`);
+        } catch (error: any) {
+          logger.error('template-hot-reload', `✗ Failed to recompile ${filename}: ${error.message}`);
+        }
+      });
+
+      logger.info('template-hot-reload', `Watching ${TEMPLATE_DIR} for changes`);
+    } catch (error: any) {
+      logger.error('template-hot-reload', `Failed to enable hot reload: ${error.message}`);
+    }
+  }
+
+  /**
+   * Disable hot reload and clean up watcher.
+   */
+  public disableHotReload(): void {
+    if (this.watcher) {
+      this.watcher.close();
+      this.watcher = null;
+      logger.info('template-hot-reload', 'Hot reload disabled');
     }
   }
 

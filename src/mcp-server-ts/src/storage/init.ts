@@ -51,6 +51,10 @@ export interface Config {
     min_confidence: number;
   };
   business_domain_mappings: Record<string, string>;
+  rule_generation?: {
+    use_template_generation?: boolean; // Enable SOP-style template compiler (Phase 2)
+    template_hot_reload?: boolean;      // Watch templates for changes (dev mode)
+  };
 }
 
 const DEFAULT_CONFIG: Config = {
@@ -72,7 +76,11 @@ const DEFAULT_CONFIG: Config = {
     max_results: 10,
     min_confidence: 0.3
   },
-  business_domain_mappings: {}
+  business_domain_mappings: {},
+  rule_generation: {
+    use_template_generation: true,  // Enable SOP-style template compiler by default
+    template_hot_reload: true,      // Enable hot reload in development mode
+  }
 };
 
 // ============================================================================
