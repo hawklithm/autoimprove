@@ -421,7 +421,7 @@ export class BatchRebuildEngine {
   }
 
   /**
-   * Discover all session .jsonl files
+   * Discover all session .jsonl and .json files
    */
   private discoverSessionFiles(baseDir: string): string[] {
     const sessionFiles: string[] = [];
@@ -439,7 +439,7 @@ export class BatchRebuildEngine {
           const files = readdirSync(projectPath);
 
           for (const file of files) {
-            if (file.endsWith(".jsonl")) {
+            if (file.endsWith(".jsonl") || file.endsWith(".json")) {
               sessionFiles.push(join(projectPath, file));
             }
           }
@@ -502,7 +502,7 @@ export class BatchRebuildEngine {
    */
   private extractSessionId(filePath: string): string {
     const filename = filePath.split("/").pop() || "";
-    return filename.replace(".jsonl", "");
+    return filename.replace(/\.(jsonl|json)$/, "");
   }
 
   /**
@@ -514,5 +514,12 @@ export class BatchRebuildEngine {
       return pattern.occurrences[0].session_id || "unknown";
     }
     return "unknown";
+  }
+
+  /**
+   * Clean up resources (close database connections)
+   */
+  cleanup(): void {
+    this.indexManager.close();
   }
 }

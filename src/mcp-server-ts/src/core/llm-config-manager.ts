@@ -11,10 +11,17 @@
  * - 401/403 (Auth failure)
  * - Network timeout (ECONNREFUSED, ETIMEDOUT)
  * - 5xx server errors
+ *
+ * Smart Fallback:
+ * - Tracks consecutive failures per config
+ * - If a config fails 10+ times consecutively, it's automatically deprioritized
+ * - On next restart, starts with healthier configs first
+ * - Auto-recovers when deprioritized config succeeds again
  */
 
 import OpenAI from "openai";
 import { logger } from "./logger.js";
+import { LLMFailureTracker } from "./llm-failure-tracker.js";
 
 export interface LLMConfig {
   name: string;
@@ -35,9 +42,12 @@ export class LLMConfigManager {
   private currentConfigIndex: number = 0;
   private clients: Map<string, OpenAI> = new Map();
   private failedConfigs: Set<string> = new Set();
+  private failureTracker: LLMFailureTracker;
 
   constructor() {
+    this.failureTracker = new LLMFailureTracker();
     this.configs = this.loadConfigurations();
+    this.reorderConfigsByHealth();
     this.logConfigurationStatus();
   }
 
@@ -63,39 +73,63 @@ export class LLMConfigManager {
       });
     }
 
-    // Priority 2: ANTHROPIC_API_KEY (official Anthropic)
-    if (process.env.ANTHROPIC_API_KEY) {
+    // Priority 2: ANTHROPIC_API_KEY or ANTHROPIC_AUTH_TOKEN (二选一)
+    // ANTHROPIC_API_KEY takes precedence if both are set
+    const anthropicApiKey = process.env.ANTHROPIC_API_KEY || process.env.ANTHROPIC_AUTH_TOKEN;
+    if (anthropicApiKey) {
       let baseURL = process.env.ANTHROPIC_BASE_URL;
       if (baseURL && !baseURL.endsWith('/v1')) {
         baseURL = baseURL.replace(/\/$/, '') + '/v1';
       }
 
+      const configName = process.env.ANTHROPIC_API_KEY ? "ANTHROPIC_API_KEY" : "ANTHROPIC_AUTH_TOKEN";
       configs.push({
-        name: "ANTHROPIC_API_KEY",
-        apiKey: process.env.ANTHROPIC_API_KEY,
+        name: configName,
+        apiKey: anthropicApiKey,
         baseURL,
         model: process.env.ANTHROPIC_MODEL || "claude-sonnet-4-6",
         priority: 2
       });
     }
 
-    // Priority 3: ANTHROPIC_AUTH_TOKEN (legacy/alternative)
-    if (process.env.ANTHROPIC_AUTH_TOKEN) {
-      let baseURL = process.env.ANTHROPIC_BASE_URL;
-      if (baseURL && !baseURL.endsWith('/v1')) {
-        baseURL = baseURL.replace(/\/$/, '') + '/v1';
-      }
+    return configs.sort((a, b) => a.priority - b.priority);
+  }
 
-      configs.push({
-        name: "ANTHROPIC_AUTH_TOKEN",
-        apiKey: process.env.ANTHROPIC_AUTH_TOKEN,
-        baseURL,
-        model: process.env.ANTHROPIC_MODEL || "claude-sonnet-4-6",
-        priority: 3
-      });
+  /**
+   * Reorder configurations based on failure history
+   * Configs with 10+ consecutive failures are moved to the end
+   */
+  private reorderConfigsByHealth(): void {
+    const deprioritized = this.failureTracker.getDeprioritizedConfigs();
+
+    if (deprioritized.length === 0) {
+      return;
     }
 
-    return configs.sort((a, b) => a.priority - b.priority);
+    // Separate healthy and unhealthy configs
+    const healthy: LLMConfig[] = [];
+    const unhealthy: LLMConfig[] = [];
+
+    for (const config of this.configs) {
+      if (deprioritized.includes(config.name)) {
+        unhealthy.push(config);
+      } else {
+        healthy.push(config);
+      }
+    }
+
+    // Log reordering
+    if (unhealthy.length > 0) {
+      logger.warn("llm-config", `⚠️  Reordering configs due to excessive failures:`);
+      unhealthy.forEach(config => {
+        const state = this.failureTracker.getFailureState(config.name);
+        logger.warn("llm-config", `   • ${config.name}: ${state?.consecutiveFailures} consecutive failures (last: ${state?.lastFailureReason.substring(0, 60)}...)`);
+      });
+      logger.info("llm-config", `   → ${unhealthy.map(c => c.name).join(", ")} moved to end of fallback chain`);
+    }
+
+    // Reorder: healthy first, then unhealthy
+    this.configs = [...healthy, ...unhealthy];
   }
 
   /**
@@ -110,8 +144,10 @@ export class LLMConfigManager {
 
     logger.info("llm-config", `✓ Loaded ${this.configs.length} LLM configuration(s):`);
     this.configs.forEach((config, idx) => {
-      const baseInfo = config.baseURL ? `baseURL=${config.baseURL}` : "default endpoint";
-      logger.info("llm-config", `  ${idx + 1}. ${config.name} (${baseInfo}, model=${config.model})`);
+      const maskedToken = this.maskApiKey(config.apiKey);
+      const baseInfo = config.baseURL || "default endpoint";
+      logger.info("llm-config", `  ${idx + 1}. ${config.name}`);
+      logger.info("llm-config", `     model=${config.model}, baseURL=${baseInfo}, apiKey=${maskedToken}`);
     });
   }
 
@@ -134,11 +170,34 @@ export class LLMConfigManager {
   }
 
   /**
+   * Mask API key for logging (show first 4 and last 4 characters)
+   */
+  private maskApiKey(apiKey: string): string {
+    if (!apiKey || apiKey.length <= 8) {
+      return '****';
+    }
+    const first4 = apiKey.substring(0, 4);
+    const last4 = apiKey.substring(apiKey.length - 4);
+    const maskedMiddle = '*'.repeat(Math.min(apiKey.length - 8, 12));
+    return `${first4}${maskedMiddle}${last4}`;
+  }
+
+  /**
    * Check if error indicates API failure requiring fallback
    */
   private shouldFallback(error: any): boolean {
+    // Debug: Log error structure
+    logger.debug("llm-config", `shouldFallback checking error: ${JSON.stringify({
+      code: error.code,
+      status: error.status,
+      message: error.message,
+      type: error.type,
+      constructor: error.constructor?.name
+    })}`);
+
     // Network errors
     if (error.code === 'ECONNREFUSED' || error.code === 'ETIMEDOUT' || error.code === 'ENOTFOUND') {
+      logger.debug("llm-config", "shouldFallback: true (network error code match)");
       return true;
     }
 
@@ -147,6 +206,7 @@ export class LLMConfigManager {
       const status = error.status;
       // Rate limit, quota exceeded, auth failure, or server error
       if (status === 429 || status === 401 || status === 403 || status >= 500) {
+        logger.debug("llm-config", `shouldFallback: true (HTTP status ${status} match)`);
         return true;
       }
     }
@@ -158,9 +218,11 @@ export class LLMConfigManager {
         errorMsg.includes("insufficient") ||
         errorMsg.includes("timeout") ||
         errorMsg.includes("network")) {
+      logger.debug("llm-config", `shouldFallback: true (error message pattern match: "${errorMsg}")`);
       return true;
     }
 
+    logger.debug("llm-config", "shouldFallback: false (no match found)");
     return false;
   }
 
@@ -178,14 +240,17 @@ export class LLMConfigManager {
     this.currentConfigIndex++;
 
     const nextConfig = this.configs[this.currentConfigIndex];
+    const maskedToken = this.maskApiKey(nextConfig.apiKey);
     logger.warn("llm-config", `⚠️  Switching to fallback configuration: ${nextConfig.name}`);
-    logger.info("llm-config", `   Model: ${nextConfig.model}, Base URL: ${nextConfig.baseURL || "default"}`);
+    logger.info("llm-config", `   Config: model=${nextConfig.model}, baseURL=${nextConfig.baseURL || "default"}, apiKey=${maskedToken}`);
 
     return true;
   }
 
   /**
    * Execute LLM call with automatic fallback on failure
+   * IMPORTANT: This method is concurrency-safe. Each call maintains its own
+   * attempt state without modifying shared instance state.
    */
   async callWithFallback<T>(
     operation: (client: OpenAI, model: string) => Promise<T>,
@@ -199,20 +264,42 @@ export class LLMConfigManager {
 
     let lastError: any;
     let attemptCount = 0;
+    const failedConfigNames: string[] = [];
 
-    // Try current config and all fallbacks
+    // Use local index to avoid race conditions in concurrent calls
+    let localConfigIndex = this.currentConfigIndex;
+
+    logger.debug("llm-config", `Starting callWithFallback: ${this.configs.length} configs available, starting from index ${localConfigIndex}, fallbackOnError: ${fallbackOnError}`);
+
+    // Try all configs starting from current index
     while (attemptCount < this.configs.length) {
-      const config = this.configs[this.currentConfigIndex];
+      // Check if localConfigIndex is valid
+      if (localConfigIndex >= this.configs.length) {
+        logger.debug("llm-config", `Reached end of config list (index ${localConfigIndex}), breaking loop`);
+        break;
+      }
+
+      const config = this.configs[localConfigIndex];
+      if (!config) {
+        logger.error("llm-config", `❌ No config found at index ${localConfigIndex}, breaking loop`);
+        break;
+      }
+
       const client = this.getClient(config);
 
       try {
-        logger.debug("llm-config", `Attempting LLM call with ${config.name} (attempt ${attemptCount + 1}/${this.configs.length})`);
+        const maskedToken = this.maskApiKey(config.apiKey);
+        logger.debug("llm-config", `Attempting LLM call with ${config.name} (attempt ${attemptCount + 1}/${this.configs.length}, index: ${localConfigIndex})`);
+        logger.debug("llm-config", `  Config: model=${config.model}, baseURL=${config.baseURL || 'default'}, apiKey=${maskedToken}`);
 
         const result = await operation(client, config.model);
 
-        // Success - log if we recovered from previous failure
+        // Success - reset failure tracking and log if we recovered from previous failure
+        this.failureTracker.recordSuccess(config.name);
+
         if (attemptCount > 0) {
           logger.info("llm-config", `✓ LLM call succeeded with fallback configuration: ${config.name}`);
+          logger.info("llm-config", `  Config: model=${config.model}, baseURL=${config.baseURL || 'default'}, apiKey=${maskedToken}`);
         }
 
         return result;
@@ -220,25 +307,45 @@ export class LLMConfigManager {
       } catch (error: any) {
         lastError = error;
         attemptCount++;
+        failedConfigNames.push(config.name);
 
-        // Log detailed error info
+        // Record failure for tracking
         const errorDetails = error.status
           ? `HTTP ${error.status}: ${error.message}`
           : error.code
           ? `${error.code}: ${error.message}`
           : error.message || "Unknown error";
 
-        logger.error("llm-config", `✗ LLM call failed with ${config.name}: ${errorDetails}`);
+        this.failureTracker.recordFailure(config.name, errorDetails);
+
+        // Log detailed error info with full config details
+
+        const maskedToken = this.maskApiKey(config.apiKey);
+        logger.error("llm-config", `✗ [Attempt ${attemptCount}/${this.configs.length}] LLM call failed with ${config.name}: ${errorDetails}`);
+        logger.error("llm-config", `  Config: model=${config.model}, baseURL=${config.baseURL || 'default'}, apiKey=${maskedToken}`);
 
         // Decide whether to fallback
-        if (fallbackOnError && this.shouldFallback(error)) {
-          const hasFallback = this.switchToFallback();
-          if (!hasFallback) {
-            break; // No more fallbacks
+        const shouldFallbackResult = this.shouldFallback(error);
+        logger.debug("llm-config", `shouldFallback(error) = ${shouldFallbackResult}, fallbackOnError = ${fallbackOnError}`);
+
+        if (fallbackOnError && shouldFallbackResult) {
+          // Check if there's a next config to try
+          if (localConfigIndex >= this.configs.length - 1) {
+            logger.error("llm-config", "❌ All LLM configurations exhausted, no more fallbacks available");
+            break;
           }
+
+          // Move to next config (local index only, no shared state mutation)
+          localConfigIndex++;
+          const nextConfig = this.configs[localConfigIndex];
+          const nextMaskedToken = this.maskApiKey(nextConfig.apiKey);
+          logger.warn("llm-config", `⚠️  Switching to fallback configuration: ${nextConfig.name}`);
+          logger.info("llm-config", `   Config: model=${nextConfig.model}, baseURL=${nextConfig.baseURL || "default"}, apiKey=${nextMaskedToken}`);
+
           continue; // Try next configuration
         } else {
           // Non-retriable error or fallback disabled
+          logger.error("llm-config", `Not falling back (fallbackOnError: ${fallbackOnError}, shouldFallback: ${shouldFallbackResult}), throwing error`);
           throw error;
         }
       }
@@ -248,7 +355,7 @@ export class LLMConfigManager {
     throw new Error(
       `All LLM configurations failed after ${attemptCount} attempts. ` +
       `Last error: ${lastError?.message || "Unknown"}. ` +
-      `Failed configs: ${Array.from(this.failedConfigs).join(", ")}`
+      `Failed configs: ${failedConfigNames.join(", ")}`
     );
   }
 

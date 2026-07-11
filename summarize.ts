@@ -9,7 +9,7 @@
  *
  * Options:
  *   --force              强制重新分析所有 sessions（忽略缓存）
- *   --session-dir <dir>  自定义 session 目录（默认：~/.claude/sessions）
+ *   --session-dir <dir>  自定义 session 目录（默认：~/.claude/projects）
  *   --limit <n>          限制分析的 session 数量（用于测试）
  *   --min-confidence <n> 最低置信度阈值（默认：0.6）
  *   --dry-run            模拟运行，不保存结果
@@ -44,7 +44,7 @@ function parseArgs(): CliOptions {
   const args = process.argv.slice(2);
   const options: CliOptions = {
     force: false,
-    sessionDir: path.join(os.homedir(), '.claude', 'sessions'),
+    sessionDir: path.join(os.homedir(), '.claude', 'projects'),
     minConfidence: 0.6,
     dryRun: false,
     noCleanup: false,
@@ -105,7 +105,7 @@ Usage:
 
 Options:
   --force              强制重新分析所有 sessions（忽略缓存）
-  --session-dir <dir>  自定义 session 目录（默认：~/.claude/sessions）
+  --session-dir <dir>  自定义 session 目录（默认：~/.claude/projects）
   --limit <n>          限制分析的 session 数量（用于测试）
   --min-confidence <n> 最低置信度阈值（默认：0.6）
   --dry-run            模拟运行，不保存结果
@@ -250,9 +250,21 @@ async function main() {
         totalRules,
         dryRun: options.dryRun,
       });
+
+      // Close database connections
+      updatedIndexManager.close();
     }
 
+    // Close all database connections
+    indexManager.close();
+    batchEngine.cleanup();
+
     cliLogger.shutdown();
+
+    // Force exit after a brief delay to ensure all resources are released
+    setTimeout(() => {
+      process.exit(0);
+    }, 100);
 
   } catch (error) {
     cliLogger.error('\n❌ Error:', error instanceof Error ? error : undefined, {
