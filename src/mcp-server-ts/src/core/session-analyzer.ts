@@ -11,6 +11,7 @@ import { ConfidenceCalculator } from "./confidence.js";
 import { SessionCacheManager } from "../storage/session-cache.js";
 import { CompactCacheManager } from "../storage/compact-cache.js";
 import { MessageClusterer, MessageCandidate, MessageCluster } from "./message-clusterer.js";
+import { PreFilter } from "./pre-filter.js";
 import { statSync } from "fs";
 import { logger } from "./logger.js";
 
@@ -20,6 +21,7 @@ export class SessionAnalyzer {
   private cacheManager: SessionCacheManager;
   private compactCache: CompactCacheManager;
   private clusterer: MessageClusterer;
+  private preFilter: PreFilter;
 
   constructor() {
     this.parser = new UnifiedSessionParser();
@@ -27,6 +29,7 @@ export class SessionAnalyzer {
     this.cacheManager = new SessionCacheManager();
     this.compactCache = new CompactCacheManager();
     this.clusterer = new MessageClusterer();
+    this.preFilter = new PreFilter();
   }
 
   /**
@@ -42,6 +45,12 @@ export class SessionAnalyzer {
 
     // Load session data (with compact cache optimization)
     const sessionData = this.loadSessionData(sessionFile, useCompactCache);
+
+    // P0: lightweight pre-screening (zero cost when disabled) — drops low-information
+    // user messages before detectors run, reducing token/compute. When local_ml.prefilter
+    // is disabled, PreFilter.filter returns all messages unchanged.
+    this.applyPreFilter(sessionData);
+
     const sessionId = sessionData.session_id;
 
     // Check if we can use cached results
@@ -65,6 +74,25 @@ export class SessionAnalyzer {
 
     // Full analysis
     return this.performFullAnalysis(sessionFile, sessionData);
+  }
+
+  /**
+   * Apply the lightweight pre-filter to user messages only (detectors analyze user
+   * messages exclusively). Assistant/tool messages are untouched. No-op when the
+   * pre-filter is disabled, preserving legacy behavior.
+   */
+  private applyPreFilter(sessionData: SessionData): void {
+    if (!this.preFilter) return;
+    const userMessages = sessionData.messages.filter(m => m.role === "user");
+    if (userMessages.length === 0) return;
+
+    const result = this.preFilter.filter(userMessages);
+    if (result.droppedCount === 0) return;
+
+    const keptSet = new Set(result.kept);
+    sessionData.messages = sessionData.messages.filter(
+      m => m.role !== "user" || keptSet.has(m)
+    );
   }
 
   /**

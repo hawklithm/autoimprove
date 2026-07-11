@@ -55,6 +55,27 @@ export interface Config {
     use_template_generation?: boolean; // Enable SOP-style template compiler (Phase 2)
     template_hot_reload?: boolean;      // Watch templates for changes (dev mode)
   };
+  local_ml?: {
+    enabled: boolean;
+    embedding_backend: "char-ngram-tfidf" | "onnx-local";
+    onnx_model?: string;
+    prefilter: {
+      enabled: boolean;
+      mode: "heuristic" | "haiku" | "local-llm";
+    };
+    clusterer: "legacy" | "hdbscan" | "kmeans";
+    signal_match: {
+      mode: "legacy" | "neighbor";
+      threshold: number;
+    };
+    personalization: {
+      enabled: boolean;
+      per_user: boolean;
+    };
+    ab_test?: {
+      rollout: number; // 0..1 fraction of sessions routed to new pipeline
+    };
+  };
 }
 
 const DEFAULT_CONFIG: Config = {
@@ -80,6 +101,26 @@ const DEFAULT_CONFIG: Config = {
   rule_generation: {
     use_template_generation: true,  // Enable SOP-style template compiler by default
     template_hot_reload: true,      // Enable hot reload in development mode
+  },
+  local_ml: {
+    enabled: false, // Master switch: when false, entire local_ml pipeline is bypassed (legacy behavior)
+    embedding_backend: "char-ngram-tfidf", // Default: zero-dependency char n-gram TF-IDF
+    prefilter: {
+      enabled: false, // P0 ships heuristic pre-filter, off by default
+      mode: "heuristic",
+    },
+    clusterer: "legacy", // "legacy" = original word-level TF-IDF clustering (no behavior change)
+    signal_match: {
+      mode: "legacy", // "legacy" = original Aho-Corasick exact matching
+      threshold: 0.62,
+    },
+    personalization: {
+      enabled: false,
+      per_user: false,
+    },
+    ab_test: {
+      rollout: 0, // 0 = all traffic on legacy; gradually raise for A/B
+    },
   }
 };
 
