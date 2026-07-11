@@ -306,3 +306,8 @@ export class StructuredLogger {
 
 // Export singleton instance
 export const logger = StructuredLogger.getInstance();
+
+// Enable DEBUG logging if DEBUG environment variable is set
+if (process.env.DEBUG === 'true' || process.env.LOG_LEVEL === 'DEBUG') {
+  logger.setMinLevel(LogLevel.DEBUG);
+}

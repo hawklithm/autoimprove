@@ -1183,7 +1183,7 @@ async function handleAnalyzeSession(args: any) {
     keywords: p.keywords,
   }));
 
-  const sessionId = sessionFilePath.split("/").pop()?.replace(".jsonl", "") || "unknown";
+  const sessionId = sessionFilePath.split("/").pop()?.replace(/\.(jsonl|json)$/, "") || "unknown";
 
   return {
     content: [
@@ -2424,7 +2424,7 @@ async function handleListUnanalyzedSessions(args: any) {
 
   // Extract session IDs from file paths
   const sessionIds = sessionFilePaths.map((path) => {
-    const match = path.match(/([a-f0-9-]{36})\.jsonl$/);
+    const match = path.match(/([a-f0-9-]{36})\.(jsonl|json)$/);
     return match ? match[1] : null;
   }).filter((id): id is string => id !== null);
 
@@ -2432,7 +2432,7 @@ async function handleListUnanalyzedSessions(args: any) {
 
   // Map back to full paths
   const unanalyzedPaths = sessionFilePaths.filter((path) => {
-    const match = path.match(/([a-f0-9-]{36})\.jsonl$/);
+    const match = path.match(/([a-f0-9-]{36})\.(jsonl|json)$/);
     return match && unanalyzedIds.includes(match[1]);
   });
 
@@ -2535,7 +2535,7 @@ async function handleCheckSessionNeedsAnalysis(args: any) {
   }
 
   // Extract session ID
-  const match = sessionFilePath.match(/([a-f0-9-]{36})\.jsonl$/);
+  const match = sessionFilePath.match(/([a-f0-9-]{36})\.(jsonl|json)$/);
   if (!match) {
     return {
       content: [

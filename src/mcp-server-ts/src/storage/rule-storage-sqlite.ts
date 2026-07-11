@@ -104,7 +104,7 @@ export class RuleStorageSQLite {
    * Insert FTS entry for full-text search
    */
   private insertFTSEntry(ruleId: string, content: RuleContent): void {
-    // Safely handle keywords - ensure it's an array
+    // Safely handle keywords - ensure it's a string
     let keywordsStr = '';
     if (content.metadata?.keywords) {
       if (Array.isArray(content.metadata.keywords)) {
@@ -114,6 +114,17 @@ export class RuleStorageSQLite {
       }
     }
 
+    // Convert array fields to strings
+    const howToApplyStr = Array.isArray(content.how_to_apply)
+      ? content.how_to_apply.join(' ')
+      : (content.how_to_apply || '');
+    const whenToUseStr = Array.isArray(content.when_to_use)
+      ? content.when_to_use.join(' ')
+      : (content.when_to_use || '');
+    const exceptionsStr = Array.isArray(content.exceptions)
+      ? content.exceptions.join(' ')
+      : (content.exceptions || '');
+
     this.db.prepare(`
       INSERT INTO rules_fts (rule_id, title, description, how_to_apply, when_to_use, exceptions, keywords)
       VALUES (?, ?, ?, ?, ?, ?, ?)
@@ -121,9 +132,9 @@ export class RuleStorageSQLite {
       ruleId,
       content.title || '',
       content.description || '',
-      content.how_to_apply || '',
-      content.when_to_use || '',
-      content.exceptions || '',
+      howToApplyStr,
+      whenToUseStr,
+      exceptionsStr,
       keywordsStr
     );
   }
