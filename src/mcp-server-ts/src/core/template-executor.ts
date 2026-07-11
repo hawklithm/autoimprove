@@ -63,15 +63,16 @@ export class TemplateExecutor {
 
     logger.info('template-executor', `Executing template '${this.template.name}' for pattern ${this.context.pattern.type}`);
 
+    // Expand for_each loops before sorting
+    const expandedSteps = this.expandForEachLoops(this.template.steps);
+
     // Sort steps by dependencies
-    const sortedSteps = this.topologicalSort(this.template.steps);
+    const sortedSteps = this.topologicalSort(expandedSteps);
 
     logger.debug('template-executor', `Execution order: ${sortedSteps.map(s => s.id).join(' → ')}`);
 
-    // Execute steps sequentially (respecting dependencies)
-    for (const step of sortedSteps) {
-      await this.executeStep(step);
-    }
+    // Execute steps with parallel optimization
+    await this.executeStepsWithParallelization(sortedSteps);
 
     // Get final rule from outputs
     const finalRule = this.context.outputs.get('final_rule');
@@ -88,6 +89,142 @@ export class TemplateExecutor {
       stepOutputs: Object.fromEntries(this.context.outputs),
       executionTimeMs,
     };
+  }
+
+  /**
+   * Execute steps with parallelization.
+   * Groups steps that can run in parallel (same dependency level) and executes them concurrently.
+   */
+  private async executeStepsWithParallelization(sortedSteps: CompiledStep[]): Promise<void> {
+    const executed = new Set<string>();
+
+    while (executed.size < sortedSteps.length) {
+      // Find all steps whose dependencies are satisfied
+      const readySteps = sortedSteps.filter(step =>
+        !executed.has(step.id) &&
+        step.dependsOn.every(dep => executed.has(dep))
+      );
+
+      if (readySteps.length === 0) {
+        // Should never happen if topological sort is correct
+        const remaining = sortedSteps.filter(s => !executed.has(s.id)).map(s => s.id);
+        throw new Error(`Deadlock detected. Remaining steps: ${remaining.join(', ')}`);
+      }
+
+      // Execute all ready steps in parallel
+      if (readySteps.length > 1) {
+        logger.debug('template-executor', `Executing ${readySteps.length} steps in parallel: ${readySteps.map(s => s.id).join(', ')}`);
+      }
+
+      await Promise.all(readySteps.map(step => this.executeStep(step)));
+
+      // Mark as executed
+      for (const step of readySteps) {
+        executed.add(step.id);
+      }
+    }
+  }
+
+  /**
+   * Expand for_each loops into independent steps.
+   * Steps with loop variables ({{ item.* }}) are replicated per iteration.
+   */
+  private expandForEachLoops(steps: CompiledStep[]): CompiledStep[] {
+    const expanded: CompiledStep[] = [];
+
+    for (const step of steps) {
+      // Check if step contains loop variables ({{ item.* }})
+      const hasLoopVar = this.hasLoopVariable(step);
+
+      if (!hasLoopVar) {
+        // No loop - pass through as-is
+        expanded.push(step);
+        continue;
+      }
+
+      // Extract loop items from pattern context
+      const loopItems = this.extractLoopItems(step);
+
+      if (loopItems.length === 0) {
+        logger.warn('template-executor', `Step '${step.id}' has loop variables but no loop items found - skipping`);
+        continue;
+      }
+
+      logger.debug('template-executor', `Expanding step '${step.id}' into ${loopItems.length} iterations`);
+
+      // Expand step foeach loop item
+      for (let i = 0; i < loopItems.length; i++) {
+        const item = loopItems[i];
+        const expandedStep: CompiledStep = {
+          ...step,
+          id: `${step.id}_${i}`,
+          inputs: this.substituteLoopVariables(step.inputs, item),
+          dependsOn: step.dependsOn.map(dep =>
+            // If dependency also has loop vars, suffix with same index
+            this.hasLoopVariable(steps.find(s => s.id === dep) || step) ? `${dep}_${i}` : dep
+          ),
+        };
+        expanded.push(expandedStep);
+      }
+    }
+
+    return expanded;
+  }
+
+  /**
+   * Check if step contains {{ item.* }} loop variables.
+   */
+  private hasLoopVariable(step: CompiledStep): boolean {
+    const inputStr = JSON.stringify(step.inputs);
+    return /\{\{\s*item\.\w+\s*\}\}/.test(inputStr);
+  }
+
+  /**
+   * Extract loop items from pattern context.
+   * For now, assumes pattern.occurrences[] as the loop source.
+   */
+  private extractLoopItems(step: CompiledStep): Array<Record<string, string>> {
+    // Check if pattern has occurrences (most common case)
+    const pattern = this.context.pattern;
+    if (pattern.occurrences && pattern.occurrences.length > 0) {
+      return pattern.occurrences.map((occ, idx) => ({
+        index: String(idx),
+        session_id: occ.session_id || '',
+        timestamp: occ.timestamp || '',
+        context: occ.context || '',
+        user_action: occ.user_action || 'explicit_correction',
+      }));
+    }
+
+    return [];
+  }
+
+  /**
+   * Substitute {{ item.* }} variables with actual values from loop item.
+   */
+  private substituteLoopVariables(
+    inputs: Record<string, string>,
+    item: Record<string, string>
+  ): Record<string, string> {
+    const substituted: Record<string, string> = {};
+
+    for (const [key, template] of Object.entries(inputs)) {
+      let value = template;
+
+      // Replace {{ item.field }} with item values
+      value = value.replace(/\{\{\s*item\.(\w+)\s*\}\}/g, (_, field) => {
+        const itemValue = item[field];
+        if (itemValue === undefined) {
+          logger.warn('template-executor', `Loop variable 'item.${field}' not found in item:`, item);
+          return '';
+        }
+        return itemValue;
+      });
+
+      substituted[key] = value;
+    }
+
+    return substituted;
   }
 
   /**

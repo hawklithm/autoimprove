@@ -98,6 +98,10 @@ export interface RuleInvocation {
   span: SourceSpan;
 }
 
+export interface ForEachItem {
+  [key: string]: string; // Variable bindings for this iteration
+}
+
 export interface RulePhase {
   index: number;
   title: string;
