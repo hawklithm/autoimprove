@@ -67,9 +67,9 @@
 - [x] `loadConfig().local_ml.clusterer` 支持 `hdbscan` / `kmeans` / `legacy` 三态，`constructor` 按此切换 backend，默认 `legacy` 行为不变。
 
 ### D3. 增量聚类改造
-- [ ] 在 `performIncrementalAnalysis`（`session-analyzer.ts:107`）中，新消息向量与**已有簇质心**（质心缓存位置以 C2/E 的缓存实现为准）做近邻并入。
-- [ ] 新增「离群」判定：未落入任何簇阈值内且不达新簇最小尺寸的消息标记为离群，不污染已有簇。
-- [ ] 更新簇质心与 `averageSimilarity` 的缓存写入逻辑（复用 `session-analyzer.ts` 已有的 `cacheManager` 体系），保证增量与全量结果一致。
+- [x] 在 `performIncrementalAnalysis`（`session-analyzer.ts:107`）中，新消息向量与**已有簇质心**做近邻并入。新增 `MessageClusterer.incrementalCluster()` 方法：新消息经 `EmbeddingEncoder` 编码后与缓存质心做余弦近邻，超阈值即并入。
+- [x] 新增「离群」判定：未落入任何簇阈值内的新消息标记为离群，返回给调用方重新全量聚类（形成新簇或丢弃为噪声）。
+- [x] 更新簇质心缓存：`SessionCacheEntry` 新增 `cluster_centroids` 字段，`SessionCacheManager` 增加 `getClusterCentroids` / `setClusterCentroids` 读写接口。增量运行后通过 `MessageClusterer.clustersToCentroids()` 重新序列化质心，保证增量与全量结果一致。
 
 ---
 

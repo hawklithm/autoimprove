@@ -11,6 +11,7 @@ import { PatternType, PatternOccurrence } from "./models.js";
 import { Message } from "./jsonl-parser.js";
 import { EmbeddingEncoder } from "./embedding-encoder.js";
 import { loadConfig } from "../storage/init.js";
+import { ClusterCentroid } from "../storage/session-cache.js";
 
 export interface MessageCandidate {
   message: Message;
@@ -414,6 +415,124 @@ export class MessageClusterer {
     }
 
     return maxGroupOverlap;
+  }
+
+  /**
+   * D3: incrementally cluster new candidates against existing centroids.
+   *
+   * Each new candidate is compared to all existing cluster centroids (via
+   * EmbeddingEncoder cosine). If it falls within SIMILARITY_THRESHOLD of a
+   * centroid, it joins that cluster. Otherwise it becomes an "outlier" —
+   * collected separately so the caller can decide to form new clusters or
+   * discard as noise.
+   *
+   * Returns merged clusters (existing centroids + new candidates attached)
+   * plus any outliers that did not match any centroid.
+   *
+   * NOTE: only called when a semantic encoder is active (non-legacy mode).
+   */
+  incrementalCluster(
+    newCandidates: MessageCandidate[],
+    existingCentroids: ClusterCentroid[]
+  ): { clusters: MessageCluster[]; outliers: MessageCandidate[] } {
+    if (!this.encoder || newCandidates.length === 0) {
+      // Legacy or no new data — return all as outliers for full clustering.
+      return { clusters: [], outliers: newCandidates };
+    }
+
+    // Encode new candidates
+    const newTexts = newCandidates.map(c => c.extractedText);
+    const newVectors = this.encoder.encodeBatch(newTexts);
+
+    // Reconstruct dense vectors for existing centroids
+    const centroidVectors = existingCentroids.map(c =>
+      new Float32Array(c.vector)
+    );
+
+    const outliers: MessageCandidate[] = [];
+    const assigned = new Set<number>();
+    // Map from centroid index -> merged candidates
+    const mergedMap = new Map<number, MessageCandidate[]>();
+    for (let i = 0; i < existingCentroids.length; i++) {
+      mergedMap.set(i, []);
+    }
+
+    for (let i = 0; i < newCandidates.length; i++) {
+      const cand = newCandidates[i];
+      const vec = newVectors[i];
+
+      // Find best-matching centroid
+      let bestIdx = -1;
+      let bestSim = 0;
+      for (let j = 0; j < centroidVectors.length; j++) {
+        const sim = EmbeddingEncoder.cosine(vec, centroidVectors[j]);
+        if (sim > bestSim) {
+          bestSim = sim;
+          bestIdx = j;
+        }
+      }
+
+      if (bestIdx >= 0 && bestSim >= this.SIMILARITY_THRESHOLD) {
+        // Join existing cluster
+        mergedMap.get(bestIdx)!.push(cand);
+        assigned.add(i);
+      } else {
+        // Outlier — did not match any centroid
+        outliers.push(cand);
+      }
+    }
+
+    // Build result clusters from centroids + newly merged candidates
+    const clusters: MessageCluster[] = [];
+    for (let i = 0; i < existingCentroids.length; i++) {
+      const cent = existingCentroids[i];
+      const merged = mergedMap.get(i)!;
+      if (merged.length === 0) continue; // no new additions
+
+      const filePaths = new Set(cent.filePaths);
+      const allCandidates: MessageCandidate[] = [];
+      // Reconstruct candidate list — we don't store full candidates in the
+      // centroid cache, so we only include the new merged ones. The cluster
+      // centroid text and keywords remain from the original.
+      for (const mc of merged) {
+        allCandidates.push(mc);
+        const ctx = mc.occurrence.context;
+        if (ctx && ctx !== "unknown") filePaths.add(ctx);
+      }
+
+      clusters.push({
+        candidates: allCandidates,
+        centroid: cent.centroidText,
+        keywords: cent.keywords,
+        filePaths,
+        averageSimilarity: cent.averageSimilarity,
+      });
+    }
+
+    return { clusters, outliers };
+  }
+
+  /**
+   * D3: serialise current clusters into ClusterCentroid[] for cache.
+   * Called after full clustering so subsequent incremental runs can use them.
+   */
+  clustersToCentroids(clusters: MessageCluster[]): ClusterCentroid[] {
+    if (!this.encoder) return [];
+
+    const centroids: ClusterCentroid[] = [];
+    for (const c of clusters) {
+      // Encode centroid text to get the dense vector
+      const vec = this.encoder.encode(c.centroid);
+      centroids.push({
+        vector: Array.from(vec),
+        centroidText: c.centroid,
+        size: c.candidates.length,
+        averageSimilarity: c.averageSimilarity,
+        keywords: c.keywords,
+        filePaths: Array.from(c.filePaths),
+      });
+    }
+    return centroids;
   }
 
   /**

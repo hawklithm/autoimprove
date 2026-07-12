@@ -12,6 +12,26 @@ import { CACHE_DIR } from "./init.js";
 import { Pattern } from "../core/models.js";
 import { logger } from "./../core/logger.js";
 
+/**
+ * A serializable cluster centroid for incremental clustering (D3).
+ * Stores the dense vector and representative text so new messages can be
+ * compared against existing clusters without re-clustering the whole session.
+ */
+export interface ClusterCentroid {
+  /** Dense vector (L2-normalized Float32Array) serialized as number[] */
+  vector: number[];
+  /** Representative centroid text (longest/most-informative candidate) */
+  centroidText: string;
+  /** Number of candidates merged into this cluster */
+  size: number;
+  /** Average pairwise similarity within the cluster */
+  averageSimilarity: number;
+  /** Keywords extracted from the cluster */
+  keywords: string[];
+  /** File paths associated with this cluster */
+  filePaths: string[];
+}
+
 export interface SessionCacheEntry {
   session_id: string;
   session_file: string;
@@ -22,6 +42,8 @@ export interface SessionCacheEntry {
   patterns_found: number;
   cached_patterns: Pattern[];
   pattern_fingerprints?: string[];  // NEW: Link to pattern evolution
+  /** D3: cluster centroids for incremental clustering (semantic mode only) */
+  cluster_centroids?: ClusterCentroid[];
 }
 
 export interface SessionCacheIndex {
@@ -103,6 +125,26 @@ export class SessionCacheManager {
   getResumePoint(sessionId: string): number {
     const cached = this.getCached(sessionId);
     return cached ? cached.last_line_analyzed : 0;
+  }
+
+  /**
+   * D3: get cached cluster centroids for incremental clustering.
+   * Returns null when no centroids exist (legacy mode or first analysis).
+   */
+  getClusterCentroids(sessionId: string): ClusterCentroid[] | null {
+    const cached = this.getCached(sessionId);
+    return cached?.cluster_centroids ?? null;
+  }
+
+  /**
+   * D3: store cluster centroids for incremental clustering.
+   */
+  setClusterCentroids(sessionId: string, centroids: ClusterCentroid[]): void {
+    const cached = this.getCached(sessionId);
+    if (cached) {
+      cached.cluster_centroids = centroids;
+      this.saveIndex();
+    }
   }
 
   /**

@@ -176,6 +176,12 @@ export class SessionAnalyzer {
 
   /**
    * Perform incremental analysis on new content only
+   *
+   * D3: when local_ml is enabled with semantic clusterer, new candidate
+   * messages are compared against cached cluster centroids via
+   * MessageClusterer.incrementalCluster. Outliers (messages that don't
+   * match any existing centroid) are re-clustered fully. This avoids
+   * re-clustering the entire session on every incremental run.
    */
   private performIncrementalAnalysis(sessionFile: string, sessionData: SessionData): Pattern[] {
     const sessionId = sessionData.session_id;
@@ -208,8 +214,73 @@ export class SessionAnalyzer {
       pattern.confidence = this.confidenceCalc.calculateConfidence(pattern);
     }
 
-    // Merge with cached patterns
+    // D3: when semantic clustering is active, try incremental cluster merge
+    // using cached centroids before falling back to full pattern merge.
+    const cfg = loadConfig().local_ml;
+    const useSemantic = cfg?.enabled && cfg.clusterer !== "legacy";
+    if (useSemantic) {
+      const existingCentroids = this.cacheManager.getClusterCentroids(sessionId);
+      if (existingCentroids && existingCentroids.length > 0) {
+        // Re-extract candidates from new patterns for incremental clustering
+        const newCandidates = this.extractCandidatesFromPatterns(newPatterns, partialSessionData);
+        if (newCandidates.length > 0) {
+          const { clusters: mergedClusters, outliers } = this.clusterer.incrementalCluster(
+            newCandidates,
+            existingCentroids
+          );
+
+          // Outliers that didn't match any centroid — cluster them separately
+          let outlierPatterns: Pattern[] = [];
+          if (outliers.length > 0) {
+            const outlierClusters = this.clusterer.clusterMessages(outliers);
+            outlierPatterns = outlierClusters.map(c => this.clusterToPattern(c, partialSessionData));
+          }
+
+          // Build patterns from incremental merges
+          const incrementalPatterns: Pattern[] = [];
+          for (const mc of mergedClusters) {
+            incrementalPatterns.push(this.clusterToPattern(mc, partialSessionData));
+          }
+
+          // Merge: incremental patterns + outlier patterns, then merge with cached
+          const allNew = [...incrementalPatterns, ...outlierPatterns];
+          const mergedPatterns = this.cacheManager.mergePatterns(sessionId, allNew);
+
+          // Update centroid cache: re-serialise from merged + outlier clusters
+          const allClusters = [...mergedClusters, ...this.clusterer.clusterMessages(outliers)];
+          if (allClusters.length > 0) {
+            const newCentroids = this.clusterer.clustersToCentroids(allClusters);
+            this.cacheManager.setClusterCentroids(sessionId, newCentroids);
+          }
+
+          // Update cache
+          const stats = statSync(sessionFile);
+          const totalLines = sessionData.messages.length + sessionData.tool_calls.length;
+          this.cacheManager.saveAnalysis(
+            sessionId,
+            sessionFile,
+            totalLines,
+            stats.size,
+            mergedPatterns
+          );
+
+          return mergedPatterns;
+        }
+      }
+    }
+
+    // Fallback: legacy merge (when no centroids exist or semantic mode is off)
     const mergedPatterns = this.cacheManager.mergePatterns(sessionId, newPatterns);
+
+    // D3: after full merge, serialise centroids for next incremental run
+    if (useSemantic) {
+      const allCandidates = this.extractCandidatesFromPatterns(mergedPatterns, sessionData);
+      if (allCandidates.length > 0) {
+        const fullClusters = this.clusterer.clusterMessages(allCandidates);
+        const centroids = this.clusterer.clustersToCentroids(fullClusters);
+        this.cacheManager.setClusterCentroids(sessionId, centroids);
+      }
+    }
 
     // Update cache
     const stats = statSync(sessionFile);
@@ -223,6 +294,62 @@ export class SessionAnalyzer {
     );
 
     return mergedPatterns;
+  }
+
+  /**
+   * D3: extract MessageCandidate[] from a set of detected patterns.
+   * Used to feed incremental clustering with the same shape clusterMessages expects.
+   */
+  private extractCandidatesFromPatterns(
+    patterns: Pattern[],
+    sessionData: SessionData
+  ): MessageCandidate[] {
+    const candidates: MessageCandidate[] = [];
+    const msgsByContext = new Map<string, Message[]>();
+    for (const m of sessionData.messages) {
+      // Group messages by context (file path) for matching
+      const key = `msg:${m.content.substring(0, 100)}`;
+      if (!msgsByContext.has(key)) msgsByContext.set(key, []);
+      msgsByContext.get(key)!.push(m);
+    }
+
+    for (const p of patterns) {
+      for (const occ of p.occurrences) {
+        // Try to find matching message by timestamp + content prefix
+        const match = sessionData.messages.find(m =>
+          m.timestamp === occ.timestamp ||
+          (occ.user_input && m.content.includes(occ.user_input))
+        );
+        if (match) {
+          candidates.push({
+            message: match,
+            occurrence: occ,
+            extractedText: p.description || match.content,
+          });
+        }
+      }
+    }
+    return candidates;
+  }
+
+  /**
+   * D3: convert a MessageCluster back to a Pattern (mirrors the logic in
+   * detectRepeatedCorrections/detectAntiPatterns/…).
+   */
+  private clusterToPattern(cluster: MessageCluster, sessionData: SessionData): Pattern {
+    // Infer pattern type from the first occurrence's action
+    const firstAction = cluster.candidates[0]?.occurrence?.user_action || "explicit_correction";
+    let type = PatternType.REPEATED_CORRECTION;
+    if (firstAction === "accept") type = PatternType.PREFERENCE;
+
+    return createPattern({
+      type,
+      description: this.generateClusterDescription(cluster),
+      occurrences: cluster.candidates.map(c => c.occurrence),
+      first_seen: cluster.candidates[0].occurrence.timestamp,
+      last_seen: cluster.candidates[cluster.candidates.length - 1].occurrence.timestamp,
+      keywords: cluster.keywords,
+    });
   }
 
   /**
