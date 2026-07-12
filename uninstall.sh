@@ -43,12 +43,25 @@ echo ""
 echo "Cleaning CLAUDE.md..."
 claude_md="$HOME/.claude/CLAUDE.md"
 if [ -f "$claude_md" ]; then
-    # Remove AutoImprove sections
+    # Remove <!-- AUTOIMPROVE_START --> ... <!-- AUTOIMPROVE_END --> block (current format)
+    if grep -q "<!-- AUTOIMPROVE_START -->" "$claude_md" 2>/dev/null; then
+        sed -i '' '/<!-- AUTOIMPROVE_START -->/,/<!-- AUTOIMPROVE_END -->/d' "$claude_md" 2>/dev/null || true
+        echo "  ✅ Removed AutoImprove guidance section (<!-- AUTOIMPROVE_START -->)"
+    fi
+
+    # Remove AutoImprove Learned Rules section (legacy format)
     sed -i '' '/^## AutoImprove Learned Rules/,/^$/d' "$claude_md" 2>/dev/null || true
+
+    # Remove AutoImprove Rule Feedback section (legacy format)
     sed -i '' '/^## AutoImprove Rule Feedback/,/^$/d' "$claude_md" 2>/dev/null || true
-    # Remove @ references
+
+    # Remove @ references to autoimprove paths
     sed -i '' '/@~\/\.autoimprove\/rules\/claude-index\.md/d' "$claude_md" 2>/dev/null || true
     sed -i '' '/@~\/\.claude\/autoimprove-feedback-instructions\.md/d' "$claude_md" 2>/dev/null || true
+
+    # Clean up multiple consecutive newlines
+    sed -i '' '/^$/{ N; /^\n$/{ /^\n$/d; }; }' "$claude_md" 2>/dev/null || true
+
     echo "  ✅ Cleaned AutoImprove references from CLAUDE.md"
 else
     echo "  - CLAUDE.md not found"
@@ -63,6 +76,40 @@ if [ -f "$feedback_file" ]; then
     echo "  ✅ Removed feedback instructions"
 else
     echo "  - Feedback instructions not found"
+fi
+echo ""
+
+# Remove Codex configuration
+echo "Cleaning Codex configuration..."
+CODEX_MCP_SETTINGS="$HOME/.codex/mcp_settings.json"
+CODEX_SKILL_DIR="$HOME/.codex/skills/autoimprove"
+
+# Remove Codex skill directory
+if [ -d "$CODEX_SKILL_DIR" ]; then
+    rm -rf "$CODEX_SKILL_DIR"
+    echo "  ✅ Removed Codex skill: ~/.codex/skills/autoimprove/"
+else
+    echo "  - Codex skill not found"
+fi
+
+# Remove autoimprove-core from Codex MCP settings
+if [ -f "$CODEX_MCP_SETTINGS" ]; then
+    # Use node to safely parse JSON
+    node -e "
+        const fs = require('fs');
+        const path = '$CODEX_MCP_SETTINGS';
+        const content = JSON.parse(fs.readFileSync(path, 'utf-8'));
+        if (content.mcpServers && content.mcpServers['autoimprove-core']) {
+            delete content.mcpServers['autoimprove-core'];
+            if (Object.keys(content.mcpServers).length === 0) {
+                delete content.mcpServers;
+            }
+            fs.writeFileSync(path, JSON.stringify(content, null, 2) + '\n');
+            console.log('removed');
+        }
+    " 2>/dev/null | grep -q "removed" && echo "  ✅ Removed autoimprove-core from Codex MCP settings" || echo "  - No autoimprove-core in Codex MCP settings"
+else
+    echo "  - Codex MCP settings not found"
 fi
 echo ""
 

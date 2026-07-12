@@ -79,6 +79,15 @@ export async function uninstall() {
     cliLogger.print('');
 
     // -------------------------------------------------------
+    // Step 3.5: Clean Codex configuration
+    // -------------------------------------------------------
+    cliLogger.print('Step 3.5: Cleaning Codex configuration...');
+    cliLogger.print('-------------------------------------------');
+
+    await cleanCodexConfig(removedFiles, failedFiles);
+    cliLogger.print('');
+
+    // -------------------------------------------------------
     // Step 4: Remove feedback instructions file
     // -------------------------------------------------------
     cliLogger.print('Step 4: Removing feedback instructions...');
@@ -280,24 +289,30 @@ async function cleanClaudeMd(claudeDir: string, removedFiles: string[], failedFi
 
   try {
     let content = readFileSync(globalClaudeMd, 'utf-8');
-    const originalContent = content;
     let changes = false;
 
-    // Remove the AutoImprove Learned Rules section (including @ reference)
+    // 1. Remove the <!-- AUTOIMPROVE_START --> ... <!-- AUTOIMPROVE_END --> block (current format)
+    const autoimproveBlockRegex = /<!-- AUTOIMPROVE_START -->[\s\S]*?<!-- AUTOIMPROVE_END -->\n*/g;
+    if (autoimproveBlockRegex.test(content)) {
+      content = content.replace(autoimproveBlockRegex, '');
+      changes = true;
+    }
+
+    // 2. Remove the AutoImprove Learned Rules section (including @ reference) — legacy format
     const rulesSectionRegex = /\n## AutoImprove Learned Rules\n\n@~\/\.autoimprove\/rules\/claude-index\.md\n\n/g;
     if (rulesSectionRegex.test(content)) {
       content = content.replace(rulesSectionRegex, '');
       changes = true;
     }
 
-    // Remove the AutoImprove Rule Feedback section (including @ reference)
+    // 3. Remove the AutoImprove Rule Feedback section (including @ reference) — legacy format
     const feedbackSectionRegex = /\n## AutoImprove Rule Feedback\n\n@~\/\.claude\/autoimprove-feedback-instructions\.md\n\n/g;
     if (feedbackSectionRegex.test(content)) {
       content = content.replace(feedbackSectionRegex, '');
       changes = true;
     }
 
-    // Also handle cases where the section might be at the end without trailing newline
+    // 4. Also handle cases where the section might be at the end without trailing newline
     const rulesSectionEndRegex = /\n## AutoImprove Learned Rules\n\n@~\/\.autoimprove\/rules\/claude-index\.md\s*/g;
     if (rulesSectionEndRegex.test(content)) {
       content = content.replace(rulesSectionEndRegex, '\n');
@@ -310,7 +325,16 @@ async function cleanClaudeMd(claudeDir: string, removedFiles: string[], failedFi
       changes = true;
     }
 
+    // 5. Remove any remaining @ references to autoimprove paths
+    const autoimproveRefRegex = /@~\/\.autoimprove\/[^\s]+\s*/g;
+    if (autoimproveRefRegex.test(content)) {
+      content = content.replace(autoimproveRefRegex, '');
+      changes = true;
+    }
+
     if (changes) {
+      // Clean up multiple consecutive newlines
+      content = content.replace(/\n{3,}/g, '\n\n');
       // Trim leading/trailing whitespace
       content = content.trim();
       if (content.length === 0) {
@@ -329,6 +353,56 @@ async function cleanClaudeMd(claudeDir: string, removedFiles: string[], failedFi
   } catch (error: any) {
     failedFiles.push(globalClaudeMd);
     cliLogger.warn(`  ⚠ Failed to clean CLAUDE.md: ${error.message}`);
+  }
+}
+
+// -----------------------------------------------------------
+// Helper: Clean Codex configuration (MCP settings, skill, agents)
+// -----------------------------------------------------------
+async function cleanCodexConfig(removedFiles: string[], failedFiles: string[]): Promise<void> {
+  const codexDir = join(homedir(), '.codex');
+  const codexMcpSettings = join(codexDir, 'mcp_settings.json');
+  const codexSkillDir = join(codexDir, 'skills', 'autoimprove');
+  const codexSkillFile = join(codexSkillDir, 'SKILL.md');
+  const codexAgentsDir = join(codexSkillDir, 'agents');
+  const codexOpenaiYaml = join(codexAgentsDir, 'openai.yaml');
+
+  // 1. Remove Codex skill directory
+  if (existsSync(codexSkillDir)) {
+    try {
+      rmSync(codexSkillDir, { recursive: true, force: true });
+      removedFiles.push(codexSkillDir);
+      cliLogger.print('  ✓ Removed Codex skill: ~/.codex/skills/autoimprove/');
+    } catch (error: any) {
+      failedFiles.push(codexSkillDir);
+      cliLogger.warn(`  ⚠ Failed to remove Codex skill: ${error.message}`);
+    }
+  } else {
+    cliLogger.print('  - Codex skill not found');
+  }
+
+  // 2. Remove autoimprove-core from Codex MCP settings
+  if (existsSync(codexMcpSettings)) {
+    try {
+      const settings = JSON.parse(readFileSync(codexMcpSettings, 'utf-8'));
+      if (settings.mcpServers && settings.mcpServers['autoimprove-core']) {
+        delete settings.mcpServers['autoimprove-core'];
+        // If mcpServers is now empty, clean it up
+        if (Object.keys(settings.mcpServers).length === 0) {
+          delete settings.mcpServers;
+        }
+        writeFileSync(codexMcpSettings, JSON.stringify(settings, null, 2) + '\n');
+        removedFiles.push(`${codexMcpSettings} (removed autoimprove-core)`);
+        cliLogger.print('  ✓ Removed autoimprove-core from Codex MCP settings');
+      } else {
+        cliLogger.print('  - No autoimprove-core in Codex MCP settings');
+      }
+    } catch (error: any) {
+      failedFiles.push(codexMcpSettings);
+      cliLogger.warn(`  ⚠ Failed to clean Codex MCP settings: ${error.message}`);
+    }
+  } else {
+    cliLogger.print('  - Codex MCP settings not found');
   }
 }
 
