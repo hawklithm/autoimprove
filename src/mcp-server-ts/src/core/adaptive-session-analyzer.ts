@@ -10,6 +10,7 @@ import { CompactCacheManager } from "../storage/compact-cache.js";
 import { SignalMatcher, MatchResult } from "./signal-matcher.js";
 import { NeighborSignalMatcher } from "./neighbor-signal-matcher.js";
 import { loadConfig } from "../storage/init.js";
+import { shouldUseNewPipeline } from "./local-ml-rollout.js";
 import { LLMSignalExtractor } from "./llm-signal-extractor.js";
 import { BayesianConfidenceUpdater } from "./bayesian-confidence-updater.js";
 import { PatternClusterer } from "./pattern-clusterer.js";
@@ -66,11 +67,13 @@ export class AdaptiveSessionAnalyzer {
     this.confidenceCalc = new ConfidenceCalculator();
     this.cacheManager = new SessionCacheManager();
     this.compactCache = new CompactCacheManager();
-    // E0: choose matcher by local_ml.signal_match.mode. "neighbor" uses the
-    // semantic EmbeddingEncoder-based NeighborSignalMatcher; "legacy" (or unset)
-    // keeps the original Aho-Corasick SignalMatcher. Both expose identical
-    // match/batchMatch/rebuild/getStats/close surfaces, so the rest of this
-    // class is matcher-agnostic.
+    // E0 / G2: choose matcher by rollout + config. When the session (id unknown
+    // at construction time — resolved lazily) hits the rollout bucket AND the
+    // signal_match.mode is "neighbor", use NeighborSignalMatcher. Otherwise
+    // keep the legacy Aho-Corasick SignalMatcher.
+    // At construction we don't have a session id yet, so we defer the rollout
+    // check to analyzeSession(). For now, initialize based on mode config;
+    // the rollout check happens in analyzeSession where sessionId is available.
     const signalMode = loadConfig().local_ml?.signal_match?.mode ?? "legacy";
     this.signalMatcher = signalMode === "neighbor"
       ? new NeighborSignalMatcher()
@@ -101,6 +104,20 @@ export class AdaptiveSessionAnalyzer {
     // Load session data (with compact cache optimization)
     const sessionData = this.loadSessionData(sessionFile, useCompactCache);
     const sessionId = sessionData.session_id;
+
+    // G2: per-session rollout check — if this session is NOT in the new-pipeline
+    // bucket but the matcher was constructed as NeighborSignalMatcher (because
+    // signal_match.mode == "neighbor"), swap to legacy SignalMatcher for this
+    // session. Conversely, if the bucket selects the new pipeline but we have
+    // a legacy matcher, rebuild as NeighborSignalMatcher.
+    const useNew = shouldUseNewPipeline(sessionId, "signal_match");
+    const isNeighbor = this.signalMatcher instanceof NeighborSignalMatcher;
+    if (useNew !== isNeighbor) {
+      logger.debug("adaptive-analyzer", `Rollout swap for session ${sessionId}: ${useNew ? "neighbor" : "legacy"}`);
+      this.signalMatcher = useNew
+        ? new NeighborSignalMatcher()
+        : new SignalMatcher();
+    }
 
     // Check if we can use cached results
     if (incremental && !forceReanalyze) {

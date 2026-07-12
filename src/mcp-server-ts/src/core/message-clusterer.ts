@@ -26,6 +26,15 @@ export interface MessageCluster {
   averageSimilarity: number;
 }
 
+export interface ClusterRunStats {
+  candidates: number;
+  clusters: number;
+  singletons: number;        // clusters with a single candidate
+  singletonRate: number;      // singletons / clusters
+  avgClusterSize: number;
+  crossSessionMerges: number; // candidates merged across different sessions
+}
+
 export class MessageClusterer {
   private readonly SIMILARITY_THRESHOLD = 0.25;  // Minimum similarity to join cluster (lowered for semantic grouping)
   private readonly MIN_CLUSTER_SIZE = 1;         // Allow single-occurrence patterns
@@ -33,6 +42,9 @@ export class MessageClusterer {
 
   // When local_ml.clusterer != "legacy", semantic vectors back the similarity.
   private encoder: EmbeddingEncoder | null = null;
+  private lastRunStats: ClusterRunStats = {
+    candidates: 0, clusters: 0, singletons: 0, singletonRate: 0, avgClusterSize: 0, crossSessionMerges: 0,
+  };
 
   constructor() {
     const cfg = loadConfig().local_ml;
@@ -41,6 +53,11 @@ export class MessageClusterer {
         backend: cfg.embedding_backend || "char-ngram-tfidf",
       });
     }
+  }
+
+  /** G1: last run clustering metrics (singleton rate, avg cluster size, cross-session merges). */
+  getLastRunStats(): ClusterRunStats {
+    return this.lastRunStats;
   }
 
   // Semantic keyword groups - helps cluster related but differently-expressed messages
@@ -103,6 +120,23 @@ export class MessageClusterer {
         clusters.push(cluster);
       }
     }
+
+    // G1: compute run stats (singleton rate, cross-session merges).
+    const singletons = clusters.filter(c => c.candidates.length === 1).length;
+    let crossSessionMerges = 0;
+    for (const c of clusters) {
+      const sessions = new Set(c.candidates.map(cand => cand.occurrence.session_id));
+      if (sessions.size > 1) crossSessionMerges += sessions.size - 1;
+    }
+    const totalCandidates = clusters.reduce((s, c) => s + c.candidates.length, 0);
+    this.lastRunStats = {
+      candidates: totalCandidates,
+      clusters: clusters.length,
+      singletons,
+      singletonRate: clusters.length > 0 ? singletons / clusters.length : 0,
+      avgClusterSize: clusters.length > 0 ? totalCandidates / clusters.length : 0,
+      crossSessionMerges,
+    };
 
     return clusters;
   }

@@ -11,8 +11,10 @@ import { ConfidenceCalculator } from "./confidence.js";
 import { SessionCacheManager } from "../storage/session-cache.js";
 import { CompactCacheManager } from "../storage/compact-cache.js";
 import { MessageClusterer, MessageCandidate, MessageCluster } from "./message-clusterer.js";
-import { PreFilter } from "./pre-filter.js";
+import { PreFilter, FilterResult } from "./pre-filter.js";
 import { statSync } from "fs";
+import { loadConfig } from "../storage/init.js";
+import { shouldUseNewPipeline } from "./local-ml-rollout.js";
 import { logger } from "./logger.js";
 
 export class SessionAnalyzer {
@@ -22,6 +24,7 @@ export class SessionAnalyzer {
   private compactCache: CompactCacheManager;
   private clusterer: MessageClusterer;
   private preFilter: PreFilter;
+  private lastPreFilterResult: FilterResult | null = null;
 
   constructor() {
     this.parser = new UnifiedSessionParser();
@@ -46,12 +49,31 @@ export class SessionAnalyzer {
     // Load session data (with compact cache optimization)
     const sessionData = this.loadSessionData(sessionFile, useCompactCache);
 
+    const sessionId = sessionData.session_id;
+
+    // G2: per-session rollout checks. Re-initialize preFilter and clusterer
+    // according to the stable bucket for this session. This is a lightweight
+    // swap — both are already constructed with defaults from the config, but
+    // the rollout may downgrade an enabled module to legacy for this session
+    // (or upgrade a disabled one). We simply re-construct here; the cost is
+    // negligible compared to analysis itself.
+    if (loadConfig().local_ml?.enabled) {
+      const usePrefilter = shouldUseNewPipeline(sessionId, "prefilter");
+      const useClusterer = shouldUseNewPipeline(sessionId, "clusterer");
+      // Only re-create if the rollout decision differs from the default config
+      const cfg = loadConfig().local_ml!;
+      if (usePrefilter !== (cfg.prefilter?.enabled ?? false)) {
+        this.preFilter = new PreFilter();
+      }
+      if (useClusterer !== (cfg.clusterer !== "legacy")) {
+        this.clusterer = new MessageClusterer();
+      }
+    }
+
     // P0: lightweight pre-screening (zero cost when disabled) — drops low-information
     // user messages before detectors run, reducing token/compute. When local_ml.prefilter
     // is disabled, PreFilter.filter returns all messages unchanged.
     this.applyPreFilter(sessionData);
-
-    const sessionId = sessionData.session_id;
 
     // Check if we can use cached results
     if (incremental && !forceReanalyze) {
@@ -87,12 +109,32 @@ export class SessionAnalyzer {
     if (userMessages.length === 0) return;
 
     const result = this.preFilter.filter(userMessages);
+    this.lastPreFilterResult = result;
     if (result.droppedCount === 0) return;
 
     const keptSet = new Set(result.kept);
     sessionData.messages = sessionData.messages.filter(
       m => m.role !== "user" || keptSet.has(m)
     );
+  }
+
+  /**
+   * G1: emit a local_ml metrics summary when local_ml is enabled. Surfaces
+   * pre-filter kept-rate and clustering singleton-rate for observability.
+   */
+  private logLocalMlSummary(sessionId: string): void {
+    if (!loadConfig().local_ml?.enabled) return;
+    const pf = this.lastPreFilterResult;
+    const cs = this.clusterer.getLastRunStats();
+    logger.info("local-ml", "local_ml run metrics", {
+      session_id: sessionId,
+      prefilter_input: pf?.inputCount ?? 0,
+      prefilter_kept_rate: pf ? Number(pf.keptRate.toFixed(3)) : 1,
+      clusters: cs.clusters,
+      singleton_rate: Number(cs.singletonRate.toFixed(3)),
+      avg_cluster_size: Number(cs.avgClusterSize.toFixed(2)),
+      cross_session_merges: cs.crossSessionMerges,
+    });
   }
 
   /**
@@ -125,6 +167,9 @@ export class SessionAnalyzer {
       stats.size,
       patterns
     );
+
+    // G1: emit local_ml metrics summary (pre-filter kept-rate, clustering stats).
+    this.logLocalMlSummary(sessionData.session_id);
 
     return patterns;
   }

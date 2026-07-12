@@ -27,6 +27,10 @@ export interface FilterResult {
   droppedCount: number;
   /** Reason -> count, for observability. */
   reason: Record<string, number>;
+  /** G1: input message count (for kept-rate metric). */
+  inputCount: number;
+  /** G1: fraction of input kept (1 - drop rate). */
+  keptRate: number;
 }
 
 // Short acknowledgements / pure small talk that carry no signal.
@@ -58,7 +62,7 @@ export class PreFilter {
    */
   filter(messages: Message[]): FilterResult {
     if (!this.enabled) {
-      return { kept: messages, droppedCount: 0, reason: {} };
+      return { kept: messages, droppedCount: 0, reason: {}, inputCount: messages.length, keptRate: 1 };
     }
 
     const reason: Record<string, number> = {};
@@ -79,7 +83,13 @@ export class PreFilter {
     if (droppedCount > 0) {
       logger.debug("pre-filter", `Dropped ${droppedCount} low-information message(s): ${JSON.stringify(reason)}`);
     }
-    return { kept, droppedCount, reason };
+    return {
+      kept,
+      droppedCount,
+      reason,
+      inputCount: messages.length,
+      keptRate: messages.length > 0 ? kept.length / messages.length : 1,
+    };
   }
 
   /**

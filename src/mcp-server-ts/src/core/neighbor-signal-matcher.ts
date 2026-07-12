@@ -48,6 +48,9 @@ export class NeighborSignalMatcher {
   private lastBuildTime = 0;
   private rebuildInterval = 5 * 60 * 1000; // 5 minutes (aligned with SignalMatcher)
   private matchThreshold: number;
+  // G1: running counters for observability (near-neighbor recall / FP proxy).
+  private matchCount = 0;
+  private unmatchedCount = 0;
 
   constructor() {
     this.db = new SignalDictionaryDB();
@@ -103,6 +106,7 @@ export class NeighborSignalMatcher {
     this.maybeRebuild();
 
     if (this.index.length === 0) {
+      this.unmatchedCount++;
       return { content, matched_signals: [], aggregated_confidence: 0, is_matched: false };
     }
 
@@ -118,6 +122,7 @@ export class NeighborSignalMatcher {
     }
 
     if (scored.length === 0) {
+      this.unmatchedCount++;
       return { content, matched_signals: [], aggregated_confidence: 0, is_matched: false };
     }
 
@@ -171,6 +176,7 @@ export class NeighborSignalMatcher {
 
     const { pattern_type, aggregated_confidence } = this.aggregateSignals(matchedSignals);
 
+    this.matchCount++;
     return {
       content,
       matched_signals: matchedSignals,
@@ -231,10 +237,15 @@ export class NeighborSignalMatcher {
    * Get statistics (compatible with SignalMatcher.getStats).
    */
   getStats() {
+    const total = this.matchCount + this.unmatchedCount;
     return {
       total_patterns: this.index.length,
       mode: "neighbor",
       match_threshold: this.matchThreshold,
+      match_count: this.matchCount,
+      unmatched_count: this.unmatchedCount,
+      // Near-neighbor recall proxy: share of queries that found a neighbor.
+      recall_proxy: total > 0 ? this.matchCount / total : 0,
       last_build: new Date(this.lastBuildTime).toISOString(),
       dictionary_stats: this.db.getDictionaryStats()
     };
