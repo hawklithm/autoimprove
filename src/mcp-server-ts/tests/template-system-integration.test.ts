@@ -152,6 +152,9 @@ Save as \`final_rule\`.
       const executor = new TemplateExecutor(compiled, pattern, functions);
       const result = await executor.execute();
 
+      // Debug: print actual step outputs
+      console.log('Step outputs:', Object.keys(result.stepOutputs));
+
       // Should have expanded into 3 + 1 steps (3 loop iterations + 1 aggregate)
       // Loop variables are expanded with _index suffix
       expect(result.stepOutputs).toHaveProperty('processed_0');

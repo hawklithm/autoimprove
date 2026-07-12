@@ -8,7 +8,7 @@
     "autoimprove-server": "dist/index.js"
   },
   "scripts": {
-    "build": "tsc",
+    "build": "tsc && node -e \"const{execSync}=require('child_process');const fs=require('fs');fs.mkdirSync('dist/storage',{recursive:true});if(fs.existsSync('src/storage/rule-storage-schema.sql'))fs.copyFileSync('src/storage/rule-storage-schema.sql','dist/storage/rule-storage-schema.sql');console.log('copied rule-storage-schema.sql -> dist/storage/')\"",
     "dev": "tsx src/index.ts",
     "test": "vitest run",
     "test:watch": "vitest",

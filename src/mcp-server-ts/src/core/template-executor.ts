@@ -291,6 +291,23 @@ export class TemplateExecutor {
         throw new Error(`Unknown step kind: ${step.kind}`);
       }
     } catch (error: any) {
+      // Graceful degradation: if an LLM step fails because no LLM client/key is
+      // available, fall back to a local rule-description generator instead of
+      // aborting the whole rule generation.
+      const isLlmUnavailable =
+        step.kind === 'llm_call' &&
+        /LLM caller not configured|LLM client not initialized|apiKey|Authentication failed|403|401/i.test(
+          error.message || ''
+        );
+      if (isLlmUnavailable) {
+        logger.warn(
+          'template-executor',
+          `LLM unavailable for step '${step.id}', using local fallback: ${error.message}`
+        );
+        const fallback = this.generateLocalFallback(step.id);
+        this.context.outputs.set(step.id, fallback);
+        return;
+      }
       logger.error('template-executor', `Step '${step.id}' failed: ${error.message}`);
       throw new Error(`Step '${step.id}' failed: ${error.message}`);
     }
@@ -299,6 +316,36 @@ export class TemplateExecutor {
     this.context.outputs.set(step.id, result);
 
     logger.debug('template-executor', `Step '${step.id}' completed`);
+  }
+
+  /**
+   * Local fallback used when an LLM step cannot run (no API key / unavailable).
+   * Produces the same shape the template expects so downstream assembly still works.
+   */
+  private generateLocalFallback(stepId: string): Record<string, any> {
+    const pattern: any = this.context.pattern || {};
+    const desc: string =
+      typeof pattern.description === 'string' && pattern.description.trim().length > 0
+        ? pattern.description.trim()
+        : `${pattern.type || 'pattern'} rule`;
+    const keywords: string[] = Array.isArray(pattern.keywords) ? pattern.keywords : [];
+    const kwLine = keywords.length > 0 ? keywords.join(', ') : pattern.type || 'general';
+
+    if (stepId === 'rule_description') {
+      return {
+        description: desc.substring(0, 120),
+        rationale: `Detected from user corrections/preferences of type "${pattern.type}". Apply consistently to avoid repeating this mistake.`,
+        how_to_apply: [
+          `Applies to: ${kwLine}.`,
+          'Follow this rule on write/edit operations in matching contexts.',
+          'If the situation clearly differs, note the exception rather than forcing it.',
+        ].join('\n'),
+        exceptions: 'When the user explicitly overrides or the context does not match, defer to user instruction.',
+      };
+    }
+
+    // Generic fallback for any other llm_call step.
+    return { description: desc, raw: desc };
   }
 
   /**

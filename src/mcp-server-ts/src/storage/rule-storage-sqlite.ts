@@ -46,14 +46,20 @@ export class RuleStorageSQLite {
     this.db.pragma('synchronous = NORMAL');
     this.db.pragma('foreign_keys = ON');
 
-    // Load schema
-    const schemaPath = join(__dirname, 'rule-storage-schema.sql');
-    if (existsSync(schemaPath)) {
+    // Load schema. The .sql file may live next to this compiled module (dist),
+    // or in the source tree (src) if the build step did not copy assets.
+    const candidatePaths = [
+      join(__dirname, 'rule-storage-schema.sql'),
+      join(__dirname, '..', 'src', 'storage', 'rule-storage-schema.sql'),
+      join(__dirname, '..', '..', 'src', 'storage', 'rule-storage-schema.sql'),
+    ];
+    const schemaPath = candidatePaths.find((p) => existsSync(p));
+    if (schemaPath) {
       const schema = readFileSync(schemaPath, 'utf-8');
       this.db.exec(schema);
-      logger.info("rule-storage-sqlite", "Database schema initialized");
+      logger.info("rule-storage-sqlite", `Database schema initialized from ${schemaPath}`);
     } else {
-      logger.warn("rule-storage-sqlite", "Schema file not found, database may not be properly initialized");
+      logger.warn("rule-storage-sqlite", "Schema file not found in any candidate path, database may not be properly initialized");
     }
   }
 
