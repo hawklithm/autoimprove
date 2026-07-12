@@ -29,7 +29,7 @@
     "node": ">=18.0.0"
   },
   "bin": {
-    "autoimprove": "./bin/autoimprove.js"
+    "autoimprove": "./bin/autoimprove.cjs"
   },
   "main": "./lib/index.js",
   "types": "./lib/index.d.ts",
