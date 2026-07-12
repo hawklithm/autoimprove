@@ -9,6 +9,8 @@
 
 import { PatternType, PatternOccurrence } from "./models.js";
 import { Message } from "./jsonl-parser.js";
+import { EmbeddingEncoder } from "./embedding-encoder.js";
+import { loadConfig } from "../storage/init.js";
 
 export interface MessageCandidate {
   message: Message;
@@ -28,6 +30,18 @@ export class MessageClusterer {
   private readonly SIMILARITY_THRESHOLD = 0.25;  // Minimum similarity to join cluster (lowered for semantic grouping)
   private readonly MIN_CLUSTER_SIZE = 1;         // Allow single-occurrence patterns
   private readonly MAX_CLUSTER_SIZE = 20;        // Prevent over-aggregation
+
+  // When local_ml.clusterer != "legacy", semantic vectors back the similarity.
+  private encoder: EmbeddingEncoder | null = null;
+
+  constructor() {
+    const cfg = loadConfig().local_ml;
+    if (cfg && cfg.enabled && cfg.clusterer !== "legacy") {
+      this.encoder = new EmbeddingEncoder({
+        backend: cfg.embedding_backend || "char-ngram-tfidf",
+      });
+    }
+  }
 
   // Semantic keyword groups - helps cluster related but differently-expressed messages
   private readonly SEMANTIC_GROUPS = [
@@ -60,8 +74,10 @@ export class MessageClusterer {
       }];
     }
 
-    // Build TF-IDF vectors for all candidates
-    const vectors = this.buildTFIDFVectors(candidates);
+    // Build vectors: semantic (char n-gram) when encoder active, else legacy word TF-IDF.
+    const vectors = this.encoder
+      ? this.buildSemanticVectors(candidates)
+      : this.buildTFIDFVectors(candidates);
 
     // Hierarchical clustering
     const clusters: MessageCluster[] = [];
@@ -121,22 +137,21 @@ export class MessageClusterer {
       const candidate = candidates[i];
       const candidateVector = vectors.get(i)!;
 
-      // Calculate multiple similarity metrics
+      // Calculate similarity. When a semantic encoder is active, the vector already
+      // captures cross-lingual meaning, so we drop the hand-written SEMANTIC_GROUPS
+      // boost and weight: 0.8 semantic cosine + 0.2 file-path context (D2).
       const cosineSim = this.cosineSimilarity(seedVector, candidateVector);
       const pathSim = this.pathSimilarity(
         candidates[seedIndex].occurrence.context,
         candidate.occurrence.context
       );
-      const semanticBoost = this.calculateSemanticBoost(
-        candidates[seedIndex].extractedText,
-        candidate.extractedText
-      );
 
-      // Weighted combined similarity with semantic boost
-      const combinedSim =
-        cosineSim * 0.6 +      // Text similarity
-        pathSim * 0.2 +        // File context
-        semanticBoost * 0.2;   // Semantic keyword overlap
+      const combinedSim = this.encoder
+        ? cosineSim * 0.8 + pathSim * 0.2
+        : cosineSim * 0.6 + pathSim * 0.2 + this.calculateSemanticBoost(
+            candidates[seedIndex].extractedText,
+            candidate.extractedText
+          ) * 0.2;
 
       if (combinedSim >= this.SIMILARITY_THRESHOLD) {
         clusterCandidates.push(candidate);
@@ -218,6 +233,29 @@ export class MessageClusterer {
     }
 
     return vectors;
+  }
+
+  /**
+   * Build semantic vectors via EmbeddingEncoder (char n-gram TF-IDF) for all candidates.
+   * Returns the same sparse-Map shape as buildTFIDFVectors so growCluster/cosineSimilarity
+   * are reused unchanged. Only called when a semantic encoder is active (non-legacy mode).
+   */
+  private buildSemanticVectors(
+    candidates: MessageCandidate[]
+  ): Map<number, Map<string, number>> {
+    const texts = candidates.map(c => c.extractedText);
+    const dense = this.encoder!.encodeBatch(texts); // L2-normalized Float32Array
+    const sparse = new Map<number, Map<string, number>>();
+    dense.forEach((vec, i) => {
+      const m = new Map<string, number>();
+      // Index by n-gram feature; encoder stores features implicitly, so we use the
+      // index as key (cosine over aligned indices works since encodeBatch is per-batch).
+      for (let j = 0; j < vec.length; j++) {
+        if (vec[j] !== 0) m.set(String(j), vec[j]);
+      }
+      sparse.set(i, m);
+    });
+    return sparse;
   }
 
   /**
