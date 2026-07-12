@@ -160,9 +160,27 @@ if [ "$MODE" != "--dry-run" ]; then
 
         cd "$MCP_SERVER_DIR"
 
+        # Detect platform architecture
+        ARCH=$(node -e "console.log(process.arch)")
+        PLATFORM=$(node -e "console.log(process.platform)")
+        echo "检测到平台: ${PLATFORM}/${ARCH}"
+
+        # onnxruntime-node >=1.24.0 drops darwin/x64 support
+        # Use 1.17.3 on Intel Macs (also compatible with macOS 12+),
+        # latest on Apple Silicon
+        if [ "$PLATFORM" = "darwin" ] && [ "$ARCH" = "x64" ]; then
+            echo "Intel Mac 检测到，使用 onnxruntime-node@1.17.3（兼容版本）"
+            echo "（注：onnxruntime-node >=1.24 不再支持 darwin/x64，"
+            echo "  >=1.18 需要 macOS 14+ 的 libc++ 特性）"
+            ONNX_VERSION="1.17.3"
+        else
+            echo "使用最新版本 onnxruntime-node"
+            ONNX_VERSION="latest"
+        fi
+
         # Install onnxruntime-node
-        if npm install onnxruntime-node --save 2>&1; then
-            print_success "onnxruntime-node 安装成功"
+        if npm install "onnxruntime-node@${ONNX_VERSION}" --save 2>&1; then
+            print_success "onnxruntime-node ${ONNX_VERSION} 安装成功"
         else
             print_error "onnxruntime-node 安装失败"
             echo ""
@@ -184,7 +202,7 @@ if [ "$MODE" != "--dry-run" ]; then
         exit 0
     fi
 else
-    echo -e "${BLUE}[DRY-RUN]${NC} 将要执行: cd $MCP_SERVER_DIR && npm install onnxruntime-node --save"
+    echo -e "${BLUE}[DRY-RUN]${NC} 将要执行: cd $MCP_SERVER_DIR && npm install onnxruntime-node@<version> --save"
 fi
 
 echo ""

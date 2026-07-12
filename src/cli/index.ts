@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import { Command } from 'commander';
 import { setup } from './commands/setup';
+import { uninstall } from './commands/uninstall';
 import { status } from './commands/status';
 import { summarize } from './commands/summarize';
 import { rules } from './commands/rules';
@@ -17,6 +18,11 @@ program
   .description('Install and configure AutoImprove MCP server and skills')
   .option('--force', 'Force reinstall even if already configured')
   .action(setup);
+
+program
+  .command('uninstall')
+  .description('Remove AutoImprove configuration while preserving personal data (rules, sessions)')
+  .action(uninstall);
 
 program
   .command('status')
