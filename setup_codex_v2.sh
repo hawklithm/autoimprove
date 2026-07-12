@@ -104,6 +104,16 @@ backup_file() {
     fi
 }
 
+confirm() {
+    local prompt="$1"
+    local reply
+    read -r -p "$prompt [y/N] " reply
+    case "$reply" in
+        [yY]|[yY][eE][sS]) return 0 ;;
+        *) return 1 ;;
+    esac
+}
+
 # ============================================================================
 # Main Installation
 # ============================================================================
@@ -490,6 +500,37 @@ else
 fi
 
 # ============================================================================
+# Optional: ONNX Local Model Deployment
+# ============================================================================
+
+print_section "ONNX 本地小模型部署（可选）"
+
+echo ""
+echo "AutoImprove 支持使用 ONNX 本地小模型提升语义表示的准确率，"
+echo "特别适合中英混写、跨语言场景下的信号匹配和聚类。"
+echo ""
+echo "安装内容包括："
+echo "  • onnxruntime-node — Node.js ONNX 推理运行时（约 30MB）"
+echo "  • bge-small-zh ONNX 量化模型 — 轻量中文语义模型（约 30MB）"
+echo ""
+echo "注意："
+echo "  • ONNX 为可选增强，不安装不影响核心功能（自动使用零依赖的 char-ngram-tfidf）"
+echo "  • 安装后需手动在 config.json 中设置 embedding_backend: \"onnx-local\" 才生效"
+echo "  • 首次加载模型约 1-3 秒，后续推理约 10-50ms（纯 CPU）"
+echo ""
+if confirm "是否安装 ONNX 本地小模型？（推荐）"; then
+    echo ""
+    echo "正在执行 ONNX 部署脚本..."
+    bash "$SCRIPT_DIR/scripts/install-onnx-models.sh" --force
+    echo ""
+    print_success "ONNX 部署完成"
+else
+    print_warning "跳过 ONNX 安装"
+    echo "您可以稍后随时运行以下命令安装："
+    echo "  bash $SCRIPT_DIR/scripts/install-onnx-models.sh"
+fi
+
+# ============================================================================
 # Final Summary
 # ============================================================================
 
@@ -511,6 +552,15 @@ echo "Usage Examples:"
 echo "  • 'Search for memory leak patterns'"
 echo "  • 'Analyze my recent coding sessions'"
 echo "  • 'What rules exist for error handling?'"
+echo ""
+echo "ONNX (optional):"
+if [ -f "$MCP_SERVER_DIR/node_modules/onnxruntime-node/package.json" ]; then
+    echo "  ✓ onnxruntime-node installed"
+fi
+if [ -f "$HOME/.autoimprove/models/bge-small-zh.onnx" ]; then
+    echo "  ✓ ONNX model: ~/.autoimprove/models/bge-small-zh.onnx"
+fi
+echo "  To enable: set embedding_backend: \"onnx-local\" in ~/.autoimprove/config.json"
 echo ""
 echo "Documentation:"
 echo "  • Skill Guide: $SKILL_FILE"

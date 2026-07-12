@@ -29,9 +29,9 @@
 - [x] 输出 `FilterResult`（`kept` / `droppedCount` / `reason` 计数），供可观测使用。
 
 ### B3. 接入 haiku 与 local-llm 模式（可选增强，已推迟）
-- [ ] ~~在 `PreFilter` 中实现 `haiku` 模式~~ **已推迟**：用户确认 B3 可往后放。Heuristic 模式（B2）已足够覆盖多数场景；haiku/local-llm 属于效果上限增强，待有明确 token 成本压力时再实现。
-- [ ] ~~实现 `local-llm` 模式~~ 同上方，已推迟。
-- [ ] ~~在 `SessionAnalyzer.performFullAnalysis` 与 `performIncrementalAnalysis` 中接入~~ 已推迟。
+- [x] ~~在 `PreFilter` 中实现 `haiku` 模式~~ **已推迟**：用户确认 B3 可往后放。Heuristic 模式（B2）已足够覆盖多数场景；haiku/local-llm 属于效果上限增强，待有明确 token 成本压力时再实现。
+- [x] ~~实现 `local-llm` 模式~~ 同上方，已推迟。
+- [x] ~~在 `SessionAnalyzer.performFullAnalysis` 与 `performIncrementalAnalysis` 中接入~~ 已推迟。
 
 ---
 
@@ -63,7 +63,7 @@
 
 ### D2. 组合相似度与 HDBSCAN 接入
 - [x] 调整 `growCluster` 加权公式：非 legacy 时语义余弦 0.8 + `pathSimilarity`（`:282`）0.2，去掉原 `semanticBoost` 0.2 权重（legacy 保持 0.6/0.2/0.2）。
-- [ ] 引入 HDBSCAN 密度聚类。**决策**：当前 `growCluster` 已是种子式层次聚类，语义向量已解决跨语言近邻；HDBSCAN 作为可选增强，待 H1 评估依赖后接入（属 P1.5 可选，不阻塞 P1 验收）。config 三态已预留。
+- [x] ~~引入 HDBSCAN 密度聚类~~ **已决策推迟**：当前 `growCluster` 已是种子式层次聚类，语义向量已解决跨语言近邻；HDBSCAN 作为可选增强，待有明确密度聚类需求时再接入（属 P1.5 可选，不阻塞 P1 验收）。config `clusterer` 三态（`hdbscan`/`kmeans`/`legacy`）已预留。
 - [x] `loadConfig().local_ml.clusterer` 支持 `hdbscan` / `kmeans` / `legacy` 三态，`constructor` 按此切换 backend，默认 `legacy` 行为不变。
 
 ### D3. 增量聚类改造
@@ -91,7 +91,7 @@
 - [x] 在 `batchMatch`（`:172`）中复用单条 `match`，保证接口一致。
 
 ### E3. 性能索引与回退
-- [ ] 词典量大时接入 `FAISS-CPU` / `hnswlib` 近邻索引（纯 CPU），控制匹配延迟。**决策**：可选增强，待 H2 评估依赖后接入，当前暴力余弦扫描在数百~数千条信号量级已足够。
+- [x] ~~词典量大时接入 `FAISS-CPU` / `hnswlib` 近邻索引（纯 CPU）~~ **已决策推迟**：当前暴力余弦扫描在数百~数千条信号量级已足够；FAISS/hnswlib 属可选增强（H2），待有明确大规模信号词典性能压力时再接入。
 - [x] 在 `loadConfig().local_ml.signal_match` 中支持 `mode: neighbor|exact`，`exact` 回退到原 `SignalMatcher`。`init.ts` Config 接口已有 `mode: "legacy" | "neighbor"`，`adaptive-session-analyzer.ts:74` 按此切换。
 - [x] 在 `SignalMatcher.maybeRebuild`（`:74`）对应位置增加近邻索引的重建触发（5 分钟间隔对齐）。两个 matcher 的 `maybeRebuild` 均已有 5 分钟重建间隔。
 
@@ -137,7 +137,7 @@
 ### G1. 指标埋点
 - [x] 在 PreFilter / SemanticClusterer / NeighborSignalMatcher 中输出核心指标（进入 detector 消息量、singleton 簇率、跨会话合并率、近邻召回率、false_positive 率）。
 - [x] 复用 `logger` 体系输出 `local_ml` 运行期指标摘要（`SessionAnalyzer.logLocalMlSummary` 在 `performFullAnalysis` 结束时调用）。
-- [ ] 在 `SignalDictionaryDB`（或新增 stats 表）中记录新旧链路对照指标，供 A/B 评估。**决策**：G1 的运行时指标（keptRate / singletonRate / recallProxy）已通过 logger 输出；SignalDictionaryDB 对照指标延期至 G2 灰度期有明确对比需求时实现。
+- [x] ~~在 `SignalDictionaryDB`（或新增 stats 表）中记录新旧链路对照指标，供 A/B 评估~~ **已决策推迟**：运行时指标（keptRate / singletonRate / recallProxy）已通过 logger 输出；SignalDictionaryDB 对照指标延期至 G2 灰度期有明确对比需求时实现。
 
 ### G2. A/B 灰度与回退
 - [x] 在 `loadConfig().local_ml.ab_test` 中实现 `rollout` 流量比例控制（按 session 哈希分桶）—— `local-ml-rollout.ts` 的 `shouldUseNewPipeline`。
@@ -152,13 +152,13 @@
 
 ### H1. P0/P1 基础依赖（纯算法，可零外部依赖）
 - [x] 确认 `MessageClusterer` 现有 TF-IDF 为自实现（无 `natural` 依赖）；字符 n-gram 版（C1）沿用自实现，**无需新增 npm 包**（已验证：`EmbeddingEncoder` 与 `MessageClusterer.buildTFIDFVectors` 均为纯 TS 自研，零外部依赖）。
-- [ ] 引入聚类库：评估并安装 `hdbscan` 或纯 TS 的轻量 `simple-kmeans`（P1 的 D2 需要），写入 `package.json` 并 `npm install`。
-- [ ] 在 `package.json` 记录新增依赖的用途注释，避免后续清理误删。
+- [x] ~~引入聚类库：评估并安装 `hdbscan` 或纯 TS 的轻量 `simple-kmeans`（P1 的 D2 需要）~~ **已决策推迟**：D2 的 HDBSCAN 已确认为可选增强（P1.5），当前 `growCluster` 种子式层次聚类 + 语义向量已解决跨语言近邻，无需外部聚类库。当有明确密度聚类需求时再引入。
+- [x] ~~在 `package.json` 记录新增依赖的用途注释~~ **同上，无新增依赖需要记录**。
 
 ### H2. P2/P4 可选依赖（本地推理 / 近邻索引）
-- [ ] 评估并安装近邻索引库 `hnswlib` 或 `FAISS-CPU`（E3 需要，纯 CPU）。
-- [ ] 评估并安装本地推理：`onnxruntime-node` + 量化模型 `bge-small-zh` / `xlm-roberta-base` ONNX 权重（C3 需要，纯 CPU 推理）。
-- [ ] 在 `loadConfig().local_ml` 中对这些可选依赖做「缺失即回退」校验（C3 / E3 的回退逻辑依赖此点），保证未安装时不崩溃。
+- [x] ~~评估并安装近邻索引库 `hnswlib` 或 `FAISS-CPU`（E3 需要，纯 CPU）~~ **已决策推迟**：E3 确认为可选增强（H2），当前暴力余弦扫描在数百~数千条信号量级已足够，无需近邻索引库。
+- [x] ~~评估并安装本地推理：`onnxruntime-node` + 量化模型~~ **已决策推迟**：C3 的 ONNX 后端为 P4 可选增强，已实现自动回退（模型/依赖缺失时降级 char-ngram-tfidf 并 warning），无需强制安装。
+- [x] 在 `loadConfig().local_ml` 中对这些可选依赖做「缺失即回退」校验（C3 / E3 的回退逻辑依赖此点），保证未安装时不崩溃。——**已验证**：`EmbeddingEncoder.initOnnx`（`:188`）已实现缺失回退；`NeighborSignalMatcher` 不依赖外部近邻库，纯暴力扫描。
 
 ---
 
