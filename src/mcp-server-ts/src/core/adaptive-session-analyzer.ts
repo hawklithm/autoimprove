@@ -8,6 +8,8 @@ import { ConfidenceCalculator } from "./confidence.js";
 import { SessionCacheManager } from "../storage/session-cache.js";
 import { CompactCacheManager } from "../storage/compact-cache.js";
 import { SignalMatcher, MatchResult } from "./signal-matcher.js";
+import { NeighborSignalMatcher } from "./neighbor-signal-matcher.js";
+import { loadConfig } from "../storage/init.js";
 import { LLMSignalExtractor } from "./llm-signal-extractor.js";
 import { BayesianConfidenceUpdater } from "./bayesian-confidence-updater.js";
 import { PatternClusterer } from "./pattern-clusterer.js";
@@ -52,7 +54,7 @@ export class AdaptiveSessionAnalyzer {
   private confidenceCalc: ConfidenceCalculator;
   private cacheManager: SessionCacheManager;
   private compactCache: CompactCacheManager;
-  private signalMatcher: SignalMatcher;
+  private signalMatcher: SignalMatcher | NeighborSignalMatcher;
   private signalExtractor: LLMSignalExtractor;
   private confidenceUpdater: BayesianConfidenceUpdater;
   private clusterer: PatternClusterer;
@@ -64,7 +66,15 @@ export class AdaptiveSessionAnalyzer {
     this.confidenceCalc = new ConfidenceCalculator();
     this.cacheManager = new SessionCacheManager();
     this.compactCache = new CompactCacheManager();
-    this.signalMatcher = new SignalMatcher();
+    // E0: choose matcher by local_ml.signal_match.mode. "neighbor" uses the
+    // semantic EmbeddingEncoder-based NeighborSignalMatcher; "legacy" (or unset)
+    // keeps the original Aho-Corasick SignalMatcher. Both expose identical
+    // match/batchMatch/rebuild/getStats/close surfaces, so the rest of this
+    // class is matcher-agnostic.
+    const signalMode = loadConfig().local_ml?.signal_match?.mode ?? "legacy";
+    this.signalMatcher = signalMode === "neighbor"
+      ? new NeighborSignalMatcher()
+      : new SignalMatcher();
     this.signalExtractor = new LLMSignalExtractor();
     this.confidenceUpdater = new BayesianConfidenceUpdater();
     this.clusterer = new PatternClusterer();
