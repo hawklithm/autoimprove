@@ -252,6 +252,57 @@ case "$MODE" in
     ;;
 esac
 
+# ============================================================================
+# 公共逻辑：重启 MCP Server
+# ============================================================================
+
+echo ""
+echo -e "${BLUE}=== 重启 MCP Server ===${NC}"
+echo ""
+
+# 停掉旧进程
+AUTOIMPROVE_PIDS=$(pgrep -f "$MCP_SERVER_DIR/dist/index.js" 2>/dev/null || true)
+if [ -n "$AUTOIMPROVE_PIDS" ]; then
+  echo "Stopping old autoimprove MCP processes: $AUTOIMPROVE_PIDS"
+  for pid in $AUTOIMPROVE_PIDS; do
+    kill $pid 2>/dev/null || true
+  done
+  sleep 2
+  REMAINING=$(pgrep -f "$MCP_SERVER_DIR/dist/index.js" 2>/dev/null || true)
+  if [ -n "$REMAINING" ]; then
+    kill -9 $REMAINING 2>/dev/null || true
+    sleep 1
+  fi
+  echo -e "${GREEN}✓${NC} Stopped old MCP processes"
+else
+  echo "  No running autoimprove MCP processes found"
+fi
+
+# 如果是 Claude 模式，重新注册 MCP Server 以强制加载
+if [ "$MODE" = "all" ] || [ "$MODE" = "claude" ]; then
+  if command -v claude &> /dev/null; then
+    echo "Re-registering MCP server for Claude Code..."
+    claude mcp remove autoimprove-core -s user 2>/dev/null || true
+    sleep 0.5
+    claude mcp add autoimprove-core -s user -- node "$MCP_SERVER_DIR/dist/index.js" 2>/dev/null
+    if [ $? -eq 0 ]; then
+      echo -e "${GREEN}✓${NC} MCP server re-registered"
+    fi
+
+    # 停掉 MCP host 进程
+    MCP_HOST_PIDS=$(pgrep -f "node.*mcp.*host" 2>/dev/null || true)
+    if [ -n "$MCP_HOST_PIDS" ]; then
+      for pid in $MCP_HOST_PIDS; do
+        kill $pid 2>/dev/null || true
+      done
+      sleep 1
+    fi
+  fi
+fi
+
+echo ""
+echo -e "${GREEN}✓ MCP server restart complete${NC}"
+
 echo ""
 echo "=========================================="
 echo -e "${GREEN}Setup completed!${NC}"

@@ -128,65 +128,6 @@ if grep -q "autoimprove-feedback-instructions.md" "$GLOBAL_CLAUDE_MD" 2>/dev/nul
   mv "${GLOBAL_CLAUDE_MD}.tmp" "$GLOBAL_CLAUDE_MD"
   echo -e "${GREEN}✓${NC} Removed obsolete feedback instructions reference"
 fi
-
-echo ""
-
-echo -e "${BLUE}--- Claude Code: MCP Server 进程管理 ---${NC}"
-
-# 停掉旧进程
-AUTOIMPROVE_PIDS=$(pgrep -f "$MCP_SERVER_DIR/dist/index.js" 2>/dev/null || true)
-if [ -n "$AUTOIMPROVE_PIDS" ]; then
-  echo "Stopping old autoimprove MCP processes: $AUTOIMPROVE_PIDS"
-  for pid in $AUTOIMPROVE_PIDS; do
-    kill $pid 2>/dev/null || true
-  done
-  sleep 2
-  REMAINING=$(pgrep -f "$MCP_SERVER_DIR/dist/index.js" 2>/dev/null || true)
-  if [ -n "$REMAINING" ]; then
-    kill -9 $REMAINING 2>/dev/null || true
-    sleep 1
-  fi
-  echo -e "${GREEN}✓${NC} Stopped old MCP processes"
-else
-  echo "  No running autoimprove MCP processes found"
-fi
-
-# 重新注册 MCP Server 以强制 Claude Code 重新加载
-claude mcp remove autoimprove-core -s user 2>/dev/null || true
-sleep 0.5
-claude mcp add autoimprove-core -s user -- node "$MCP_SERVER_DIR/dist/index.js" 2>/dev/null
-
-if [ $? -eq 0 ]; then
-  echo -e "${GREEN}✓${NC} MCP server re-registered"
-else
-  echo -e "${YELLOW}⚠${NC} MCP server re-registration warning (normal if server is starting)"
-fi
-
-# 停掉 MCP host 进程
-MCP_HOST_PIDS=$(pgrep -f "node.*mcp.*host" 2>/dev/null || true)
-if [ -n "$MCP_HOST_PIDS" ]; then
-  for pid in $MCP_HOST_PIDS; do
-    kill $pid 2>/dev/null || true
-  done
-  echo -e "${GREEN}✓${NC} Stopped MCP host processes"
-  sleep 1
-fi
-
-echo ""
-
-echo -e "${BLUE}--- Claude Code: 验证 ---${NC}"
-
-SERVER_STATUS=$(claude mcp get autoimprove-core 2>&1)
-if echo "$SERVER_STATUS" | grep -q "✓ Connected"; then
-  echo -e "${GREEN}✓${NC} MCP server is connected and ready"
-elif echo "$SERVER_STATUS" | grep -q "autoimprove-core"; then
-  echo -e "${GREEN}✓${NC} MCP server configuration exists"
-  echo "  (Server will start when you use Claude Code)"
-else
-  echo -e "${YELLOW}⚠${NC} Could not verify MCP server status"
-  echo "  Run 'claude mcp list' to check manually"
-fi
-
 echo ""
 echo -e "${GREEN}✓ Claude Code setup complete${NC}"
 echo ""
