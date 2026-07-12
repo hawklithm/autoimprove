@@ -1,10 +1,11 @@
 #!/bin/bash
 # AutoImprove Setup Script for Codex
-# Configures MCP Server and Skills following Codex best practices
+# 只包含 Codex 特有的初始化逻辑
+# 公共逻辑（MCP Server 构建、存储目录、ONNX 部署等）由 setup.sh 统一处理
+
 set -e
 
 # Colors
-RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
@@ -24,223 +25,26 @@ OPENAI_YAML="$AGENTS_DIR/openai.yaml"
 TEMPLATES_DIR="$SCRIPT_DIR/templates"
 GUIDANCE_TEMPLATE="$TEMPLATES_DIR/claude-guidance-template.md"
 
-# Version requirements
-MIN_NODE_VERSION="18.0.0"
-
 # ============================================================================
-# Helper Functions
+# 1. 创建 Codex 目录结构
 # ============================================================================
 
-print_header() {
-    echo ""
-    echo "=========================================="
-    echo "$1"
-    echo "=========================================="
-    echo ""
-}
-
-print_section() {
-    echo ""
-    echo -e "${CYAN}▶ $1${NC}"
-}
-
-print_success() {
-    echo -e "${GREEN}✓${NC} $1"
-}
-
-print_warning() {
-    echo -e "${YELLOW}⚠${NC} $1"
-}
-
-print_error() {
-    echo -e "${RED}✗${NC} $1"
-}
-
-check_command() {
-    if command -v "$1" &> /dev/null; then
-        print_success "$1 found"
-        return 0
-    else
-        print_error "$1 not found"
-        return 1
-    fi
-}
-
-version_compare() {
-    # Compare two semantic versions
-    # Returns 0 if $1 >= $2, 1 otherwise
-    local ver1=$1
-    local ver2=$2
-    
-    # Remove 'v' prefix if present
-    ver1=${ver1#v}
-    ver2=${ver2#v}
-    
-    # Split versions into arrays
-    IFS='.' read -ra V1 <<< "$ver1"
-    IFS='.' read -ra V2 <<< "$ver2"
-    
-    # Compare each component
-    for i in {0..2}; do
-        local v1=${V1[$i]:-0}
-        local v2=${V2[$i]:-0}
-        
-        if [ "$v1" -gt "$v2" ]; then
-            return 0
-        elif [ "$v1" -lt "$v2" ]; then
-            return 1
-        fi
-    done
-    
-    return 0
-}
-
-backup_file() {
-    local file=$1
-    if [ -f "$file" ]; then
-        local backup="${file}.backup.$(date +%Y%m%d_%H%M%S)"
-        cp "$file" "$backup"
-        print_success "Backed up: $backup"
-    fi
-}
-
-confirm() {
-    local prompt="$1"
-    local reply
-    read -r -p "$prompt [y/N] " reply
-    case "$reply" in
-        [yY]|[yY][eE][sS]) return 0 ;;
-        *) return 1 ;;
-    esac
-}
-
-# ============================================================================
-# Main Installation
-# ============================================================================
-
-print_header "AutoImprove Setup for Codex"
-
-# Check Codex CLI
-print_section "Checking prerequisites..."
-if ! check_command codex; then
-    print_warning "Codex CLI not found. Install from: https://github.com/openai/codex-cli"
-    echo "Setup will continue, but you'll need Codex to use AutoImprove."
-    echo ""
-fi
-
-# Check Node.js
-if ! check_command node; then
-    print_error "Node.js is required but not found"
-    echo "Install Node.js from: https://nodejs.org/"
-    exit 1
-fi
-
-# Check Node.js version
-NODE_VERSION=$(node -v)
-if ! version_compare "$NODE_VERSION" "$MIN_NODE_VERSION"; then
-    print_error "Node.js version $MIN_NODE_VERSION or higher required (found: $NODE_VERSION)"
-    exit 1
-fi
-print_success "Node.js $NODE_VERSION (meets minimum $MIN_NODE_VERSION)"
-
-# Check npm
-if ! check_command npm; then
-    print_error "npm is required but not found"
-    exit 1
-fi
-
-# Check template file exists
-if [ ! -f "$GUIDANCE_TEMPLATE" ]; then
-    print_error "Guidance template not found: $GUIDANCE_TEMPLATE"
-    echo "Please ensure templates/claude-guidance-template.md exists"
-    exit 1
-fi
-print_success "Guidance template found"
-
-# ============================================================================
-# Create Directory Structure
-# ============================================================================
-
-print_section "Creating directory structure..."
+echo -e "${BLUE}--- Codex: 创建目录结构 ---${NC}"
 mkdir -p "$CODEX_DIR"
 mkdir -p "$SKILL_DIR"
 mkdir -p "$AGENTS_DIR"
-mkdir -p "$AUTOIMPROVE_DIR"
-mkdir -p "$AUTOIMPROVE_DIR/rules/content"
-mkdir -p "$AUTOIMPROVE_DIR/sessions"
-mkdir -p "$AUTOIMPROVE_DIR/cache"
-mkdir -p "$AUTOIMPROVE_DIR/logs"
-print_success "Directories created"
+echo -e "${GREEN}✓${NC} Directories created"
+
+echo ""
 
 # ============================================================================
-# Initialize Storage Backend
+# 2. 配置 Codex MCP Server（写入 mcp_settings.json）
 # ============================================================================
 
-print_section "Initializing storage backend..."
-DB_PATH="$AUTOIMPROVE_DIR/rules.db"
-INDEX_PATH="$AUTOIMPROVE_DIR/rules/index.json"
+echo -e "${BLUE}--- Codex: 配置 MCP Server ---${NC}"
 
-if [ -f "$DB_PATH" ]; then
-    print_success "SQLite storage detected"
-    STORAGE_BACKEND="sqlite"
-elif [ -f "$INDEX_PATH" ]; then
-    print_warning "JSON storage detected - migration to SQLite recommended"
-    STORAGE_BACKEND="json"
-    echo "  Migration will happen automatically on first MCP server start"
-else
-    print_success "Initializing new SQLite storage"
-    STORAGE_BACKEND="sqlite"
-    # Create empty index for fallback compatibility
-    echo '{"version":"1.0","rules":[]}' > "$INDEX_PATH"
-fi
-
-# ============================================================================
-# Build MCP Server
-# ============================================================================
-
-print_section "Building MCP server..."
-cd "$MCP_SERVER_DIR"
-
-if [ ! -f "package.json" ]; then
-    print_error "MCP server package.json not found"
-    exit 1
-fi
-
-# Install dependencies
-print_success "Installing dependencies..."
-npm install --silent
-
-# Ensure better-sqlite3 is installed
-if ! npm list better-sqlite3 --depth=0 &> /dev/null; then
-    print_warning "Installing better-sqlite3..."
-    npm install better-sqlite3
-fi
-
-# Build TypeScript
-if [ ! -f "dist/index.js" ] || [ "src/index.ts" -nt "dist/index.js" ]; then
-    print_success "Building TypeScript..."
-    npm run build
-else
-    print_success "MCP server already built"
-fi
-
-cd "$SCRIPT_DIR"
-
-# ============================================================================
-# Configure MCP Server
-# ============================================================================
-
-print_section "Configuring MCP server..."
-
-# Backup existing config
-if [ -f "$MCP_SETTINGS_FILE" ]; then
-    backup_file "$MCP_SETTINGS_FILE"
-fi
-
-# Detect current project root
 PROJECT_ROOT=$(pwd)
 
-# Create MCP settings with proper environment variables
 cat > "$MCP_SETTINGS_FILE" << EOF
 {
   "mcpServers": {
@@ -249,7 +53,6 @@ cat > "$MCP_SETTINGS_FILE" << EOF
       "args": ["$MCP_SERVER_DIR/dist/index.js"],
       "env": {
         "AUTOIMPROVE_HOME": "$AUTOIMPROVE_DIR",
-        "AUTOIMPROVE_STORAGE_BACKEND": "$STORAGE_BACKEND",
         "AUTOIMPROVE_LOG_LEVEL": "info",
         "AUTOIMPROVE_LOG_PATH": "$AUTOIMPROVE_DIR/logs/mcp-server.log",
         "GIT_REPO_ROOT": "$PROJECT_ROOT"
@@ -258,13 +61,15 @@ cat > "$MCP_SETTINGS_FILE" << EOF
   }
 }
 EOF
-print_success "MCP settings created: $MCP_SETTINGS_FILE"
+echo -e "${GREEN}✓${NC} MCP settings created: $MCP_SETTINGS_FILE"
+
+echo ""
 
 # ============================================================================
-# Create Skill File (SKILL.md)
+# 3. 创建 Codex Skill（SKILL.md）
 # ============================================================================
 
-print_section "Creating AutoImprove skill..."
+echo -e "${BLUE}--- Codex: 创建 Skill ---${NC}"
 
 cat > "$SKILL_FILE" << 'EOF'
 ---
@@ -435,13 +240,15 @@ This skill prioritizes actionable guidance over exhaustive documentation. The MC
 - Incremental analysis minimizes redundant processing
 EOF
 
-print_success "Skill file created: $SKILL_FILE"
+echo -e "${GREEN}✓${NC} Skill file created: $SKILL_FILE"
+
+echo ""
 
 # ============================================================================
-# Create UI Metadata (agents/openai.yaml)
+# 4. 创建 UI 元数据（agents/openai.yaml）
 # ============================================================================
 
-print_section "Creating UI metadata..."
+echo -e "${BLUE}--- Codex: 创建 UI 元数据 ---${NC}"
 
 cat > "$OPENAI_YAML" << 'EOF'
 display_name: AutoImprove
@@ -449,123 +256,25 @@ short_description: Learn from patterns, prevent recurring issues
 default_prompt: Search for coding patterns and best practices relevant to my current task
 EOF
 
-print_success "UI metadata created: $OPENAI_YAML"
+echo -e "${GREEN}✓${NC} UI metadata created: $OPENAI_YAML"
+
+echo ""
 
 # ============================================================================
-# Install Guidance Template (Optional for Codex)
+# 5. 复制 Guidance 模板到存储目录（Codex 用不到但兼容 Claude）
 # ============================================================================
 
-print_section "Installing guidance template..."
+echo -e "${BLUE}--- Codex: 复制 Guidance 模板 ---${NC}"
 
-# Note: Codex doesn't use guidance.md the same way Claude does
-# But we'll copy it to ~/.autoimprove for reference and future use
 AUTOIMPROVE_GUIDANCE="$AUTOIMPROVE_DIR/guidance.md"
-
 if [ -f "$GUIDANCE_TEMPLATE" ]; then
     cp "$GUIDANCE_TEMPLATE" "$AUTOIMPROVE_GUIDANCE"
-    print_success "Guidance template copied to: $AUTOIMPROVE_GUIDANCE"
-    print_warning "Note: Codex uses skill-based prompting, not guidance.md"
-    echo "  The guidance is stored for reference and Claude Code compatibility"
+    echo -e "${GREEN}✓${NC} Guidance template copied to: $AUTOIMPROVE_GUIDANCE"
 else
-    print_warning "Guidance template not found, skipping"
+    echo -e "${YELLOW}⚠${NC} Guidance template not found, skipping"
 fi
 
-# ============================================================================
-# Verify Installation
-# ============================================================================
-
-print_section "Verifying installation..."
-
-# Check MCP server can start
-echo "Testing MCP server startup..."
-timeout 5 node "$MCP_SERVER_DIR/dist/index.js" <<< '{"jsonrpc":"2.0","method":"initialize","params":{},"id":1}' > /dev/null 2>&1
-if [ $? -eq 0 ] || [ $? -eq 124 ]; then
-    print_success "MCP server can start"
-else
-    print_warning "MCP server test inconclusive (may need environment setup)"
-fi
-
-# Check file permissions
-if [ -r "$SKILL_FILE" ] && [ -r "$MCP_SETTINGS_FILE" ]; then
-    print_success "Configuration files readable"
-else
-    print_error "Configuration files not readable"
-fi
-
-# Check storage directory writable
-if [ -w "$AUTOIMPROVE_DIR" ]; then
-    print_success "Storage directory writable"
-else
-    print_error "Storage directory not writable: $AUTOIMPROVE_DIR"
-fi
-
-# ============================================================================
-# Optional: ONNX Local Model Deployment
-# ============================================================================
-
-print_section "ONNX 本地小模型部署（可选）"
-
 echo ""
-echo "AutoImprove 支持使用 ONNX 本地小模型提升语义表示的准确率，"
-echo "特别适合中英混写、跨语言场景下的信号匹配和聚类。"
-echo ""
-echo "安装内容包括："
-echo "  • onnxruntime-node — Node.js ONNX 推理运行时（约 30MB）"
-echo "  • bge-small-zh ONNX 量化模型 — 轻量中文语义模型（约 30MB）"
-echo ""
-echo "注意："
-echo "  • ONNX 为可选增强，不安装不影响核心功能（自动使用零依赖的 char-ngram-tfidf）"
-echo "  • 安装后需手动在 config.json 中设置 embedding_backend: \"onnx-local\" 才生效"
-echo "  • 首次加载模型约 1-3 秒，后续推理约 10-50ms（纯 CPU）"
-echo ""
-if confirm "是否安装 ONNX 本地小模型？（推荐）"; then
-    echo ""
-    echo "正在执行 ONNX 部署脚本..."
-    bash "$SCRIPT_DIR/scripts/install-onnx-models.sh" --force
-    echo ""
-    print_success "ONNX 部署完成"
-else
-    print_warning "跳过 ONNX 安装"
-    echo "您可以稍后随时运行以下命令安装："
-    echo "  bash $SCRIPT_DIR/scripts/install-onnx-models.sh"
-fi
 
-# ============================================================================
-# Final Summary
-# ============================================================================
-
-print_header "Setup Complete!"
-
-echo "Configuration:"
-echo "  • Skill: $SKILL_FILE"
-echo "  • MCP Settings: $MCP_SETTINGS_FILE"
-echo "  • UI Metadata: $OPENAI_YAML"
-echo "  • Storage: $AUTOIMPROVE_DIR ($STORAGE_BACKEND backend)"
-echo "  • Guidance: $AUTOIMPROVE_GUIDANCE (reference only)"
-echo ""
-echo "Next Steps:"
-echo "  1. Restart Codex CLI to load the skill"
-echo "  2. Verify with: codex --list-skills"
-echo "  3. Test search: Start Codex and ask to search patterns"
-echo ""
-echo "Usage Examples:"
-echo "  • 'Search for memory leak patterns'"
-echo "  • 'Analyze my recent coding sessions'"
-echo "  • 'What rules exist for error handling?'"
-echo ""
-echo "ONNX (optional):"
-if [ -f "$MCP_SERVER_DIR/node_modules/onnxruntime-node/package.json" ]; then
-    echo "  ✓ onnxruntime-node installed"
-fi
-if [ -f "$HOME/.autoimprove/models/bge-small-zh.onnx" ]; then
-    echo "  ✓ ONNX model: ~/.autoimprove/models/bge-small-zh.onnx"
-fi
-echo "  To enable: set embedding_backend: \"onnx-local\" in ~/.autoimprove/config.json"
-echo ""
-echo "Documentation:"
-echo "  • Skill Guide: $SKILL_FILE"
-echo "  • Project Docs: $SCRIPT_DIR/README.md"
-echo "  • MCP Logs: $AUTOIMPROVE_DIR/logs/mcp-server.log"
-echo ""
-echo -e "${GREEN}AutoImprove is ready to use!${NC}"
+echo -e "${GREEN}✓ Codex setup complete${NC}"
 echo ""
