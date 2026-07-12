@@ -35,9 +35,21 @@ PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 MCP_SERVER_DIR="$PROJECT_ROOT/src/mcp-server-ts"
 MODEL_DIR="$HOME/.autoimprove/models"
 MODEL_NAME="bge-small-zh.onnx"
-MODEL_URL="https://huggingface.co/moka-ai/m3e-small/resolve/main/onnx/model.onnx"
-# 使用 m3e-small 的 ONNX 版本作为替代（约 30MB，效果接近 bge-small-zh）
-# 如无法访问 huggingface，可配置镜像源
+# 模型下载源（按优先级尝试）：
+#   1. huggingface.co — 官方源（需能访问 huggingface）
+#   2. hf-mirror.com — 国内镜像
+#
+# 使用 Xenova 社区维护的 ONNX 量化版本（基于 BAAI/bge-small-zh-v1.5，MIT 协议）
+# 量化后约 24MB，适合纯 CPU 推理
+MODEL_URLS=(
+  "https://huggingface.co/Xenova/bge-small-zh-v1.5/resolve/main/onnx/model_quantized.onnx"
+  "https://hf-mirror.com/Xenova/bge-small-zh-v1.5/resolve/main/onnx/model_quantized.onnx"
+)
+
+# 如遇网络问题，可配置代理（取消注释并设置正确的代理地址）：
+# export https_proxy=http://127.0.0.1:7897
+# export http_proxy=http://127.0.0.1:7897
+# export all_proxy=socks5://127.0.0.1:7897
 
 # Parse arguments
 MODE="${1:-interactive}"
@@ -231,31 +243,46 @@ if [ "$MODE" != "--dry-run" ]; then
         echo "目标: $MODEL_TARGET"
         echo ""
 
-        # Try multiple download methods
+        # Try multiple download sources with fallback mirrors
         DOWNLOAD_SUCCESS=false
 
-        # Method 1: curl (preferred)
-        if command -v curl &> /dev/null; then
-            echo "使用 curl 下载..."
-            if curl -L -o "$MODEL_TARGET" "$MODEL_URL" --progress-bar --connect-timeout 30 --max-time 300; then
-                DOWNLOAD_SUCCESS=true
+        for url in "${MODEL_URLS[@]}"; do
+            if [ "$DOWNLOAD_SUCCESS" = true ]; then
+                break
             fi
-        fi
 
-        # Method 2: wget fallback
-        if [ "$DOWNLOAD_SUCCESS" = false ] && command -v wget &> /dev/null; then
-            echo "使用 wget 下载..."
-            if wget -O "$MODEL_TARGET" "$MODEL_URL" -q --show-progress --timeout=30; then
-                DOWNLOAD_SUCCESS=true
+            echo "尝试下载源: $url"
+
+            # Method 1: curl (preferred)
+            if command -v curl &> /dev/null; then
+                echo "使用 curl 下载..."
+                if curl -L -o "$MODEL_TARGET" "$url" --progress-bar --connect-timeout 30 --max-time 300; then
+                    DOWNLOAD_SUCCESS=true
+                    break
+                fi
             fi
-        fi
+
+            # Method 2: wget fallback
+            if [ "$DOWNLOAD_SUCCESS" = false ] && command -v wget &> /dev/null; then
+                echo "使用 wget 下载..."
+                if wget -O "$MODEL_TARGET" "$url" -q --show-progress --timeout=30; then
+                    DOWNLOAD_SUCCESS=true
+                    break
+                fi
+            fi
+
+            if [ "$DOWNLOAD_SUCCESS" = false ]; then
+                echo "  ⚠ 从 $url 下载失败，尝试下一个源..."
+            fi
+        done
 
         if [ "$DOWNLOAD_SUCCESS" = true ]; then
-            # Verify file size (should be > 10MB for a real model)
+            # Verify file size (quantized model is ~24MB, threshold > 1MB)
             FILE_SIZE=$(stat -f%z "$MODEL_TARGET" 2>/dev/null || stat -c%s "$MODEL_TARGET" 2>/dev/null || echo 0)
             if [ "$FILE_SIZE" -lt 10000000 ]; then
                 print_warning "模型文件大小异常（${FILE_SIZE} bytes），可能下载不完整"
                 echo "EmbeddingEncoder 会检测到问题并自动回退。"
+                DOWNLOAD_SUCCESS=false
             else
                 print_success "模型下载成功！($(( FILE_SIZE / 1024 / 1024 ))MB)"
             fi
@@ -269,8 +296,13 @@ if [ "$MODE" != "--dry-run" ]; then
             echo "您可以稍后手动下载模型并放置到:"
             echo "  $MODEL_TARGET"
             echo ""
-            echo "参考命令："
-            echo "  curl -L -o \"$MODEL_TARGET\" \"$MODEL_URL\""
+            echo "参考命令（需要能访问 huggingface.co）："
+            echo "  curl -L -o \"$MODEL_TARGET\" \"${MODEL_URLS[0]}\""
+            echo ""
+            echo "如无法直接访问，可配置代理："
+            echo "  export https_proxy=http://127.0.0.1:7897"
+            echo "  export http_proxy=http://127.0.0.1:7897"
+            echo "  export all_proxy=socks5://127.0.0.1:7897"
             echo ""
             echo "EmbeddingEncoder 会自动回退到 char-ngram-tfidf 模式。"
             exit 1
