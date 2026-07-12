@@ -44,13 +44,13 @@
 
 ### C2. 向量缓存（复用 compactCache 框架）
 - [x] 为向量空间引入 `version` 号（`EmbeddingEncoder.version`，encoder 后端变更时触发重编码）——**已实现字段**。
-- [ ] 在 `CompactCacheManager` 中增加向量缓存读写接口。**决策**：char-ngram 后端为无状态即时计算、且 `encodeBatch` 向量空间是 per-batch 对齐（索引不能跨批缓存），缓存收益低且会破坏对齐语义，故 **char-ngram 阶段暂缓实装磁盘缓存**；待 P4 引入 ONNX（昂贵推理）时再按设计 §3.4 接 compactCache。
-- [ ] 在 `EmbeddingEncoder` 中接入缓存：同上，留待 P4 ONNX 后端。
+- [x] 在 `EmbeddingEncoder` 中实现 `loadCache` / `saveCache` / `clearCache` 接口。向量持久化到 `~/.autoimprove/cache/embeddings/{sessionId}.embed.json`，携带 `version` + `backend` 签名，后端或版本变更时自动失效。
+- [x] 缓存生命周期与 session 分析对齐：`encodeBatch` 前先查缓存，miss 时编码并回写。
 
 ### C3. 可选 ONNX 本地小模型后端（效果上限）
-- [ ] 在 `EmbeddingEncoder` 中实现 `onnx-local` 后端：经 `onnxruntime-node` 加载量化 `bge-small-zh` / `xlm-roberta-base`，CPU 推理。
-- [ ] 实现模型惰性加载与进程级单例，控制首次加载开销与内存。
-- [ ] 在 `loadConfig().local_ml` 中补充 `onnx_model` 字段与可用性校验（缺失时回退 `char-ngram-tfidf`）。
+- [x] 在 `EmbeddingEncoder` 中实现 `onnx-local` 后端：惰性加载 `onnxruntime-node` InferenceSession（进程级单例），加载量化 ONNX 模型做 CPU 推理。
+- [x] 实现模型惰性加载与进程级单例，控制首次加载开销与内存。
+- [x] 在 `loadConfig().local_ml` 中补充 `onnx_model` 字段（已有）与可用性校验：模型文件不存在或 `onnxruntime-node` 未安装时自动回退 `char-ngram-tfidf` 并记录 warning。
 
 ---
 
