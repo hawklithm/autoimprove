@@ -451,6 +451,20 @@ export class SignalDictionaryDB {
     return stmt.all(signalId, limit) as SignalMatch[];
   }
 
+  /**
+   * Return the distinct signal texts matched within a session. Used by
+   * per-user personalization (F3) to fold a session's positive signals into a
+   * user centroid. Reuses the existing signal_matches + signals tables.
+   */
+  getSignalTextsBySession(sessionId: string): string[] {
+    const stmt = this.db.prepare(`
+      SELECT DISTINCT s.text FROM signal_matches sm
+      JOIN signals s ON s.id = sm.signal_id
+      WHERE sm.session_id = ?
+    `);
+    return (stmt.all(sessionId) as Array<{ text: string }>).map(r => r.text).filter(Boolean);
+  }
+
   // ============================================================================
   // Statistics
   // ============================================================================

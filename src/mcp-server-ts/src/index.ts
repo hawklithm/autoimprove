@@ -2399,6 +2399,22 @@ async function handleMarkSessionAnalyzed(args: any) {
     incremental: incrementalAnalysis || false,
   });
 
+  // F3: after a session is analyzed, incrementally update the user's
+  // personalization profile (centroid + thresholds) from this session's matched
+  // signals. Requires explicit user_id + enabled personalization; otherwise
+  // legacy behavior is preserved (no-op).
+  const userId = args.user_id as string | undefined;
+  if (userId && loadConfig().local_ml?.personalization?.enabled) {
+    try {
+      const positiveSignalTexts = _signalDB.getSignalTextsBySession(sessionId);
+      if (positiveSignalTexts.length > 0) {
+        adaptiveConfidence.recordSessionAnalyzed(userId, positiveSignalTexts);
+      }
+    } catch (err) {
+      logger.warn("personalization", `Failed to update profile for ${userId}`, { error: String(err) });
+    }
+  }
+
   return {
     content: [
       {

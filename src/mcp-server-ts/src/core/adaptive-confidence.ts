@@ -10,6 +10,8 @@ import { readFileSync, writeFileSync, existsSync, mkdirSync } from "fs";
 import { join } from "path";
 import { homedir } from "os";
 import { logger } from "./logger.js";
+import { Personalizer } from "./personalizer.js";
+import { loadConfig } from "../storage/init.js";
 
 export interface RuleFeedback {
   rule_id: string;
@@ -17,6 +19,8 @@ export interface RuleFeedback {
   feedback_type: "used" | "ignored" | "corrected" | "disabled";
   context?: string;
   user_rating?: number; // 1-5
+  user_id?: string;     // F1: associate feedback with a user for personalization
+  signal_text?: string; // F1: the signal text this feedback refers to (if any)
 }
 
 export interface UserWeights {
@@ -37,10 +41,12 @@ export class AdaptiveConfidenceCalculator {
   private userWeightsCache = new Map<string, UserWeights>();
   private feedbackHistory: RuleFeedback[] = [];
   private readonly TEMPORAL_DECAY_DAYS = 90; // Rules decay after 90 days of no use
+  private personalizer: Personalizer;
 
   constructor() {
     this.loadUserWeights();
     this.loadFeedbackHistory();
+    this.personalizer = new Personalizer();
   }
 
   private getStorageRoot(): string {
@@ -189,6 +195,28 @@ export class AdaptiveConfidenceCalculator {
   recordFeedback(feedback: RuleFeedback): void {
     this.feedbackHistory.push(feedback);
     this.saveFeedbackHistory();
+
+    // F1: associate feedback with its signal/user for per-user personalization.
+    // Reuses existing Personalizer (which persists user centroid + thresholds);
+    // no new DB tables are created. No-op when personalization is disabled.
+    const userId = feedback.user_id || "global";
+    if (loadConfig().local_ml?.personalization?.enabled) {
+      this.personalizer.recordFeedback(
+        userId,
+        feedback.feedback_type,
+        feedback.signal_text || feedback.context
+      );
+    }
+  }
+
+  /**
+   * F3: fold a session's positive signals into a user's personalization profile.
+   * Called after mark_session_analyzed. No-op when personalization is disabled.
+   */
+  recordSessionAnalyzed(userId: string, positiveSignalTexts: string[]): void {
+    if (loadConfig().local_ml?.personalization?.enabled && positiveSignalTexts.length > 0) {
+      this.personalizer.recordSessionAnalyzed(userId, positiveSignalTexts);
+    }
   }
 
   /**
