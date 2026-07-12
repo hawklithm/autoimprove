@@ -64,6 +64,7 @@ export interface Config {
       mode: "heuristic" | "haiku" | "local-llm";
     };
     clusterer: "legacy" | "hdbscan" | "kmeans";
+    pattern_clusterer?: "legacy" | "semantic"; // PatternClusterer (PatternSimilarityClusterer) semantic mode; defaults to "semantic" when clusterer != "legacy"
     signal_match: {
       mode: "legacy" | "neighbor";
       threshold: number;
@@ -110,6 +111,7 @@ const DEFAULT_CONFIG: Config = {
       mode: "heuristic",
     },
     clusterer: "legacy", // "legacy" = original word-level TF-IDF clustering (no behavior change)
+    pattern_clusterer: "legacy", // PatternSimilarityClusterer: "legacy" = keyword/text overlap; flip to "semantic" with clusterer
     signal_match: {
       mode: "legacy", // "legacy" = original Aho-Corasick exact matching
       threshold: 0.62,

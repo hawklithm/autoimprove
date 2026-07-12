@@ -4,6 +4,8 @@
 
 import { SignalDictionaryDB, LabeledContent } from "../storage/signal-dictionary-db.js";
 import { PatternType } from "./models.js";
+import { EmbeddingEncoder } from "./embedding-encoder.js";
+import { loadConfig } from "../storage/init.js";
 
 export interface PatternCluster {
   cluster_id: string;
@@ -27,10 +29,19 @@ interface ClusterFeatures {
 export class PatternClusterer {
   private db: SignalDictionaryDB;
   private similarityThreshold: number;
+  // When local_ml.pattern_clusterer == "semantic", signal Jaccard (0.7) is replaced by
+  // EmbeddingEncoder semantic similarity over the signal texts. Length/confidence weights kept.
+  private encoder: EmbeddingEncoder | null = null;
 
   constructor(similarityThreshold: number = 0.7) {
     this.db = new SignalDictionaryDB();
     this.similarityThreshold = similarityThreshold;
+    const cfg = loadConfig().local_ml;
+    if (cfg && cfg.enabled && (cfg.pattern_clusterer === "semantic" || (cfg.pattern_clusterer === undefined && cfg.clusterer !== "legacy"))) {
+      this.encoder = new EmbeddingEncoder({
+        backend: cfg.embedding_backend || "char-ngram-tfidf",
+      });
+    }
   }
 
   /**
@@ -204,23 +215,35 @@ export class PatternClusterer {
    * Calculate similarity between two feature sets
    */
   private calculateSimilarity(f1: ClusterFeatures, f2: ClusterFeatures): number {
-    // Signal overlap (Jaccard similarity)
-    const signalSimilarity = this.jaccardSimilarity(f1.signals, f2.signals);
+    // Signal similarity (0.7): Jaccard in legacy mode, semantic cosine in semantic mode.
+    const signalSimilarity = this.encoder
+      ? this.semanticSimilarity(f1.signals, f2.signals)
+      : this.jaccardSimilarity(f1.signals, f2.signals);
 
     // Content length similarity (normalized difference)
     const lengthDiff = Math.abs(f1.contentLength - f2.contentLength);
     const maxLength = Math.max(f1.contentLength, f2.contentLength);
-    const lengthSimilarity = 1 - (lengthDiff / maxLength);
+    const lengthSimilarity = maxLength > 0 ? 1 - (lengthDiff / maxLength) : 1;
 
     // Confidence similarity
     const confidenceSimilarity = 1 - Math.abs(f1.confidence - f2.confidence);
 
-    // Weighted combination
+    // Weighted combination (kept identical to legacy: 0.7 / 0.1 / 0.2)
     return (
       signalSimilarity * 0.7 +
       lengthSimilarity * 0.1 +
       confidenceSimilarity * 0.2
     );
+  }
+
+  /** Semantic similarity between two signal-text sets via shared encoder. */
+  private semanticSimilarity(signals1: string[], signals2: string[]): number {
+    if (!this.encoder) return 0;
+    const t1 = signals1.join(" ");
+    const t2 = signals2.join(" ");
+    if (!t1 || !t2) return 0;
+    const [v1, v2] = this.encoder.encodeBatch([t1, t2]);
+    return EmbeddingEncoder.cosine(v1, v2);
   }
 
   /**

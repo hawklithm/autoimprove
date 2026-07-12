@@ -6,6 +6,8 @@
  */
 
 import { Pattern, PatternType } from "./models.js";
+import { EmbeddingEncoder } from "./embedding-encoder.js";
+import { loadConfig } from "../storage/init.js";
 
 export interface PatternClusterGroup {
   cluster_id: string;
@@ -19,6 +21,19 @@ export interface PatternClusterGroup {
 }
 
 export class PatternSimilarityClusterer {
+  // When local_ml.clusterer != "legacy" (or explicit pattern_clusterer == "semantic"),
+  // keyword/text word-overlap is replaced by EmbeddingEncoder semantic similarity.
+  private encoder: EmbeddingEncoder | null = null;
+
+  constructor() {
+    const cfg = loadConfig().local_ml;
+    if (cfg && cfg.enabled && (cfg.pattern_clusterer === "semantic" || (cfg.pattern_clusterer === undefined && cfg.clusterer !== "legacy"))) {
+      this.encoder = new EmbeddingEncoder({
+        backend: cfg.embedding_backend || "char-ngram-tfidf",
+      });
+    }
+  }
+
   /**
    * Cluster patterns by similarity for batch LLM processing
    */
@@ -110,38 +125,58 @@ export class PatternSimilarityClusterer {
    * Calculate similarity between two patterns (0-1)
    */
   private calculateSimilarity(p1: Pattern, p2: Pattern): number {
-    let score = 0;
-    let weights = 0;
+    // 3. Type exact match bonus (20%) — always applied
+    let typeScore = 0;
+    if (p1.type === p2.type) {
+      typeScore = 0.2;
+    }
 
-    // 1. Keyword overlap (40%)
+    // 4. Context similarity (10%) — always applied (semantic or text)
+    const context1 = p1.occurrences.map(o => o.context || "").join(" ");
+    const context2 = p2.occurrences.map(o => o.context || "").join(" ");
+    const contextScore = (context1 && context2)
+      ? (this.encoder
+          ? this.semanticSimilarity(context1, context2)
+          : this.textSimilarity(context1, context2)) * 0.1
+      : 0;
+
+    if (this.encoder) {
+      // Semantic mode: keyword(0.4) + text(0.3) replaced by semantic cosine over
+      // combined representative text (description + keywords), weighted 0.7.
+      const semanticSim = this.semanticSimilarity(
+        this.representativeText(p1),
+        this.representativeText(p2)
+      );
+      // score / weights: semantic 0.7 + type 0.2 + context 0.1 = 1.0
+      return semanticSim * 0.7 + typeScore + contextScore;
+    }
+
+    // Legacy mode: keyword overlap (40%) + description similarity (30%) + type + context
     const keywordSimilarity = this.jaccardSimilarity(
       new Set(p1.keywords),
       new Set(p2.keywords)
     );
-    score += keywordSimilarity * 0.4;
-    weights += 0.4;
-
-    // 2. Description similarity (30%)
     const descSimilarity = this.textSimilarity(p1.description, p2.description);
-    score += descSimilarity * 0.3;
-    weights += 0.3;
+    const legacyScore =
+      keywordSimilarity * 0.4 +
+      descSimilarity * 0.3 +
+      typeScore +
+      contextScore;
 
-    // 3. Type exact match bonus (20%)
-    if (p1.type === p2.type) {
-      score += 0.2;
-      weights += 0.2;
-    }
+    // legacy contextScore already includes the 0.1 weight; normalize denominator is 1.0
+    return legacyScore;
+  }
 
-    // 4. Context similarity (10%)
-    const context1 = p1.occurrences.map(o => o.context || "").join(" ");
-    const context2 = p2.occurrences.map(o => o.context || "").join(" ");
-    if (context1 && context2) {
-      const contextSim = this.textSimilarity(context1, context2);
-      score += contextSim * 0.1;
-      weights += 0.1;
-    }
+  /** Combined text used for semantic similarity (description carries the meaning). */
+  private representativeText(p: Pattern): string {
+    return [p.description, ...p.keywords].filter(Boolean).join(" ");
+  }
 
-    return weights > 0 ? score / weights : 0;
+  /** Semantic cosine similarity between two texts using the shared encoder. */
+  private semanticSimilarity(text1: string, text2: string): number {
+    if (!this.encoder) return 0;
+    const [v1, v2] = this.encoder.encodeBatch([text1, text2]);
+    return EmbeddingEncoder.cosine(v1, v2);
   }
 
   /**
