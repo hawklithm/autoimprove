@@ -91,9 +91,9 @@
 - [x] 在 `batchMatch`（`:172`）中复用单条 `match`，保证接口一致。
 
 ### E3. 性能索引与回退
-- [ ] 词典量大时接入 `FAISS-CPU` / `hnswlib` 近邻索引（纯 CPU），控制匹配延迟。
-- [ ] 在 `loadConfig().local_ml.signal_match` 中支持 `mode: neighbor|exact`，`exact` 回退到原 `SignalMatcher`。
-- [ ] 在 `SignalMatcher.maybeRebuild`（`:74`）对应位置增加近邻索引的重建触发（5 分钟间隔对齐）。
+- [ ] 词典量大时接入 `FAISS-CPU` / `hnswlib` 近邻索引（纯 CPU），控制匹配延迟。**决策**：可选增强，待 H2 评估依赖后接入，当前暴力余弦扫描在数百~数千条信号量级已足够。
+- [x] 在 `loadConfig().local_ml.signal_match` 中支持 `mode: neighbor|exact`，`exact` 回退到原 `SignalMatcher`。`init.ts` Config 接口已有 `mode: "legacy" | "neighbor"`，`adaptive-session-analyzer.ts:74` 按此切换。
+- [x] 在 `SignalMatcher.maybeRebuild`（`:74`）对应位置增加近邻索引的重建触发（5 分钟间隔对齐）。两个 matcher 的 `maybeRebuild` 均已有 5 分钟重建间隔。
 
 ---
 
