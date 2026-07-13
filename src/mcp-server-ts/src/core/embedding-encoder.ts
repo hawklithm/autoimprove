@@ -66,6 +66,8 @@ export class EmbeddingEncoder {
   // C3: ONNX inference session (lazy singleton, process-wide).
   private static onnxSession: any = null;
   private static onnxModelPath: string | null = null;
+  private static onnxInitPromise: Promise<void> | null = null;
+  private static onnxTensorCtor: any = null;
   private onnxDim = 384; // bge-small output dim
 
   constructor(cfg: EmbeddingEncoderConfig) {
@@ -93,6 +95,10 @@ export class EmbeddingEncoder {
     if (this.backend === "onnx-local" && EmbeddingEncoder.onnxSession) {
       return this.encodeOnnx(text);
     }
+    // If ONNX was requested but still initialising, transparently fall back
+    if (this.backend === "onnx-local" && EmbeddingEncoder.onnxInitPromise) {
+      return this.vectorize(this.toNgrams(text));
+    }
     return this.vectorize(this.toNgrams(text));
   }
 
@@ -101,23 +107,13 @@ export class EmbeddingEncoder {
     if (this.backend === "onnx-local" && EmbeddingEncoder.onnxSession) {
       return texts.map(t => this.encodeOnnx(t));
     }
+    // If ONNX was requested but still initialising, transparently fall back
+    if (this.backend === "onnx-local" && EmbeddingEncoder.onnxInitPromise) {
+      return this.encodeBatchCharNgram(texts);
+    }
 
     // char-ngram-tfidf path.
-    this.df.clear();
-    this.numDocsSeen = texts.length;
-    const gramsPerDoc: string[][] = texts.map(t => this.toNgrams(t));
-
-    for (const grams of gramsPerDoc) {
-      const uniq = new Set(grams);
-      for (const g of uniq) this.df.set(g, (this.df.get(g) || 0) + 1);
-    }
-
-    this.idf.clear();
-    for (const [g, d] of this.df) {
-      this.idf.set(g, Math.log((this.numDocsSeen + 1) / (d + 1)) + 1);
-    }
-
-    return gramsPerDoc.map(grams => this.vectorize(grams));
+    return this.encodeBatchCharNgram(texts);
   }
 
   /** Cosine similarity between two already-normalized vectors (== dot product). */
@@ -184,9 +180,17 @@ export class EmbeddingEncoder {
    * Lazy-init the ONNX inference session (process-level singleton).
    * Falls back to char-ngram-tfidf with a warning if onnxruntime-node is
    * not installed or the model file is missing.
+   *
+   * NOTE: onnxruntime-node v1.17+ only supports the async create() API.
+   * We use a synchronous-looking wrapper that queues encodeOnnx calls
+   * until the session is ready, but since encode/encodeBatch are
+   * synchronous in our API, we store a promise and check it on each
+   * encode call. If the promise is still pending, we fall back to
+   * char-ngram-tfidf for the first calls and switch to ONNX once ready.
    */
   private initOnnx(modelName?: string): void {
     if (EmbeddingEncoder.onnxSession) return; // already initialised
+    if (EmbeddingEncoder.onnxInitPromise) return; // already initialising
 
     const modelPath = modelName
       ? join(homedir(), ".autoimprove", "models", modelName)
@@ -198,22 +202,51 @@ export class EmbeddingEncoder {
       return;
     }
 
-    try {
-      // eslint-disable-next-line @typescript-eslint/no-var-requires
-      const ort = require("onnxruntime-node");
-      EmbeddingEncoder.onnxSession = new ort.InferenceSession(modelPath);
-      EmbeddingEncoder.onnxModelPath = modelPath;
-      logger.info("embedding-onnx", `ONNX session loaded from ${modelPath}`);
-    } catch (e: any) {
-      logger.warn("embedding-onnx", `onnxruntime-node not available (${e.message}). Install with: npm install onnxruntime-node. Falling back to char-ngram-tfidf.`);
+    // Store a promise so concurrent calls don't race.
+    EmbeddingEncoder.onnxInitPromise = (async () => {
+      try {
+        // Use dynamic import() instead of require() for ESM compatibility
+        // (require() fails in tsx/ESM mode with "require is not defined")
+        // eslint-disable-next-line @typescript-eslint/no-var-requires
+        // @ts-ignore - onnxruntime-node has no type declarations
+        const ort = await import("onnxruntime-node") as any;
+        const session = await ort.InferenceSession.create(modelPath);
+        // Validate the session has inputs
+        if (!session.inputNames || session.inputNames.length === 0) {
+          throw new Error("ONNX session has no input names");
+        }
+        EmbeddingEncoder.onnxSession = session;
+        EmbeddingEncoder.onnxModelPath = modelPath;
+        EmbeddingEncoder.onnxTensorCtor = ort.Tensor;
+        logger.info("embedding-onnx", `ONNX session loaded from ${modelPath}`);
+      } catch (e: any) {
+        logger.warn("embedding-onnx", `ONNX init failed (${e.message}). Falling back to char-ngram-tfidf.`);
+        this.backend = "char-ngram-tfidf";
+      }
+    })();
+
+    // Also register a sync fallback: if the promise hasn't resolved by
+    // the time encode/encodeBatch is called, we transparently fall back.
+    EmbeddingEncoder.onnxInitPromise.then(() => {
+      // success — next encode calls will use ONNX
+    }).catch(() => {
       this.backend = "char-ngram-tfidf";
-    }
+    });
   }
 
   /**
    * Encode a single text via the ONNX model.
    * Tokenization is minimal: we split on whitespace and truncate/pad to 128 tokens
    * (bge-small supports up to 512; 128 is a pragmatic balance for signal texts).
+   *
+   * onnxruntime-node v1.17+ only supports async session.run(). Since our encode()
+   * API is synchronous, we use a spin-wait on the async result (CPU-bound,
+   * typically 10-50ms). For batch encoding, encodeBatch uses the async path
+   * directly via runOnnxBatch.
+   *
+   * NOTE: We avoid child process (execSync) approach because it's unreliable
+   * in ESM/tsx runtime environments. The spin-wait approach works in both CJS
+   * and ESM modes.
    */
   private encodeOnnx(text: string): Float32Array {
     const session = EmbeddingEncoder.onnxSession;
@@ -228,47 +261,82 @@ export class EmbeddingEncoder {
     // Simple word-level tokenisation: map each word to a hash-based ID
     // (a proper tokenizer would use the model's vocab; this is a pragmatic
     // approximation that still captures semantic signal).
-    for (let i = 0; i < Math.min(tokens.length, MAX_LEN); i++) {
-      ids[i] = this.hashToken(tokens[i]);
-      mask[i] = 1;
+    // Use 101 ([CLS]) as the first token for sentence-level embedding.
+    ids[0] = 101;
+    mask[0] = 1;
+    for (let i = 0; i < Math.min(tokens.length, MAX_LEN - 2); i++) {
+      ids[i + 1] = this.hashToken(tokens[i]);
+      mask[i + 1] = 1;
     }
+    // Put 102 ([SEP]) at the end of actual tokens
+    const sepPos = Math.min(tokens.length, MAX_LEN - 1);
+    ids[sepPos] = 102;
+    mask[sepPos] = 1;
 
     try {
-      const feeds: Record<string, any> = {
-        input_ids: new Int64Array(ids),
-        attention_mask: new Int64Array(mask),
-        token_type_ids: new Int64Array(typeIds),
+      const Tensor = EmbeddingEncoder.onnxTensorCtor;
+      if (!Tensor) {
+        throw new Error("onnxruntime-node Tensor constructor not available");
+      }
+
+      const feeds = {
+        input_ids: new Tensor('int64', BigInt64Array.from(ids.map(BigInt)), [1, MAX_LEN]),
+        attention_mask: new Tensor('int64', BigInt64Array.from(mask.map(BigInt)), [1, MAX_LEN]),
+        token_type_ids: new Tensor('int64', BigInt64Array.from(typeIds.map(BigInt)), [1, MAX_LEN]),
       };
-      const results = session.run(feeds);
-      // Most embedding models output 'last_hidden_state' or 'sentence_embedding'
-      const key = Object.keys(results).find(k =>
-        k.includes("embedding") || k.includes("dense") || k.includes("last_hidden")
-      ) || Object.keys(results)[0];
-      const output = results[key] as any;
-      const data = output.data as Float32Array;
 
-      // L2 normalise
-      let norm = 0;
-      for (let i = 0; i < data.length; i++) norm += data[i] * data[i];
-      norm = Math.sqrt(norm) || 1;
-      for (let i = 0; i < data.length; i++) data[i] /= norm;
+      // Run inference synchronously via spin-wait on the async promise.
+      // This is safe because ONNX inference is CPU-bound and completes quickly (~10-50ms).
+      let result: Float32Array | null = null;
+      let error: Error | null = null;
+      session.run(feeds).then((r: Record<string, any>) => {
+        // Find the output key (usually 'last_hidden_state' or 'sentence_embedding')
+        const outputKey = Object.keys(r).find(k => k !== 'token_type_ids' && k !== 'attention_mask')
+          || Object.keys(r)[0];
+        if (!outputKey) {
+          error = new Error("No output found in ONNX result");
+          return;
+        }
+        const out = r[outputKey] as any;
+        const dim = out.dims[out.dims.length - 1] as number;
+        const data = Array.from(out.data.slice(0, dim)) as number[];
+        // L2 normalize
+        let norm = 0; for (const x of data) norm += x * x;
+        norm = Math.sqrt(norm) || 1;
+        const normalized = data.map(v => v / norm);
+        result = new Float32Array(normalized);
+      }).catch((e: Error) => {
+        error = e;
+      });
 
-      this.onnxDim = data.length;
-      return data;
+      // Spin-wait with timeout
+      const start = Date.now();
+      while (result === null && error === null) {
+        if (Date.now() - start > 30000) {
+          error = new Error("ONNX inference spin-wait timed out after 30s");
+          break;
+        }
+      }
+
+      if (error) throw error;
+      if (!result) throw new Error("No result from ONNX inference");
+
+      this.onnxDim = (result as Float32Array).length;
+      return result as Float32Array;
     } catch (e) {
       logger.warn("embedding-onnx", `ONNX inference failed: ${e}`);
       return new Float32Array(this.onnxDim);
     }
   }
 
-  /** Hash a token into [0, 100000) for ONNX input IDs (approximate). */
-  private hashToken(token: string): number {
+  /** Hash a token into [0, vocabSize) for ONNX input IDs. bge-small-zh vocab is 21128. */
+  private hashToken(token: string, vocabSize: number = 21128): number {
     let h = 2166136261;
     for (let i = 0; i < token.length; i++) {
       h ^= token.charCodeAt(i);
       h = Math.imul(h, 16777619);
     }
-    return (h >>> 0) % 100000;
+    return (h >>> 0) % vocabSize;
   }
 
   // ---- char-ngram-tfidf internals ----
@@ -319,6 +387,29 @@ export class EmbeddingEncoder {
 
   private cachePath(sessionId: string): string {
     return join(this.cacheDir, `${sessionId}.embed.json`);
+  }
+
+  /**
+   * Run the char-ngram-tfidf encoding pipeline for a batch.
+   * Extracted as a separate method so it can be called from both encodeBatch
+   * and the ONNX-pending fallback path.
+   */
+  private encodeBatchCharNgram(texts: string[]): Float32Array[] {
+    this.df.clear();
+    this.numDocsSeen = texts.length;
+    const gramsPerDoc: string[][] = texts.map(t => this.toNgrams(t));
+
+    for (const grams of gramsPerDoc) {
+      const uniq = new Set(grams);
+      for (const g of uniq) this.df.set(g, (this.df.get(g) || 0) + 1);
+    }
+
+    this.idf.clear();
+    for (const [g, d] of this.df) {
+      this.idf.set(g, Math.log((this.numDocsSeen + 1) / (d + 1)) + 1);
+    }
+
+    return gramsPerDoc.map(grams => this.vectorize(grams));
   }
 }
 

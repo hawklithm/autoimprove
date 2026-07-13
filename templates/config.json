@@ -21,6 +21,27 @@
   "rule_generation": {
     "use_template_generation": true,
     "template_hot_reload": true
+  },
+  "local_ml": {
+    "enabled": false,
+    "embedding_backend": "char-ngram-tfidf",
+    "prefilter": {
+      "enabled": false,
+      "mode": "heuristic"
+    },
+    "clusterer": "legacy",
+    "pattern_clusterer": "legacy",
+    "signal_match": {
+      "mode": "legacy",
+      "threshold": 0.62
+    },
+    "personalization": {
+      "enabled": false,
+      "per_user": false
+    },
+    "ab_test": {
+      "rollout": 0
+    }
   }
 }
 

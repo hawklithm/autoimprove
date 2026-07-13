@@ -311,3 +311,8 @@ export const logger = StructuredLogger.getInstance();
 if (process.env.DEBUG === 'true' || process.env.LOG_LEVEL === 'DEBUG') {
   logger.setMinLevel(LogLevel.DEBUG);
 }
+
+// Ensure logs are flushed on exit
+process.on('exit', () => {
+  logger.shutdown();
+});

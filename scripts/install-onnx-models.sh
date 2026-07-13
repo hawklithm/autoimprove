@@ -424,6 +424,40 @@ fi
 cd "$PROJECT_ROOT" 2>/dev/null || true
 
 # ==============================================================================
+# Step 4: 自动补全 config.json
+# ==============================================================================
+
+print_section "Step 4: 补全 config.json 配置"
+
+CONFIG_FILE="$HOME/.autoimprove/config.json"
+if [ -f "$CONFIG_FILE" ] && [ "$MODE" != "--dry-run" ]; then
+    echo "正在补全 config.json 中的 local_ml 配置..."
+    node -e "
+    const fs = require('fs');
+    const configPath = '$CONFIG_FILE';
+    let config = JSON.parse(fs.readFileSync(configPath, 'utf-8'));
+    config.local_ml = {
+        enabled: true,
+        embedding_backend: 'onnx-local',
+        onnx_model: 'bge-small-zh.onnx',
+        prefilter: { enabled: true, mode: 'heuristic' },
+        clusterer: 'kmeans',
+        pattern_clusterer: 'semantic',
+        signal_match: { mode: 'neighbor', threshold: 0.62 },
+        personalization: { enabled: false, per_user: false },
+        ab_test: { rollout: 1.0 }
+    };
+    fs.writeFileSync(configPath, JSON.stringify(config, null, 2));
+    console.log('✓ local_ml 配置已写入 config.json');
+    "
+    print_success "config.json 已更新，local_ml 已启用（embedding_backend: onnx-local）"
+else
+    print_warning "config.json 不存在或 dry-run 模式，跳过配置写入"
+fi
+
+echo ""
+
+# ==============================================================================
 # Summary
 # ==============================================================================
 
@@ -440,15 +474,15 @@ fi
 echo ""
 
 echo "启用方式："
-echo "  1. 编辑配置文件: $HOME/.autoimprove/config.json"
-echo "  2. 设置以下字段："
+echo "  ✅ 脚本已自动补全 config.json 中的 local_ml 配置"
+echo "  配置详情："
 echo '     "local_ml": {'
 echo '       "enabled": true,'
 echo '       "embedding_backend": "onnx-local",'
 echo '       "onnx_model": "bge-small-zh.onnx"'
 echo '     }'
 echo ""
-echo "  3. 重启 MCP Server 使配置生效"
+echo "  重启 MCP Server 使配置生效"
 echo ""
 echo "  验证生效："
 echo "    检查日志: $HOME/.autoimprove/logs/mcp-server.log"

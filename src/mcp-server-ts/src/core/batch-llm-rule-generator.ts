@@ -56,6 +56,11 @@ export class BatchLLMRuleGenerator {
   private basicGenerator: RuleGenerator;
   private llmManager: LLMConfigManager;
 
+  /** 通过截断重试估算出的模型实际能返回的最大 completion token 数（初始未知） */
+  private estimatedMaxCompletionTokens: number | null = null;
+  /** 遇到截断时重试的最大次数 */
+  private readonly MAX_RETRY_ON_TRUNCATION = 3;
+
   constructor() {
     this.clusterer = new PatternSimilarityClusterer();
     this.basicGenerator = new RuleGenerator();
@@ -127,6 +132,11 @@ export class BatchLLMRuleGenerator {
             : "";
           logger.info("batch-llm", `  [${i + 1}/${clusters.length}] ✓ ${rules.length} rule(s) from cluster${mergeInfo}`);
         } catch (error) {
+          const errMsg = error instanceof Error ? error.message : String(error);
+          // 致命错误（模型无法支持）需要中断整个流程
+          if (errMsg.includes("token 长度限制无法支持")) {
+            throw error;
+          }
           logger.error("batch-llm", `  [${i + 1}/${clusters.length}] ✗ Failed`, error instanceof Error ? error : undefined);
         }
       }
@@ -179,6 +189,11 @@ export class BatchLLMRuleGenerator {
             : "";
           logger.info("batch-llm", `  [${processed}/${clusters.length}] ✓ ${result.rules.length} rule(s)${mergeInfo}`);
         } else if ('error' in result) {
+          const errMsg = result.error instanceof Error ? result.error.message : String(result.error);
+          // 致命错误（模型无法支持）需要中断整个流程
+          if (errMsg.includes("token 长度限制无法支持")) {
+            throw result.error;
+          }
           logger.error("batch-llm", `  [${processed}/${clusters.length}] ✗ Failed:`, result.error);
         }
       }
@@ -191,6 +206,7 @@ export class BatchLLMRuleGenerator {
 
   /**
    * Process a single cluster (1 LLM call, may return multiple rules if diverse)
+   * Supports adaptive retry when the LLM response is truncated.
    */
   private async processCluster(
     cluster: PatternClusterGroup,
@@ -219,119 +235,217 @@ export class BatchLLMRuleGenerator {
 
     console.log(`[DEBUG] processCluster: ${cluster.patterns.length} patterns, ${qualifiedPatterns.length} qualified`);
 
-    // Build unified prompt using LLMPromptBuilder
-    const evidence: PromptEvidence[] = qualifiedPatterns.map(p =>
-      LLMPromptBuilder.patternToEvidence(p)
-    );
-
-    const prompt = LLMPromptBuilder.buildPrompt(evidence, {
-      patternType: cluster.pattern_type,
-      avgConfidence: cluster.avg_confidence,
-      commonKeywords: cluster.common_keywords,
-      totalOccurrences: cluster.total_occurrences,
-      sessionCount: cluster.session_count,
-      isBatchMode: true,
-      maxContentExamples: 5
-    });
-
-    const maxTokens = this.calculateMaxTokens(cluster);
-
-    console.log(`[DEBUG] Sending request to LLM, maxTokens: ${maxTokens}`);
-    try {
-      const response = await this.llmManager.callWithFallback(async (client, model) => {
-        const requestLog = `\n${"=".repeat(80)}\n` +
-          `[${new Date().toISOString()}] [BATCH-LLM REQUEST] Cluster ${cluster.cluster_id}\n` +
-          `${"=".repeat(80)}\n` +
-          `Patterns: ${cluster.patterns.length}, Type: ${cluster.pattern_type}\n` +
-          `Model: ${model}, Max tokens: ${maxTokens}\n` +
-          `Prompt length: ${prompt.length} chars\n` +
-          `${"-".repeat(80)}\n` +
-          `FULL PROMPT:\n${prompt}\n` +
-          `${"-".repeat(80)}\n`;
-
-        logger.debug("batch-llm", "LLM request sent", { cluster_id: cluster.cluster_id, prompt_length: prompt.length });
-        appendFileSync(LLM_LOG_FILE, requestLog, "utf8");
-
-        return await client.chat.completions.create({
-          model,
-          max_tokens: maxTokens,
-          messages: [{
-            role: "user",
-            content: prompt
-          }]
-        });
-      }, { fallbackOnError: true });
-
-      const responseText = response.choices[0]?.message?.content || "";
-      console.log(`[DEBUG] Response received, finish_reason: ${response.choices[0]?.finish_reason}`);
-      console.log(`[DEBUG] LLM call successful, response length: ${responseText.length}`);
-
-      logger.debug("batch-llm", "LLM response received", {
-        cluster_id: cluster.cluster_id,
-        response_length: responseText.length,
-        first_100_chars: responseText.substring(0, 100)
-      });
-
-      const responseLog = `\n${"=".repeat(80)}\n` +
-        `[${new Date().toISOString()}] [BATCH-LLM RESPONSE] Cluster ${cluster.cluster_id}\n` +
-        `${"=".repeat(80)}\n` +
-        `Response length: ${responseText.length} chars\n` +
-        `Finish reason: ${response.choices[0]?.finish_reason}\n` +
-        `Usage: prompt=${response.usage?.prompt_tokens}, completion=${response.usage?.completion_tokens}\n` +
-        `${"-".repeat(80)}\n` +
-        `FULL RESPONSE:\n${responseText}\n` +
-        `${"-".repeat(80)}\n\n`;
-
-      logger.debug("batch-llm", "LLM response received", {
-        cluster_id: cluster.cluster_id,
-        response_length: responseText.length,
-        finish_reason: response.choices[0]?.finish_reason,
-        prompt_tokens: response.usage?.prompt_tokens,
-        completion_tokens: response.usage?.completion_tokens
-      });
-      appendFileSync(LLM_LOG_FILE, responseLog, "utf8");
-
-      // Parse response (may contain multiple rules)
-      let parsedRules;
-      try {
-        parsedRules = this.parseBatchResponse(responseText, cluster);
-      } catch (parseError) {
-        // LLM explicitly declined to generate a rule or response cannot be parsed
-        logger.warn("batch-llm", `Cannot extract rule from LLM response for cluster ${cluster.cluster_id}`, {
-          error: parseError instanceof Error ? parseError.message : String(parseError),
-          responseSample: responseText.slice(0, 200)
-        });
-        // Return empty array - this cluster cannot be converted to a rule
-        return [];
-      }
-
-      // Convert to storage format
-      const rules: BatchGeneratedRule[] = [];
-      for (let i = 0; i < parsedRules.length; i++) {
-        const parsed = parsedRules[i];
-        const id = i === 0 ? ruleId : `${ruleId}-${String.fromCharCode(97 + i)}`;  // rule-001, rule-001-a, etc.
-
-        const { indexEntry, content } = this.convertToStorageFormat(parsed, id, cluster, scene);
-
-        rules.push({
-          indexEntry,
-          content,
-          source_patterns: parsed.source_patterns,
-          dedup_count: parsed.merged_count
-        });
-      }
-
-      return rules;
-    } catch (err) {
-      const errorMsg = err instanceof Error ? err.message : String(err);
-      const errorStack = err instanceof Error ? err.stack : '';
-      console.log(`[DEBUG] LLM error: ${errorMsg}`);
-      console.log(`[DEBUG] Stack: ${errorStack}`);
-      const errorObj = err instanceof Error ? err : new Error(String(err));
-      logger.error("batch-llm", `LLM batch processing failed for cluster ${cluster.cluster_id}`, errorObj);
-      // Don't throw - return empty array to allow processing to continue
+    if (qualifiedPatterns.length === 0) {
       return [];
     }
+
+    // 尝试用逐步减少 pattern 数量的方式发送 LLM 请求（应对截断）
+    let patternsToUse = qualifiedPatterns;
+    let retryCount = 0;
+    let lastTruncationError: string | null = null;
+    // 从当前 cluster 的 maxTokens 开始，逐步递减（独立于其他 cluster）
+    let clusterEstimatedMaxTokens: number | null = null;
+
+    while (retryCount <= this.MAX_RETRY_ON_TRUNCATION) {
+      // Build unified prompt using LLMPromptBuilder
+      const evidence: PromptEvidence[] = patternsToUse.map(p =>
+        LLMPromptBuilder.patternToEvidence(p)
+      );
+
+      const prompt = LLMPromptBuilder.buildPrompt(evidence, {
+        patternType: cluster.pattern_type,
+        avgConfidence: cluster.avg_confidence,
+        commonKeywords: cluster.common_keywords,
+        totalOccurrences: cluster.total_occurrences,
+        sessionCount: cluster.session_count,
+        isBatchMode: true,
+        maxContentExamples: 5
+      });
+
+      // 如果估算出了模型最大 completion token 数，用它来限制 max_tokens
+      const maxTokens = clusterEstimatedMaxTokens !== null
+        ? Math.min(this.calculateMaxTokens(cluster), clusterEstimatedMaxTokens)
+        : this.calculateMaxTokens(cluster);
+
+      console.log(`[DEBUG] Sending request to LLM (attempt ${retryCount + 1}), maxTokens: ${maxTokens}, patterns: ${patternsToUse.length}`);
+      try {
+        const result = await this.sendLLMRequestAndParse(cluster, patternsToUse, prompt, maxTokens, ruleId, scene);
+
+        // 如果成功，更新估算值（如果有 completion_tokens 信息）
+        // 取所有 cluster 的最大值，向上更新（能通过的最大值才是可靠的）
+        if (result.completionTokens && (!this.estimatedMaxCompletionTokens || result.completionTokens > this.estimatedMaxCompletionTokens)) {
+          this.estimatedMaxCompletionTokens = result.completionTokens;
+          clusterEstimatedMaxTokens = result.completionTokens;
+          console.log(`[DEBUG] Updated estimated max completion tokens: ${this.estimatedMaxCompletionTokens}`);
+        }
+
+        return result.rules;
+      } catch (err) {
+        const errorMsg = err instanceof Error ? err.message : String(err);
+        const isTruncation = errorMsg.includes("truncat") || errorMsg.includes("length") || errorMsg.includes("token");
+
+        if (!isTruncation || retryCount >= this.MAX_RETRY_ON_TRUNCATION) {
+          // 非截断错误或已达最大重试次数，记录错误并返回空
+          if (!isTruncation) {
+            console.log(`[DEBUG] LLM error (non-truncation): ${errorMsg}`);
+            logger.warn("batch-llm", `LLM request failed for cluster ${cluster.cluster_id}`, { error: errorMsg });
+          }
+          break;
+        }
+
+        lastTruncationError = errorMsg;
+        retryCount++;
+
+        // 估算模型最大 completion tokens：从当前传的 maxTokens 反推
+        const currentMaxTokens = clusterEstimatedMaxTokens !== null
+          ? Math.min(this.calculateMaxTokens(cluster), clusterEstimatedMaxTokens)
+          : this.calculateMaxTokens(cluster);
+        // 估算值取当前 maxTokens 的 80%，逐步收敛
+        const newEstimate = Math.floor(currentMaxTokens * 0.8);
+        clusterEstimatedMaxTokens = newEstimate;
+        console.log(`[DEBUG] Truncation detected, reducing estimated max completion tokens: ${newEstimate}`);
+
+        if (newEstimate < 500 && patternsToUse.length === 1) {
+          // 连 1 个 pattern 都跑不通（max_tokens 太小无法生成任何有意义的内容），中断
+          const fatalMsg = `模型的 token 长度限制无法支持规则生成：即使单个 pattern 也无法完整返回（估算 max_tokens=${newEstimate}）。请考虑更换模型或增大模型的 max_tokens 限制。`;
+          console.log(`[DEBUG] ${fatalMsg}`);
+          logger.error("batch-llm", fatalMsg);
+          throw new Error(fatalMsg);
+        }
+
+        // 根据新的 maxTokens 估算单次能处理的 pattern 数量
+        const baseTokens = 1500;
+        const perPatternTokens = 250;
+        const maxPatternsPerCall = Math.floor((newEstimate - baseTokens) / perPatternTokens);
+
+        // 减少 pattern 数量
+        const newCount = Math.min(patternsToUse.length, Math.max(1, maxPatternsPerCall));
+        if (newCount >= patternsToUse.length && patternsToUse.length > 1) {
+          // 如果估算没减少，至少减半
+          patternsToUse = patternsToUse.slice(0, Math.max(1, Math.floor(patternsToUse.length / 2)));
+        } else {
+          patternsToUse = patternsToUse.slice(0, newCount);
+        }
+
+        console.log(`[DEBUG] Retrying with ${patternsToUse.length} patterns (was ${qualifiedPatterns.length})`);
+      }
+    }
+
+    if (lastTruncationError) {
+      logger.warn("batch-llm", `Cannot extract rule from cluster ${cluster.cluster_id} after ${retryCount} retries`, {
+        error: lastTruncationError,
+        finalPatternCount: patternsToUse.length
+      });
+    }
+    return [];
+  }
+
+  /**
+   * Send LLM request and parse the response. Returns parsed rules plus metadata.
+   * Throws if response is truncated or cannot be parsed.
+   */
+  private async sendLLMRequestAndParse(
+    cluster: PatternClusterGroup,
+    patterns: Pattern[],
+    prompt: string,
+    maxTokens: number,
+    ruleId: string,
+    scene?: Scene
+  ): Promise<{ rules: BatchGeneratedRule[]; completionTokens: number | null }> {
+    const response = await this.llmManager.callWithFallback(async (client, model) => {
+      const requestLog = `\n${"=".repeat(80)}\n` +
+        `[${new Date().toISOString()}] [BATCH-LLM REQUEST] Cluster ${cluster.cluster_id}\n` +
+        `${"=".repeat(80)}\n` +
+        `Patterns: ${patterns.length}, Type: ${cluster.pattern_type}\n` +
+        `Model: ${model}, Max tokens: ${maxTokens}\n` +
+        `Prompt length: ${prompt.length} chars\n` +
+        `${"-".repeat(80)}\n` +
+        `FULL PROMPT:\n${prompt}\n` +
+        `${"-".repeat(80)}\n`;
+
+      logger.debug("batch-llm", "LLM request sent", { cluster_id: cluster.cluster_id, prompt_length: prompt.length });
+      appendFileSync(LLM_LOG_FILE, requestLog, "utf8");
+
+      return await client.chat.completions.create({
+        model,
+        max_tokens: maxTokens,
+        messages: [{
+          role: "user",
+          content: prompt
+        }]
+      });
+    }, { fallbackOnError: true });
+
+    const responseText = response.choices[0]?.message?.content || "";
+    const finishReason = response.choices[0]?.finish_reason;
+    const completionTokens = response.usage?.completion_tokens ?? null;
+
+    console.log(`[DEBUG] Response received, finish_reason: ${finishReason}`);
+    console.log(`[DEBUG] LLM call successful, response length: ${responseText.length}`);
+
+    const responseLog = `\n${"=".repeat(80)}\n` +
+      `[${new Date().toISOString()}] [BATCH-LLM RESPONSE] Cluster ${cluster.cluster_id}\n` +
+      `${"=".repeat(80)}\n` +
+      `Response length: ${responseText.length} chars\n` +
+      `Finish reason: ${finishReason}\n` +
+      `Usage: prompt=${response.usage?.prompt_tokens}, completion=${completionTokens}\n` +
+      `${"-".repeat(80)}\n` +
+      `FULL RESPONSE:\n${responseText}\n` +
+      `${"-".repeat(80)}\n\n`;
+
+    logger.debug("batch-llm", "LLM response received", {
+      cluster_id: cluster.cluster_id,
+      response_length: responseText.length,
+      finish_reason: finishReason,
+      prompt_tokens: response.usage?.prompt_tokens,
+      completion_tokens: completionTokens
+    });
+    appendFileSync(LLM_LOG_FILE, responseLog, "utf8");
+
+    // 检查是否被截断
+    // 只对 finish_reason === "length" 且内容为空或 JSON 结构不完整的情况触发重试
+    const isTruncated = finishReason === "length" && (
+      responseText.trim().length === 0 || JSONExtractor.isTruncated(responseText)
+    );
+    if (isTruncated) {
+      logger.warn("batch-llm", "Potentially truncated LLM response detected", {
+        cluster_id: cluster.cluster_id,
+        finish_reason: finishReason,
+        response_length: responseText.length,
+        last_chars: responseText.slice(-100)
+      });
+      throw new Error(`LLM response truncated (finish_reason=${finishReason}, length=${responseText.length})`);
+    }
+
+    // Parse response
+    let parsedRules;
+    try {
+      parsedRules = this.parseBatchResponse(responseText, cluster);
+    } catch (parseError) {
+      logger.warn("batch-llm", `Cannot extract rule from LLM response for cluster ${cluster.cluster_id}`, {
+        error: parseError instanceof Error ? parseError.message : String(parseError),
+        responseSample: responseText.slice(0, 200)
+      });
+      return { rules: [], completionTokens };
+    }
+
+    // Convert to storage format
+    const rules: BatchGeneratedRule[] = [];
+    for (let i = 0; i < parsedRules.length; i++) {
+      const parsed = parsedRules[i];
+      const id = i === 0 ? ruleId : `${ruleId}-${String.fromCharCode(97 + i)}`;
+
+      const { indexEntry, content } = this.convertToStorageFormat(parsed, id, cluster, scene);
+
+      rules.push({
+        indexEntry,
+        content,
+        source_patterns: parsed.source_patterns,
+        dedup_count: parsed.merged_count
+      });
+    }
+
+    return { rules, completionTokens };
   }
 
 

@@ -195,7 +195,7 @@ echo "  • bge-small-zh ONNX 量化模型 — 轻量中文语义模型（约 30
 echo ""
 echo "注意："
 echo "  • ONNX 为可选增强，不安装不影响核心功能（自动使用零依赖的 char-ngram-tfidf）"
-echo "  • 安装后需手动在 config.json 中设置 embedding_backend: \"onnx-local\" 才生效"
+echo "  • 安装后脚本将自动补全 config.json 中的 local_ml 配置并启用 embedding_backend: \"onnx-local\""
 echo "  • 首次加载模型约 1-3 秒，后续推理约 10-50ms（纯 CPU）"
 echo ""
 
@@ -215,6 +215,35 @@ if confirm "是否安装 ONNX 本地小模型？（推荐）"; then
     bash "$SCRIPT_DIR/scripts/install-onnx-models.sh" --force
     echo ""
     echo -e "${GREEN}✓${NC} ONNX 部署完成"
+
+    # 补全 config.json 中的 local_ml 配置
+    CONFIG_FILE="$AUTOIMPROVE_DIR/config.json"
+    if [ -f "$CONFIG_FILE" ]; then
+        echo "正在补全 config.json 中的 local_ml 配置..."
+        # 使用 node 来安全地合并 JSON
+        node -e "
+        const fs = require('fs');
+        const path = require('path');
+        const configPath = path.resolve('$CONFIG_FILE');
+        let config = JSON.parse(fs.readFileSync(configPath, 'utf-8'));
+        config.local_ml = {
+            enabled: true,
+            embedding_backend: 'onnx-local',
+            onnx_model: 'bge-small-zh.onnx',
+            prefilter: { enabled: true, mode: 'heuristic' },
+            clusterer: 'kmeans',
+            pattern_clusterer: 'semantic',
+            signal_match: { mode: 'neighbor', threshold: 0.62 },
+            personalization: { enabled: false, per_user: false },
+            ab_test: { rollout: 1.0 }
+        };
+        fs.writeFileSync(configPath, JSON.stringify(config, null, 2));
+        console.log('✓ local_ml 配置已写入 config.json');
+        "
+        echo -e "${GREEN}✓${NC} config.json 已更新，local_ml 已启用（embedding_backend: onnx-local）"
+    else
+        echo -e "${YELLOW}⚠${NC} config.json 不存在，跳过配置写入"
+    fi
 else
     echo -e "${YELLOW}⏭${NC} 跳过 ONNX 安装"
     echo "您可以稍后随时运行以下命令安装："
