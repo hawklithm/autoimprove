@@ -39,7 +39,7 @@ import { AdaptiveSessionAnalyzer } from "./core/adaptive-session-analyzer.js";
 import { RuleDeduplicator, DeduplicationResult } from "./core/rule-deduplicator.js";
 import { RuleCleanupService } from "./core/rule-cleanup-service.js";
 import { logger } from "./core/logger.js";
-import { createScene, PatternType, RuleScope } from "./core/models.js";
+import { createScene, PatternType, RuleScope, Scene } from "./core/models.js";
 import { existsSync } from "fs";
 import { SERVER_INSTRUCTIONS_UNIFIED, SERVER_INSTRUCTIONS_EMPTY } from "./mcp-instructions.js";
 import { ProactiveRuleResourceProvider } from "./resources/proactive-rules.js";
@@ -416,7 +416,7 @@ Returns: Rule metadata + full content (title, description, how_to_apply, when_to
       },
       {
         name: "list_scenes",
-        description: "List all known scenes from rules and sessions",
+        description: "List all known scenes from rules with full tech×functional×business combinations and rule counts. Returns both dimension-level counts (backward compatible) and a sorted list of complete scene tuples for scene-aware rule lookup.",
         inputSchema: {
           type: "object",
           properties: {},
@@ -2053,6 +2053,45 @@ async function handleUpdateRules(args: any) {
 async function handleListScenes() {
   const rules = indexManager.listRules();
 
+  // Collect unique scene combinations (tech × functional × business) with rule counts
+  const sceneMap = new Map<string, { scene: Scene; ruleCount: number; ruleIds: string[] }>();
+
+  for (const rule of rules) {
+    if (rule.scenes) {
+      const s = rule.scenes;
+      // Use each combination of tech + functional + business as a key
+      // If any dimension is empty, use a placeholder
+      const techKeys = s.tech.length > 0 ? s.tech : ["*"];
+      const funcKeys = s.functional.length > 0 ? s.functional : ["*"];
+      const bizKeys = s.business.length > 0 ? s.business : ["*"];
+
+      for (const tech of techKeys) {
+        for (const func of funcKeys) {
+          for (const biz of bizKeys) {
+            const key = `${tech}|${func}|${biz}`;
+            if (!sceneMap.has(key)) {
+              sceneMap.set(key, {
+                scene: createScene({ tech: [tech], functional: [func], business: [biz] }),
+                ruleCount: 0,
+                ruleIds: [],
+              });
+            }
+            const entry = sceneMap.get(key)!;
+            entry.ruleCount++;
+            if (!entry.ruleIds.includes(rule.id)) {
+              entry.ruleIds.push(rule.id);
+            }
+          }
+        }
+      }
+    }
+  }
+
+  // Sort by rule count descending
+  const scenes = Array.from(sceneMap.values())
+    .sort((a, b) => b.ruleCount - a.ruleCount);
+
+  // Also collect dimension-level counts (backward compatible)
   const techCounts: Record<string, number> = {};
   const functionalCounts: Record<string, number> = {};
   const businessCounts: Record<string, number> = {};
@@ -2060,7 +2099,6 @@ async function handleListScenes() {
   for (const rule of rules) {
     if (rule.scenes) {
       const scene = rule.scenes;
-
       for (const tech of scene.tech) {
         techCounts[tech] = (techCounts[tech] || 0) + 1;
       }
@@ -2079,9 +2117,20 @@ async function handleListScenes() {
         type: "text",
         text: JSON.stringify({
           success: true,
+          // Full scene combinations (sorted by popularity)
+          scenes: scenes.map(({ scene, ruleCount, ruleIds }) => ({
+            tech: scene.tech,
+            functional: scene.functional,
+            business: scene.business,
+            ruleCount,
+            ruleIds,
+          })),
+          // Summary counts per dimension (backward compatible)
           tech: techCounts,
           functional: functionalCounts,
           business: businessCounts,
+          // Total unique rules
+          totalRules: rules.length,
         }),
       },
     ],
