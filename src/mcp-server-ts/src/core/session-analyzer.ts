@@ -40,10 +40,10 @@ export class SessionAnalyzer {
    * @param sessionFile Path to session JSONL file
    * @param options Analysis options
    */
-  analyzeSession(
+  async analyzeSession(
     sessionFile: string,
     options: { incremental?: boolean; forceReanalyze?: boolean; useCompactCache?: boolean } = {}
-  ): Pattern[] {
+  ): Promise<Pattern[]> {
     const { incremental = true, forceReanalyze = false, useCompactCache = true } = options;
 
     // Load session data (with compact cache optimization)
@@ -90,12 +90,12 @@ export class SessionAnalyzer {
 
       // Incremental analysis: only analyze new content
       if (this.cacheManager.hasAnalyzed(sessionId) && hasChanged) {
-        return this.performIncrementalAnalysis(sessionFile, sessionData);
+        return await this.performIncrementalAnalysis(sessionFile, sessionData);
       }
     }
 
     // Full analysis
-    return this.performFullAnalysis(sessionFile, sessionData);
+    return await this.performFullAnalysis(sessionFile, sessionData);
   }
 
   /**
@@ -140,16 +140,23 @@ export class SessionAnalyzer {
   /**
    * Perform full analysis on entire session
    */
-  private performFullAnalysis(sessionFile: string, sessionData: SessionData): Pattern[] {
+  private async performFullAnalysis(sessionFile: string, sessionData: SessionData): Promise<Pattern[]> {
     logger.consoleLog(`Performing full analysis for session ${sessionData.session_id}`);
 
-    // Detect all pattern types
+    // Detect all pattern types (parallel for throughput)
+    const [corrections, antiPatterns, preferences, perf, security] = await Promise.all([
+      this.detectRepeatedCorrections(sessionData),
+      this.detectAntiPatterns(sessionData),
+      this.detectPreferences(sessionData),
+      this.detectPerformancePatterns(sessionData),
+      this.detectSecurityPatterns(sessionData)
+    ]);
     const patterns: Pattern[] = [
-      ...this.detectRepeatedCorrections(sessionData),
-      ...this.detectAntiPatterns(sessionData),
-      ...this.detectPreferences(sessionData),
-      ...this.detectPerformancePatterns(sessionData),
-      ...this.detectSecurityPatterns(sessionData)
+      ...corrections,
+      ...antiPatterns,
+      ...preferences,
+      ...perf,
+      ...security
     ];
 
     // Calculate confidence for all patterns
@@ -183,7 +190,7 @@ export class SessionAnalyzer {
    * match any existing centroid) are re-clustered fully. This avoids
    * re-clustering the entire session on every incremental run.
    */
-  private performIncrementalAnalysis(sessionFile: string, sessionData: SessionData): Pattern[] {
+  private async performIncrementalAnalysis(sessionFile: string, sessionData: SessionData): Promise<Pattern[]> {
     const sessionId = sessionData.session_id;
     const resumePoint = this.cacheManager.getResumePoint(sessionId);
 
@@ -200,13 +207,20 @@ export class SessionAnalyzer {
       tool_calls: newToolCalls,
     };
 
-    // Detect patterns in new content only
+    // Detect patterns in new content only (parallel for throughput)
+    const [corrections, antiPatterns, preferences, perf, security] = await Promise.all([
+      this.detectRepeatedCorrections(partialSessionData),
+      this.detectAntiPatterns(partialSessionData),
+      this.detectPreferences(partialSessionData),
+      this.detectPerformancePatterns(partialSessionData),
+      this.detectSecurityPatterns(partialSessionData)
+    ]);
     const newPatterns: Pattern[] = [
-      ...this.detectRepeatedCorrections(partialSessionData),
-      ...this.detectAntiPatterns(partialSessionData),
-      ...this.detectPreferences(partialSessionData),
-      ...this.detectPerformancePatterns(partialSessionData),
-      ...this.detectSecurityPatterns(partialSessionData)
+      ...corrections,
+      ...antiPatterns,
+      ...preferences,
+      ...perf,
+      ...security
     ];
 
     // Calculate confidence
@@ -224,7 +238,7 @@ export class SessionAnalyzer {
         // Re-extract candidates from new patterns for incremental clustering
         const newCandidates = this.extractCandidatesFromPatterns(newPatterns, partialSessionData);
         if (newCandidates.length > 0) {
-          const { clusters: mergedClusters, outliers } = this.clusterer.incrementalCluster(
+          const { clusters: mergedClusters, outliers } = await this.clusterer.incrementalCluster(
             newCandidates,
             existingCentroids
           );
@@ -232,7 +246,7 @@ export class SessionAnalyzer {
           // Outliers that didn't match any centroid — cluster them separately
           let outlierPatterns: Pattern[] = [];
           if (outliers.length > 0) {
-            const outlierClusters = this.clusterer.clusterMessages(outliers);
+            const outlierClusters = await this.clusterer.clusterMessages(outliers);
             outlierPatterns = outlierClusters.map(c => this.clusterToPattern(c, partialSessionData));
           }
 
@@ -247,9 +261,9 @@ export class SessionAnalyzer {
           const mergedPatterns = this.cacheManager.mergePatterns(sessionId, allNew);
 
           // Update centroid cache: re-serialise from merged + outlier clusters
-          const allClusters = [...mergedClusters, ...this.clusterer.clusterMessages(outliers)];
+          const allClusters = [...mergedClusters, ...(await this.clusterer.clusterMessages(outliers))];
           if (allClusters.length > 0) {
-            const newCentroids = this.clusterer.clustersToCentroids(allClusters);
+            const newCentroids = await this.clusterer.clustersToCentroids(allClusters);
             this.cacheManager.setClusterCentroids(sessionId, newCentroids);
           }
 
@@ -276,8 +290,8 @@ export class SessionAnalyzer {
     if (useSemantic) {
       const allCandidates = this.extractCandidatesFromPatterns(mergedPatterns, sessionData);
       if (allCandidates.length > 0) {
-        const fullClusters = this.clusterer.clusterMessages(allCandidates);
-        const centroids = this.clusterer.clustersToCentroids(fullClusters);
+        const fullClusters = await this.clusterer.clusterMessages(allCandidates);
+        const centroids = await this.clusterer.clustersToCentroids(fullClusters);
         this.cacheManager.setClusterCentroids(sessionId, centroids);
       }
     }
@@ -440,7 +454,7 @@ export class SessionAnalyzer {
     return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
   }
 
-  private detectRepeatedCorrections(sessionData: SessionData): Pattern[] {
+  private async detectRepeatedCorrections(sessionData: SessionData): Promise<Pattern[]> {
     const patterns: Pattern[] = [];
     const userMessages = this.getUserMessages(sessionData);
 
@@ -486,7 +500,7 @@ export class SessionAnalyzer {
     }
 
     // Cluster similar corrections
-    const clusters = this.clusterer.clusterMessages(candidates);
+    const clusters = await this.clusterer.clusterMessages(candidates);
 
     logger.info("session-analysis", `Clustered ${corrections.length} corrections into ${clusters.length} patterns`);
 
@@ -506,7 +520,7 @@ export class SessionAnalyzer {
     return patterns;
   }
 
-  private detectAntiPatterns(sessionData: SessionData): Pattern[] {
+  private async detectAntiPatterns(sessionData: SessionData): Promise<Pattern[]> {
     const patterns: Pattern[] = [];
     const userMessages = this.getUserMessages(sessionData);
 
@@ -546,7 +560,7 @@ export class SessionAnalyzer {
     }
 
     // Cluster similar anti-patterns
-    const clusters = this.clusterer.clusterMessages(candidates);
+    const clusters = await this.clusterer.clusterMessages(candidates);
 
     logger.info("session-analysis", `Clustered ${antiPatternMessages.length} anti-patterns into ${clusters.length} patterns`);
 
@@ -566,7 +580,7 @@ export class SessionAnalyzer {
     return patterns;
   }
 
-  private detectPreferences(sessionData: SessionData): Pattern[] {
+  private async detectPreferences(sessionData: SessionData): Promise<Pattern[]> {
     const patterns: Pattern[] = [];
     const userMessages = this.getUserMessages(sessionData);
 
@@ -606,7 +620,7 @@ export class SessionAnalyzer {
     }
 
     // Cluster similar preferences
-    const clusters = this.clusterer.clusterMessages(candidates);
+    const clusters = await this.clusterer.clusterMessages(candidates);
 
     logger.info("session-analysis", `Clustered ${preferenceMessages.length} preferences into ${clusters.length} patterns`);
 
@@ -626,7 +640,7 @@ export class SessionAnalyzer {
     return patterns;
   }
 
-  private detectPerformancePatterns(sessionData: SessionData): Pattern[] {
+  private async detectPerformancePatterns(sessionData: SessionData): Promise<Pattern[]> {
     const patterns: Pattern[] = [];
     const userMessages = this.getUserMessages(sessionData);
 
@@ -670,7 +684,7 @@ export class SessionAnalyzer {
     }
 
     // Cluster similar performance patterns
-    const clusters = this.clusterer.clusterMessages(candidates);
+    const clusters = await this.clusterer.clusterMessages(candidates);
 
     logger.info("session-analysis", `Clustered ${performanceMessages.length} performance patterns into ${clusters.length} patterns`);
 
@@ -690,7 +704,7 @@ export class SessionAnalyzer {
     return patterns;
   }
 
-  private detectSecurityPatterns(sessionData: SessionData): Pattern[] {
+  private async detectSecurityPatterns(sessionData: SessionData): Promise<Pattern[]> {
     const patterns: Pattern[] = [];
     const userMessages = this.getUserMessages(sessionData);
 
@@ -765,7 +779,7 @@ export class SessionAnalyzer {
     }
 
     // Cluster similar security patterns
-    const clusters = this.clusterer.clusterMessages(candidates);
+    const clusters = await this.clusterer.clusterMessages(candidates);
 
     logger.info("session-analysis", `Clustered ${securityMessages.length} security patterns into ${clusters.length} patterns`);
 

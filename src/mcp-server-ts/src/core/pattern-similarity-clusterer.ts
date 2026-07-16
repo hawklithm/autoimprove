@@ -37,11 +37,11 @@ export class PatternSimilarityClusterer {
   /**
    * Cluster patterns by similarity for batch LLM processing
    */
-  clusterPatterns(patterns: Pattern[], options: {
+  async clusterPatterns(patterns: Pattern[], options: {
     minSimilarity?: number;
     maxClusterSize?: number;
     minClusterSize?: number;
-  } = {}): PatternClusterGroup[] {
+  } = {}): Promise<PatternClusterGroup[]> {
     const {
       minSimilarity = 0.4,
       maxClusterSize = 10,
@@ -60,7 +60,7 @@ export class PatternSimilarityClusterer {
 
     // Cluster within each type
     for (const [type, typePatterns] of typeGroups) {
-      const typeClusters = this.clusterByType(
+      const typeClusters = await this.clusterByType(
         typePatterns,
         minSimilarity,
         maxClusterSize,
@@ -75,12 +75,12 @@ export class PatternSimilarityClusterer {
   /**
    * Cluster patterns of the same type
    */
-  private clusterByType(
+  private async clusterByType(
     patterns: Pattern[],
     minSimilarity: number,
     maxClusterSize: number,
     minClusterSize: number
-  ): PatternClusterGroup[] {
+  ): Promise<PatternClusterGroup[]> {
     if (patterns.length === 0) return [];
 
     const clusters: PatternClusterGroup[] = [];
@@ -101,7 +101,7 @@ export class PatternSimilarityClusterer {
         if (visited.has(j)) continue;
 
         const candidate = sortedPatterns[j];
-        const similarity = this.calculateSimilarity(seed, candidate);
+        const similarity = await this.calculateSimilarity(seed, candidate);
 
         if (similarity >= minSimilarity) {
           clusterPatterns.push(candidate);
@@ -124,7 +124,7 @@ export class PatternSimilarityClusterer {
   /**
    * Calculate similarity between two patterns (0-1)
    */
-  private calculateSimilarity(p1: Pattern, p2: Pattern): number {
+  private async calculateSimilarity(p1: Pattern, p2: Pattern): Promise<number> {
     // 3. Type exact match bonus (20%) — always applied
     let typeScore = 0;
     if (p1.type === p2.type) {
@@ -136,14 +136,14 @@ export class PatternSimilarityClusterer {
     const context2 = p2.occurrences.map(o => o.context || "").join(" ");
     const contextScore = (context1 && context2)
       ? (this.encoder
-          ? this.semanticSimilarity(context1, context2)
+          ? await this.semanticSimilarity(context1, context2)
           : this.textSimilarity(context1, context2)) * 0.1
       : 0;
 
     if (this.encoder) {
       // Semantic mode: keyword(0.4) + text(0.3) replaced by semantic cosine over
       // combined representative text (description + keywords), weighted 0.7.
-      const semanticSim = this.semanticSimilarity(
+      const semanticSim = await this.semanticSimilarity(
         this.representativeText(p1),
         this.representativeText(p2)
       );
@@ -173,9 +173,9 @@ export class PatternSimilarityClusterer {
   }
 
   /** Semantic cosine similarity between two texts using the shared encoder. */
-  private semanticSimilarity(text1: string, text2: string): number {
+  private async semanticSimilarity(text1: string, text2: string): Promise<number> {
     if (!this.encoder) return 0;
-    const [v1, v2] = this.encoder.encodeBatch([text1, text2]);
+    const [v1, v2] = await this.encoder.encodeBatch([text1, text2]);
     return EmbeddingEncoder.cosine(v1, v2);
   }
 

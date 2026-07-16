@@ -175,7 +175,7 @@ export class BatchRebuildEngine {
       try {
         logger.debug("batch-rebuild", `  [${i + 1}/${toAnalyze.length}] Analyzing ${sessionId}...`);
 
-        const patterns = this.analyzer.analyzeSession(sessionFile, {
+        const patterns = await this.analyzer.analyzeSession(sessionFile, {
           incremental: false,
           forceReanalyze: true,
           useCompactCache: true,

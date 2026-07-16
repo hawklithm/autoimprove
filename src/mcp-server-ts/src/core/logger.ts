@@ -34,11 +34,22 @@ export class StructuredLogger {
   private logBuffer: LogEntry[] = [];
   private flushInterval: NodeJS.Timeout | null = null;
   private minLevel: LogLevel = LogLevel.INFO;
+  // Per-run log file path (one file per server process start)
+  private runLogFile: string;
 
   private constructor() {
     this.ensureLogDirectory();
+    this.runLogFile = join(this.getLogsDir(), `autoimprove-${this.getRunTimestamp()}.jsonl`);
     // Flush logs every 5 seconds
     this.flushInterval = setInterval(() => this.flush(), 5000);
+  }
+
+  /**
+   * Generate a per-run timestamp used for the log file name.
+   * Format: 2026-07-15T15-10-49-085Z (filesystem-safe ISO-ish)
+   */
+  private getRunTimestamp(): string {
+    return new Date().toISOString().replace(/[:.]/g, "-");
   }
 
   static getInstance(): StructuredLogger {
@@ -208,14 +219,19 @@ export class StructuredLogger {
   /**
    * Flush buffered logs to disk
    */
+  /**
+   * Get the current run's log file path (per-run file)
+   */
+  getLogFile(): string {
+    return this.runLogFile;
+  }
+
   flush(): void {
     if (this.logBuffer.length === 0) {
       return;
     }
 
-    const logsDir = this.getLogsDir();
-    const today = new Date().toISOString().split("T")[0];
-    const logFile = join(logsDir, `autoimprove-${today}.jsonl`);
+    const logFile = this.runLogFile;
 
     try {
       const entries = this.logBuffer.splice(0);

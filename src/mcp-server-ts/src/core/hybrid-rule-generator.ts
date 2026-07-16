@@ -69,16 +69,16 @@ export class HybridRuleGenerator {
 
     if (!apiKey) {
       this.openai = null;
-      console.log(`[DEBUG] No API key found - LLM enhancement disabled`);
+      logger.debug("hybrid-generator", "No API key found - LLM enhancement disabled");
       return;
     }
 
     if (baseURL) {
       this.openai = new OpenAI({ apiKey, baseURL });
-      console.log(`[DEBUG] LLM initialized: baseURL=${baseURL}, model=${this.model}`);
+      logger.debug("hybrid-generator", `LLM initialized: baseURL=${baseURL}, model=${this.model}`);
     } else {
       this.openai = new OpenAI({ apiKey });
-      console.log(`[DEBUG] LLM initialized with standard OpenAI, model=${this.model}`);
+      logger.debug("hybrid-generator", `LLM initialized with standard OpenAI, model=${this.model}`);
     }
   }
 
@@ -167,11 +167,44 @@ export class HybridRuleGenerator {
             business: enhancedContent.scenes.business
           });
         } else {
-          logger.warn("hybrid-generation", `LLM did not provide scenes for ${ruleId}, keeping Phase 1.6 result:`, {
-            tech: basicRule.indexEntry.scenes.tech,
-            functional: basicRule.indexEntry.scenes.functional,
-            business: basicRule.indexEntry.scenes.business
+          // LLM returned no/empty scenes. Phase 1.6 already used the raw
+          // pattern text, which can be sparse. Re-derive scenes from the
+          // (richer) enhanced content so we don't persist empty scenes.
+          const enhancedText = [
+            enhancedContent.title,
+            enhancedContent.description,
+            (enhancedContent.how_to_apply || []).join(' '),
+            (enhancedContent.when_to_use || []).join(' '),
+            (enhancedContent.exceptions || []).join(' ')
+          ].join(' ');
+
+          const sceneExtractor = SceneExtractor.getInstance();
+          const reExtracted = sceneExtractor.extractScene({
+            text: enhancedText,
+            keywords: basicRule.indexEntry.keywords
           });
+
+          // Prefer the re-extracted scenes only if they found something;
+          // otherwise fall back to whatever Phase 1.6 produced.
+          const hasReExtracted =
+            reExtracted.tech.length > 0 ||
+            reExtracted.functional.length > 0 ||
+            reExtracted.business.length > 0;
+
+          if (hasReExtracted) {
+            basicRule.indexEntry.scenes = reExtracted;
+            logger.info("hybrid-generation", `Scenes re-derived from enhanced content for ${ruleId}:`, {
+              tech: reExtracted.tech,
+              functional: reExtracted.functional,
+              business: reExtracted.business
+            });
+          } else {
+            logger.warn("hybrid-generation", `LLM did not provide scenes for ${ruleId}, keeping Phase 1.6 result:`, {
+              tech: basicRule.indexEntry.scenes.tech,
+              functional: basicRule.indexEntry.scenes.functional,
+              business: basicRule.indexEntry.scenes.business
+            });
+          }
         }
       } catch (error) {
         logger.warn("hybrid-generation", `LLM enhancement failed for ${ruleId}, using basic content`, { error: error instanceof Error ? error.message : String(error) });
@@ -454,6 +487,11 @@ Guidelines:
 - Use lowercase, hyphenated names (e.g., "error-handling" not "Error Handling")
 - Focus on what's explicitly mentioned or clearly implied
 - tech + functional are usually non-empty; business often empty for technical rules
+
+MANDATORY: You MUST populate the "tech" and "functional" dimensions from the evidence above. Scan the pattern type, keywords, file paths, and user correction text for any matching technology or functional domain (e.g., "test"/"mock" → functional:["testing"], ".ts" file → tech:["typescript"], "auth"/"login" → functional:["auth"], "api"/"endpoint" → functional:["api"]). Only set a dimension to an empty array if NOTHING in the evidence relates to it. Never return all-empty scenes.
+
+Example (for a rule about testing React hooks):
+"scenes": {"tech":["react","typescript"],"functional":["testing","ui","hooks"],"business":[]}
 
 ## Output Format
 
@@ -843,6 +881,15 @@ Generate enhanced rule following the format specified above.`;
     // Add description
     if (pattern.description) {
       texts.push(pattern.description);
+    }
+
+    // Add type/category so keyword matching has more signal
+    // (e.g. "security" type reinforces security scenes)
+    if (pattern.type) {
+      texts.push(pattern.type);
+    }
+    if ((pattern as any).category) {
+      texts.push((pattern as any).category);
     }
 
     // Add user inputs and contexts from occurrences

@@ -89,27 +89,25 @@ export class EmbeddingEncoder {
   }
 
   // ---- public API ----
+  // NOTE: ONNX inference (onnxruntime-node) is inherently async (session.run()
+  // returns a Promise). These methods are therefore async. Callers MUST await
+  // them. The previous synchronous spin-wait implementation blocked the Node
+  // event loop (the .then callback never ran) and burned a 30s busy-wait per
+  // call at 100% CPU — see encodeOnnx.
 
   /** Encode a single text (uses current IDF state; call encodeBatch first for full-corpus IDF). */
-  encode(text: string): Float32Array {
+  async encode(text: string): Promise<Float32Array> {
     if (this.backend === "onnx-local" && EmbeddingEncoder.onnxSession) {
       return this.encodeOnnx(text);
     }
-    // If ONNX was requested but still initialising, transparently fall back
-    if (this.backend === "onnx-local" && EmbeddingEncoder.onnxInitPromise) {
-      return this.vectorize(this.toNgrams(text));
-    }
+    // char-ngram-tfidf path (also used as transparent fallback while/if ONNX is unavailable).
     return this.vectorize(this.toNgrams(text));
   }
 
   /** Encode a batch and update IDF statistics from the full batch. */
-  encodeBatch(texts: string[]): Float32Array[] {
+  async encodeBatch(texts: string[]): Promise<Float32Array[]> {
     if (this.backend === "onnx-local" && EmbeddingEncoder.onnxSession) {
-      return texts.map(t => this.encodeOnnx(t));
-    }
-    // If ONNX was requested but still initialising, transparently fall back
-    if (this.backend === "onnx-local" && EmbeddingEncoder.onnxInitPromise) {
-      return this.encodeBatchCharNgram(texts);
+      return Promise.all(texts.map(t => this.encodeOnnx(t)));
     }
 
     // char-ngram-tfidf path.
@@ -248,7 +246,7 @@ export class EmbeddingEncoder {
    * in ESM/tsx runtime environments. The spin-wait approach works in both CJS
    * and ESM modes.
    */
-  private encodeOnnx(text: string): Float32Array {
+  private async encodeOnnx(text: string): Promise<Float32Array> {
     const session = EmbeddingEncoder.onnxSession;
     if (!session) return new Float32Array(this.onnxDim); // zero vector fallback
 
@@ -285,44 +283,31 @@ export class EmbeddingEncoder {
         token_type_ids: new Tensor('int64', BigInt64Array.from(typeIds.map(BigInt)), [1, MAX_LEN]),
       };
 
-      // Run inference synchronously via spin-wait on the async promise.
-      // This is safe because ONNX inference is CPU-bound and completes quickly (~10-50ms).
-      let result: Float32Array | null = null;
-      let error: Error | null = null;
-      session.run(feeds).then((r: Record<string, any>) => {
-        // Find the output key (usually 'last_hidden_state' or 'sentence_embedding')
-        const outputKey = Object.keys(r).find(k => k !== 'token_type_ids' && k !== 'attention_mask')
-          || Object.keys(r)[0];
-        if (!outputKey) {
-          error = new Error("No output found in ONNX result");
-          return;
-        }
-        const out = r[outputKey] as any;
-        const dim = out.dims[out.dims.length - 1] as number;
-        const data = Array.from(out.data.slice(0, dim)) as number[];
-        // L2 normalize
-        let norm = 0; for (const x of data) norm += x * x;
-        norm = Math.sqrt(norm) || 1;
-        const normalized = data.map(v => v / norm);
-        result = new Float32Array(normalized);
-      }).catch((e: Error) => {
-        error = e;
-      });
+      // onnxruntime-node's session.run() returns a Promise. AWAIT it properly.
+      // The previous implementation busy-waited on the async result with a
+      // synchronous `while` loop, which blocked the Node event loop so the
+      // `.then` callback never executed — every call burned a 30s timeout at
+      // 100% CPU and returned a zero vector. We now await the promise, which
+      // yields to the event loop and resolves correctly.
+      const r = await (session as any).run(feeds, {}, {});
 
-      // Spin-wait with timeout
-      const start = Date.now();
-      while (result === null && error === null) {
-        if (Date.now() - start > 30000) {
-          error = new Error("ONNX inference spin-wait timed out after 30s");
-          break;
-        }
+      // Find the output key (usually 'last_hidden_state' or 'sentence_embedding')
+      const outputKey = Object.keys(r).find(k => k !== 'token_type_ids' && k !== 'attention_mask')
+        || Object.keys(r)[0];
+      if (!outputKey) {
+        throw new Error("No output found in ONNX result");
       }
+      const out = r[outputKey] as any;
+      const dim = out.dims[out.dims.length - 1] as number;
+      const data = Array.from(out.data.slice(0, dim)) as number[];
+      // L2 normalize
+      let norm = 0; for (const x of data) norm += x * x;
+      norm = Math.sqrt(norm) || 1;
+      const normalized = data.map(v => v / norm);
+      const result = new Float32Array(normalized);
 
-      if (error) throw error;
-      if (!result) throw new Error("No result from ONNX inference");
-
-      this.onnxDim = (result as Float32Array).length;
-      return result as Float32Array;
+      this.onnxDim = result.length;
+      return result;
     } catch (e) {
       logger.warn("embedding-onnx", `ONNX inference failed: ${e}`);
       return new Float32Array(this.onnxDim);

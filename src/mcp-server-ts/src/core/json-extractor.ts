@@ -83,6 +83,101 @@ export class JSONExtractor {
   }
 
   /**
+   * Extract the raw JSON candidate string even when parsing fails.
+   * Returns the maximal-match candidate (markdown fence / array / object / raw)
+   * so callers can attempt lenient repair on the actual JSON text rather than
+   * a truncated prefix.
+   */
+  static extractRaw(response: string): string | null {
+    const trimmed = response.trim();
+    if (!trimmed) return null;
+
+    for (const strategy of [
+      this.extractMarkdownJsonMaximal,
+      this.extractMarkdownGenericMaximal,
+      this.extractJsonArrayMaximal,
+      this.extractJsonObjectMaximal,
+    ] as Array<(s: string) => string | null>) {
+      const extracted = strategy.call(this, trimmed);
+      if (extracted) return extracted;
+    }
+
+    // Fall back to the whole trimmed text
+    return trimmed;
+  }
+
+  /**
+   * Attempt to repair common LLM JSON defects and parse the result.
+   *
+   * Handles (in order):
+   *  - unterminated keys, e.g.  "rationale "Incomplete...  ->  "rationale": "Incomplete...
+   *  - trailing commas before } or ]
+   *  - unquoted object keys
+   *  - stray control characters
+   *
+   * Returns a successful result if any repair produces valid JSON, otherwise
+   * success:false with the cleaned text for downstream diagnostics.
+   */
+  static repairAndParse(text: string): ExtractionResult {
+    const raw = this.extractRaw(text);
+    if (!raw) {
+      return { success: false, error: "No JSON candidate found to repair" };
+    }
+
+    const candidates: string[] = [];
+
+    // Repair the most common LLM JSON defects, each as an independent pass so
+    // they can be combined in any order.
+    const fixUnterminatedKeys = (s: string) =>
+      // An object key written as "key" (with a trailing space inside the
+      // quotes) directly followed by the unquoted value text and then the
+      // value's closing quote, with no ':' in between.
+      // e.g.  "rationale "Incomplete rules."  ->  "rationale": "Incomplete rules."
+      s.replace(
+        /"([A-Za-z_$][\w ]{0,100}?)"(?!\s*:)(\s*)([^"\n]+?)"(?=[\s,}\]])/g,
+        (_m, key: string, ws: string, val: string) => `"${key.trim()}": "${ws}${val}"`
+      );
+
+    const fixUnquotedKeys = (s: string) =>
+      // Bareword object keys:  {invalid: ...}  ->  {"invalid": ...}
+      s.replace(/(^|[\s{,])([A-Za-z_$][\w$]*)(\s*):/g, '$1"$2"$3:');
+
+    const fixTrailingCommas = (s: string) =>
+      // Dangling commas before } or ]
+      s.replace(/,(\s*[}\]])/g, "$1");
+
+    const base = this.cleanJson(raw);
+
+    // Strategy 1: trailing commas only
+    candidates.push(fixTrailingCommas(base));
+    // Strategy 2: trailing commas + unterminated keys
+    candidates.push(fixTrailingCommas(fixUnterminatedKeys(base)));
+    // Strategy 3: trailing commas + unquoted keys
+    candidates.push(fixTrailingCommas(fixUnquotedKeys(base)));
+    // Strategy 4: all three combined
+    candidates.push(fixTrailingCommas(fixUnquotedKeys(fixUnterminatedKeys(base))));
+    // Strategy 5: unterminated keys only
+    candidates.push(fixUnterminatedKeys(base));
+    // Strategy 6: unquoted keys only
+    candidates.push(fixUnquotedKeys(base));
+
+    for (const candidate of candidates) {
+      try {
+        const parsed = JSON.parse(candidate);
+        return { success: true, json: candidate, parsed, strategy: "repair" };
+      } catch {
+        // try next candidate
+      }
+    }
+
+    return {
+      success: false,
+      error: "All repair strategies failed",
+      json: base.slice(0, 500),
+    };
+  }
+
+  /**
    * Extract JSON from ```json fence with MAXIMAL matching
    * Finds outermost ``` pair to handle nested code blocks
    */

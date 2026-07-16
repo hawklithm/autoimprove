@@ -446,6 +446,63 @@ Generate 1 rule following the output format below.`;
 - merged_count: number of patterns merged into this rule`;
     }
 
+    section += `
+
+## CRITICAL: STRICT JSON SYNTAX (your output will FAIL if violated)
+
+Your entire response MUST be valid JSON. The most common failure is malformed keys. Follow these rules exactly:
+
+1. **Every key MUST be a quoted string followed by a colon.** The format is ALWAYS \`"key": value\`.
+   - ✅ CORRECT: \`"rationale": "Some text"\`
+   - ❌ WRONG (bare key, WILL FAIL): \`rationale: "Some text"\`
+   - ❌ WRONG (missing closing quote + colon, WILL FAIL): \`"rationale "Some text"\`
+
+2. **Quote the key AND put a colon right after it.** A key string must END with \`"\` then immediately \`:\` — never a space then the value, and never another open quote.
+   - ❌ WRONG: \`"rationale "Incomplete rules..."\`  (the closing quote and colon were merged into a space — this corrupts the whole JSON)
+   - ✅ CORRECT: \`"rationale": "Incomplete rules..."\`
+
+3. **No trailing commas** after the last element of an array or object.
+   - ❌ WRONG: \`["a", "b",]\`  or  \`{"title": "x",}\`
+   - ✅ CORRECT: \`["a", "b"]\`  or  \`{"title": "x"}\`
+
+4. **Strings use double quotes only** (\`"\`), never single quotes. Escape inner double quotes with \`\\\`.
+
+### Minimal valid JSON example (single rule)
+
+\`\`\`json
+{
+  "title": "Use parameterized queries to prevent SQL injection",
+  "description": "Always use parameterized statements instead of string concatenation.",
+  "rationale": "String concatenation enables SQL injection and data breaches.",
+  "scope": "global",
+  "scenes": {"tech": ["nodejs"], "functional": ["database", "security"], "business": []},
+  "how_to_apply": ["Use parameterized queries", "Validate inputs"],
+  "when_to_use": ["When building SQL queries"],
+  "exceptions": []
+}
+\`\`\`
+
+### Minimal valid JSON example (batch / multiple rules)
+
+\`\`\`json
+[
+  {
+    "title": "Rule one",
+    "description": "Description one.",
+    "rationale": "Rationale one.",
+    "scope": "global",
+    "scenes": {"tech": [], "functional": [], "business": []},
+    "how_to_apply": ["Step 1"],
+    "when_to_use": ["When X"],
+    "exceptions": [],
+    "source_patterns": ["pattern 1"],
+    "merged_count": 1
+  }
+]
+\`\`\`
+
+Before responding, mentally re-check: are ALL keys written as \`"key":\` (quoted, with a colon, no space before the colon)? If not, fix it.`;
+
     section += `\n\n## Scope Determination
 
 REQUIRED: Every rule must include a "scope" field with one of these exact values:

@@ -113,10 +113,14 @@ export async function callMCPTool<T = any>(
   const client = await initMCPClient();
 
   try {
+    // Use a generous per-call timeout. Some tools (e.g. analyze_session with
+    // ONNX embedding-based signal extraction, or generate_rules with LLM
+    // enhancement) can take well over the SDK's default 60s and would
+    // otherwise fail with a misleading "Request timed out" error.
     const result = await client.callTool({
       name: toolName,
       arguments: params,
-    });
+    }, undefined, { timeout: 600000 });
 
     // Parse the result
     if (result.content && Array.isArray(result.content) && result.content.length > 0) {

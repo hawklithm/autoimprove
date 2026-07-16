@@ -422,6 +422,38 @@ export class RuleStorageSQLite {
   }
 
   /**
+   * Delete ALL rules (used by clear_all_rules during rebuild).
+   * Clears every rule-related table so a fresh rebuild starts from empty.
+   */
+  clearAll(): void {
+    const tx = this.db.transaction(() => {
+      this.db.prepare('DELETE FROM keyword_segments').run();
+      this.db.prepare('DELETE FROM scene_index').run();
+      this.db.prepare('DELETE FROM rules').run();
+      // rules_fts is an external-content FTS5 table. Its shadow tables
+      // (rules_fts_data/idx/docsize) are read-only, so DELETE/'rebuild' both
+      // fail. The only safe clear is to DROP and recreate the virtual table
+      // (shadow tables are dropped automatically with it).
+      this.db.prepare('DROP TABLE IF EXISTS rules_fts').run();
+      this.db.exec(
+        `CREATE VIRTUAL TABLE IF NOT EXISTS rules_fts USING fts5(
+          rule_id UNINDEXED,
+          title,
+          description,
+          how_to_apply,
+          when_to_use,
+          exceptions,
+          keywords,
+          content='',
+          tokenize='porter unicode61'
+        )`
+      );
+    });
+
+    tx();
+  }
+
+  /**
    * Convert database row to RuleIndexEntry
    */
   private rowToRuleEntry(row: any): RuleIndexEntry {

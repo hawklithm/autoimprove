@@ -58,13 +58,13 @@ export class NeighborSignalMatcher {
     const backend = (cfg?.embedding_backend as any) || "char-ngram-tfidf";
     this.encoder = new EmbeddingEncoder({ backend });
     this.matchThreshold = cfg?.signal_match?.threshold ?? 0.62;
-    this.buildIndex();
+    void this.buildIndex();
   }
 
   /**
    * Encode all signal texts into a vector index (replaces Aho-Corasick automaton).
    */
-  private buildIndex(): void {
+  private async buildIndex(): Promise<void> {
     const signals = this.db.getAllSignals();
     this.signalMap.clear();
     this.index = [];
@@ -77,7 +77,7 @@ export class NeighborSignalMatcher {
 
     // Encode all signal texts in one batch (shares IDF state, aligned dims).
     const texts = signals.map(s => s.text);
-    const vectors = this.encoder.encodeBatch(texts);
+    const vectors = await this.encoder.encodeBatch(texts);
 
     for (let i = 0; i < signals.length; i++) {
       const lowerText = signals[i].text.toLowerCase();
@@ -92,25 +92,25 @@ export class NeighborSignalMatcher {
   /**
    * Rebuild index if dictionary changed (interval-aligned, E3 hook point).
    */
-  private maybeRebuild(): void {
+  private async maybeRebuild(): Promise<void> {
     const now = Date.now();
     if (now - this.lastBuildTime > this.rebuildInterval) {
-      this.buildIndex();
+      await this.buildIndex();
     }
   }
 
   /**
    * Match signals in content via top-k cosine neighbor search.
    */
-  match(content: string, sessionId?: string, messageId?: string): MatchResult {
-    this.maybeRebuild();
+  async match(content: string, sessionId?: string, messageId?: string): Promise<MatchResult> {
+    await this.maybeRebuild();
 
     if (this.index.length === 0) {
       this.unmatchedCount++;
       return { content, matched_signals: [], aggregated_confidence: 0, is_matched: false };
     }
 
-    const queryVec = this.encoder.encode(content);
+    const queryVec = await this.encoder.encode(content);
 
     // Top-k neighbor scan (exact; E3 may swap for hnswlib/FAISS).
     const scored: { idx: number; sim: number }[] = [];
@@ -189,8 +189,8 @@ export class NeighborSignalMatcher {
   /**
    * Batch match — reuses single match (keeps interface identical to SignalMatcher).
    */
-  batchMatch(contents: Array<{ content: string; sessionId?: string; messageId?: string }>): MatchResult[] {
-    return contents.map(({ content, sessionId, messageId }) => this.match(content, sessionId, messageId));
+  async batchMatch(contents: Array<{ content: string; sessionId?: string; messageId?: string }>): Promise<MatchResult[]> {
+    return Promise.all(contents.map(({ content, sessionId, messageId }) => this.match(content, sessionId, messageId)));
   }
 
   /**
@@ -255,7 +255,7 @@ export class NeighborSignalMatcher {
    * Force rebuild index.
    */
   rebuild(): void {
-    this.buildIndex();
+    void this.buildIndex();
   }
 
   close(): void {

@@ -22,6 +22,7 @@ function normalizeRuleIndexEntry(entry: RuleIndexEntry | undefined | null): Rule
 
   return {
     ...entry,
+    confidence: typeof entry.confidence === "number" && !isNaN(entry.confidence) ? entry.confidence : 0.5,
     keywords: Array.isArray(entry.keywords) ? entry.keywords : [],
     scenes: createScene(entry.scenes || undefined) // Normalizes missing tech/functional/business arrays
   };

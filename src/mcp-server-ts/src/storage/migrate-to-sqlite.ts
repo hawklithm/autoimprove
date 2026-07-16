@@ -263,24 +263,24 @@ if (import.meta.url === `file://${process.argv[1]}`) {
 
   switch (command) {
     case "status":
-      console.log(JSON.stringify(migration.getStatus(), null, 2));
+      logger.consoleLog(JSON.stringify(migration.getStatus(), null, 2));
       break;
 
     case "migrate":
       migration.migrate().then(result => {
-        console.log(JSON.stringify(result, null, 2));
+        logger.consoleLog(JSON.stringify(result, null, 2));
         process.exit(result.success ? 0 : 1);
       });
       break;
 
     case "rollback":
       const success = migration.rollback();
-      console.log(success ? "Rollback successful" : "Rollback failed");
+      logger.consoleLog(success ? "Rollback successful" : "Rollback failed");
       process.exit(success ? 0 : 1);
       break;
 
     default:
-      console.log("Usage: node migrate-to-sqlite.js [status|migrate|rollback]");
+      logger.consoleLog("Usage: node migrate-to-sqlite.js [status|migrate|rollback]");
       process.exit(1);
   }
 }

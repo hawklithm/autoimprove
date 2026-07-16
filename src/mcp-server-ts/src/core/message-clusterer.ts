@@ -73,7 +73,7 @@ export class MessageClusterer {
   /**
    * Cluster candidates into semantically similar groups
    */
-  clusterMessages(candidates: MessageCandidate[]): MessageCluster[] {
+  async clusterMessages(candidates: MessageCandidate[]): Promise<MessageCluster[]> {
     if (candidates.length === 0) {
       return [];
     }
@@ -94,7 +94,7 @@ export class MessageClusterer {
 
     // Build vectors: semantic (char n-gram) when encoder active, else legacy word TF-IDF.
     const vectors = this.encoder
-      ? this.buildSemanticVectors(candidates)
+      ? await this.buildSemanticVectors(candidates)
       : this.buildTFIDFVectors(candidates);
 
     // Hierarchical clustering
@@ -275,11 +275,11 @@ export class MessageClusterer {
    * Returns the same sparse-Map shape as buildTFIDFVectors so growCluster/cosineSimilarity
    * are reused unchanged. Only called when a semantic encoder is active (non-legacy mode).
    */
-  private buildSemanticVectors(
+  private async buildSemanticVectors(
     candidates: MessageCandidate[]
-  ): Map<number, Map<string, number>> {
+  ): Promise<Map<number, Map<string, number>>> {
     const texts = candidates.map(c => c.extractedText);
-    const dense = this.encoder!.encodeBatch(texts); // L2-normalized Float32Array
+    const dense = await this.encoder!.encodeBatch(texts); // L2-normalized Float32Array
     const sparse = new Map<number, Map<string, number>>();
     dense.forEach((vec, i) => {
       const m = new Map<string, number>();
@@ -431,10 +431,10 @@ export class MessageClusterer {
    *
    * NOTE: only called when a semantic encoder is active (non-legacy mode).
    */
-  incrementalCluster(
+  async incrementalCluster(
     newCandidates: MessageCandidate[],
     existingCentroids: ClusterCentroid[]
-  ): { clusters: MessageCluster[]; outliers: MessageCandidate[] } {
+  ): Promise<{ clusters: MessageCluster[]; outliers: MessageCandidate[] }> {
     if (!this.encoder || newCandidates.length === 0) {
       // Legacy or no new data — return all as outliers for full clustering.
       return { clusters: [], outliers: newCandidates };
@@ -442,7 +442,7 @@ export class MessageClusterer {
 
     // Encode new candidates
     const newTexts = newCandidates.map(c => c.extractedText);
-    const newVectors = this.encoder.encodeBatch(newTexts);
+    const newVectors = await this.encoder.encodeBatch(newTexts);
 
     // Reconstruct dense vectors for existing centroids
     const centroidVectors = existingCentroids.map(c =>
@@ -516,13 +516,13 @@ export class MessageClusterer {
    * D3: serialise current clusters into ClusterCentroid[] for cache.
    * Called after full clustering so subsequent incremental runs can use them.
    */
-  clustersToCentroids(clusters: MessageCluster[]): ClusterCentroid[] {
+  async clustersToCentroids(clusters: MessageCluster[]): Promise<ClusterCentroid[]> {
     if (!this.encoder) return [];
 
     const centroids: ClusterCentroid[] = [];
     for (const c of clusters) {
       // Encode centroid text to get the dense vector
-      const vec = this.encoder.encode(c.centroid);
+      const vec = await this.encoder.encode(c.centroid);
       centroids.push({
         vector: Array.from(vec),
         centroidText: c.centroid,

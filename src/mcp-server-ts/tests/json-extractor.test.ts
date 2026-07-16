@@ -282,6 +282,76 @@ Some trailing text
     });
   });
 
+  describe("Lenient repair (repairAndParse)", () => {
+    it("should repair an unterminated key (missing closing quote + colon)", () => {
+      // Reproduces the real-world LLM defect: "rationale "Incomplete...
+      const broken = `[
+  {
+    "title": "Complete rule",
+    "description": "Include all fields",
+    "rationale "Incomplete rules force users to manually add missing fields.",
+    "scope": "global"
+  }
+]`;
+
+      const result = JSONExtractor.repairAndParse(broken);
+
+      expect(result.success).toBe(true);
+      expect(result.strategy).toBe("repair");
+      expect(result.parsed).toBeInstanceOf(Array);
+      expect(result.parsed[0].rationale).toContain("Incomplete rules");
+    });
+
+    it("should repair trailing commas before } and ]", () => {
+      const broken = `{
+  "title": "Rule with trailing comma",
+  "done": true,
+}`;
+
+      const result = JSONExtractor.repairAndParse(broken);
+
+      expect(result.success).toBe(true);
+      expect(result.parsed.title).toBe("Rule with trailing comma");
+      expect(result.parsed.done).toBe(true);
+    });
+
+    it("should quote unquoted object keys", () => {
+      const broken = `{invalid: "json without quotes"}`;
+
+      const result = JSONExtractor.repairAndParse(broken);
+
+      expect(result.success).toBe(true);
+      expect(result.parsed.invalid).toBe("json without quotes");
+    });
+
+    it("should return success:false when JSON is truly unrecoverable", () => {
+      const result = JSONExtractor.repairAndParse("this is not json at all");
+
+      expect(result.success).toBe(false);
+      expect(result.error).toBe("All repair strategies failed");
+    });
+  });
+
+  describe("extractRaw", () => {
+    it("should return the raw JSON candidate even when it cannot be parsed", () => {
+      const broken = `[
+  {
+    "title": "Complete rule",
+    "rationale "Incomplete rules."
+  }
+]`;
+
+      const raw = JSONExtractor.extractRaw(broken);
+
+      expect(raw).not.toBeNull();
+      expect(raw).toContain('"rationale "Incomplete rules."');
+    });
+
+    it("should return null for empty input", () => {
+      expect(JSONExtractor.extractRaw("")).toBeNull();
+    });
+  });
+
   describe("Helper: looksLikeJson", () => {
     it("should identify object-like strings", () => {
       expect(JSONExtractor.looksLikeJson(`{"a": 1}`)).toBe(true);

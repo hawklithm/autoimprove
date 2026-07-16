@@ -1169,7 +1169,7 @@ async function handleAnalyzeSession(args: any) {
     };
   }
 
-  const patterns = analyzer.analyzeSession(sessionFilePath, {
+  const patterns = await analyzer.analyzeSession(sessionFilePath, {
     incremental: args.incremental !== false,
     forceReanalyze: args.force_reanalyze === true,
   });
@@ -1200,6 +1200,33 @@ async function handleAnalyzeSession(args: any) {
         }),
       },
     ],
+  };
+}
+
+/**
+ * Build a minimal structured content object from an index entry when LLM
+ * enhancement produced none (e.g. API unavailable). Ensures a rule is
+ * still persisted with usable content instead of failing with "Content not found".
+ */
+function buildBasicContent(entry: any): any {
+  const description = (entry.description as string) || entry.type || "Coding pattern";
+  const formatted = `# ${description}\n\n## Description\n\n${description}\n`;
+  return {
+    id: entry.id,
+    content: formatted,
+    title: description,
+    description,
+    reason: `Detected pattern (${entry.type})`,
+    how_to_apply: [],
+    when_to_use: [],
+    exceptions: [],
+    related_rules: [],
+    metadata: {
+      type: entry.type,
+      priority: entry.priority,
+      confidence: entry.confidence,
+      keywords: entry.keywords || [],
+    },
   };
 }
 
@@ -1308,6 +1335,24 @@ async function handleGenerateRules(args: any) {
         logger.warn("generate_rules", `Template generation failed for pattern ${i}: ${error.message}`);
       }
     }
+
+    // If template generation produced no rules (e.g. the template engine
+    // crashed on these patterns), fall back to the legacy generator so we
+    // still produce rules instead of returning zero.
+    if (rules.length === 0) {
+      logger.warn("generate_rules", "Template generation yielded 0 rules, falling back to legacy generator");
+      const useEnhanced = useLLMEnhancement || extractCodeExamples;
+      if (useEnhanced) {
+        rules = await hybridGenerator.batchGenerateEnhancedRules(
+          patterns,
+          nextIdNum,
+          scene,
+          { useLLMEnhancement, extractCodeExamples, sessionDir, maxExamples }
+        );
+      } else {
+        rules = generator.batchGenerateRules(patterns, nextIdNum, scene);
+      }
+    }
   } else {
     // Use legacy generators (backward compatibility)
     const useEnhanced = useLLMEnhancement || extractCodeExamples;
@@ -1408,8 +1453,11 @@ async function handleGenerateRules(args: any) {
       logger.info("deduplication", `Updated ${topMatch.existingRuleId} with content from ${indexEntry.id} (similarity: ${(topMatch.similarity * 100).toFixed(1)}%)`);
     } else {
       // No similar rule or similarity below threshold - add as new rule
-      indexManager.addRule(indexEntry);
-      contentManager.saveContent(content);
+      // Fall back to basic content if LLM enhancement produced none
+      // (e.g. API unavailable), so the rule is still persisted.
+      const ruleContent = content || buildBasicContent(indexEntry);
+      indexManager.addRule(indexEntry, ruleContent);
+      contentManager.saveContent(ruleContent);
 
       deduplicationResults.push({
         action: "added",
@@ -1491,8 +1539,15 @@ async function handleSearchKnowledge(args: any) {
   const scopesStr = args.scopes as string | undefined;
 
   // 🆕 Log search request
+  const searchType = ruleId
+    ? "by_id"
+    : sceneJson
+      ? "by_scene"
+      : keywords
+        ? "by_keywords"
+        : "list_all";
   logger.info("search_knowledge", "Search request received", {
-    search_type: ruleId ? "by_id" : (sceneJson ? "by_scene" : "list_all"),
+    search_type: searchType,
     has_scene: !!sceneJson,
     has_keywords: !!keywords,
     has_rule_id: !!ruleId,
@@ -1567,6 +1622,94 @@ async function handleSearchKnowledge(args: any) {
 
   // Parse scope filter
   const scopeFilter = parseScopeFilter(scopesStr, currentProject, organizationId);
+
+  // Search by keywords only (no scene_json provided)
+  // FIX: previously keyword-only queries fell through to list-all (returned every rule).
+  // Route them through RuleMatcher so SQLite keyword_segments index is used with
+  // relevance scoring and top-N limiting.
+  if (keywords && !sceneJson) {
+    const kwList = parseCommaSeparated(keywords);
+    if (kwList && kwList.length > 0) {
+      logger.info("search_knowledge", "Searching by keywords only", {
+        keywords: kwList,
+        scope_filter: scopeFilter,
+      });
+
+      const matches = matcher.matchRules(
+        createScene(), // empty scene; matching is driven by keywords
+        kwList,
+        undefined, // use default maxResults
+        undefined, // use default minConfidence
+        scopeFilter
+      );
+
+      logger.info("search_knowledge", "Keyword search completed", {
+        matches_count: matches.length,
+        top_3_rules: matches.slice(0, 3).map(m => ({
+          id: m.rule.id,
+          relevance: m.relevance_score.toFixed(3),
+          priority: m.rule.priority,
+        })),
+      });
+
+      // Auto-record feedback for matched rules
+      if (!skipFeedback && matches.length > 0) {
+        const keywordContext = `keywords:${kwList.join(",")}`;
+        for (const match of matches) {
+          adaptiveConfidence.recordFeedback({
+            rule_id: match.rule.id,
+            timestamp: new Date().toISOString(),
+            feedback_type: "used",
+            context: `${keywordContext}:relevance:${match.relevance_score.toFixed(2)}`,
+          });
+        }
+      }
+
+      // Format results as markdown (reuse the same summary-only layout)
+      if (matches.length === 0) {
+        return {
+          content: [
+            {
+              type: "text",
+              text: "No matching rules found for the given keywords.",
+            },
+          ],
+        };
+      }
+
+      let markdown = `## Get Full Details\n\n`;
+      markdown += `To see the complete rule with application guidance, use the MCP tool **get_rule_details** with the rule ID.\n\n`;
+      markdown += `**get_rule_details** returns:\n`;
+      markdown += `- **How to Apply:** Step-by-step application guide\n`;
+      markdown += `- **When to Use:** Specific scenarios where this rule applies\n`;
+      markdown += `- **Exceptions:** Edge cases where the rule should NOT be applied\n\n`;
+      markdown += `---\n\n`;
+      markdown += `# Found ${matches.length} Matching Rule${matches.length > 1 ? 's' : ''}\n\n`;
+
+      matches.forEach((m, idx) => {
+        const ruleContent = contentManager.loadContent(m.rule.id);
+        if (!ruleContent) {
+          logger.warn("search_knowledge", `Failed to load content for rule ${m.rule.id}`);
+          return;
+        }
+        markdown += `## ${idx + 1}. ${ruleContent.title || m.rule.id}\n\n`;
+        if (ruleContent.description) {
+          markdown += `**Description:** ${ruleContent.description}\n\n`;
+        }
+        markdown += `**Rule ID:** \`${m.rule.id}\`\n\n`;
+        markdown += `---\n\n`;
+      });
+
+      return {
+        content: [
+          {
+            type: "text",
+            text: markdown,
+          },
+        ],
+      };
+    }
+  }
 
   // Search by scene
   if (sceneJson) {
@@ -2781,6 +2924,18 @@ async function handleClearAllRules(args: any) {
     indexManager = new RuleIndexManager();
     contentManager = new RuleContentManager();
 
+    // Clear the SQLite rules database (rules.db) so a rebuild starts empty.
+    // Without this, stale rows remain and generate_rules collides with
+    // missing content files ("Content not found for rule rule-0XX").
+    const sqlite = indexManager.getSQLiteStorage();
+    if (sqlite) {
+      try {
+        sqlite.clearAll();
+      } catch (dbError: any) {
+        logger.error("clear", "Failed to clear SQLite rules DB", dbError);
+      }
+    }
+
     logger.info("clear", `Cleared ${deletedCount} rules from knowledge base`);
 
     return {
@@ -3164,7 +3319,7 @@ async function handleTriggerClustering(args: any) {
     const filteredContent = labeledContent.filter(lc => lc.confidence >= minConfidence);
 
     // Perform clustering
-    const clusters = _patternClusterer.clusterPatterns(filteredContent);
+    const clusters = await _patternClusterer.clusterPatterns(filteredContent);
     const clusterStats = _patternClusterer.getClusterStats(clusters);
 
     // Filter by minimum cluster size
@@ -3231,7 +3386,7 @@ async function handleGenerateRulesFromClusters(args: any) {
     }
 
     // Perform clustering
-    const clusters = _patternClusterer.clusterPatterns(labeledContent);
+    const clusters = await _patternClusterer.clusterPatterns(labeledContent);
 
     // Filter high-quality clusters
     const highQualityClusters = clusters.filter(
@@ -3745,9 +3900,24 @@ async function main() {
   await server.connect(transport);
 
   logger.info("server", "AutoImprove MCP Server (TypeScript) started");
+  // Key lifecycle node: print to console so operators see start/stop clearly
+  console.log(`[AutoImprove] MCP server started. Logs: ${logger.getLogFile()}`);
+
+  // Key lifecycle node: print on graceful shutdown
+  process.on("SIGINT", () => {
+    console.log("[AutoImprove] MCP server shutting down (SIGINT)...");
+    logger.shutdown();
+    process.exit(0);
+  });
+  process.on("SIGTERM", () => {
+    console.log("[AutoImprove] MCP server shutting down (SIGTERM)...");
+    logger.shutdown();
+    process.exit(0);
+  });
 }
 
 main().catch((error) => {
   logger.error("server", "Server startup failed", error);
+  console.log("[AutoImprove] MCP server failed to start:", error instanceof Error ? error.message : error);
   process.exit(1);
 });

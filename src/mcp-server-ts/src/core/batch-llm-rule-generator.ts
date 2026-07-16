@@ -89,7 +89,7 @@ export class BatchLLMRuleGenerator {
 
     // Step 1: Cluster similar patterns
     logger.info("batch-llm", `\n[1/3] Clustering similar patterns...`);
-    const clusters = this.clusterer.clusterPatterns(patterns, {
+    const clusters = await this.clusterer.clusterPatterns(patterns, {
       minSimilarity,
       maxClusterSize: maxPatternsPerBatch,
       minClusterSize
@@ -233,7 +233,7 @@ export class BatchLLMRuleGenerator {
       return shouldGenerate;
     });
 
-    console.log(`[DEBUG] processCluster: ${cluster.patterns.length} patterns, ${qualifiedPatterns.length} qualified`);
+    logger.debug("batch-llm-generator", `processCluster: ${cluster.patterns.length} patterns, ${qualifiedPatterns.length} qualified`);
 
     if (qualifiedPatterns.length === 0) {
       return [];
@@ -267,7 +267,7 @@ export class BatchLLMRuleGenerator {
         ? Math.min(this.calculateMaxTokens(cluster), clusterEstimatedMaxTokens)
         : this.calculateMaxTokens(cluster);
 
-      console.log(`[DEBUG] Sending request to LLM (attempt ${retryCount + 1}), maxTokens: ${maxTokens}, patterns: ${patternsToUse.length}`);
+      logger.debug("batch-llm-generator", `Sending request to LLM (attempt ${retryCount + 1}), maxTokens: ${maxTokens}, patterns: ${patternsToUse.length}`);
       try {
         const result = await this.sendLLMRequestAndParse(cluster, patternsToUse, prompt, maxTokens, ruleId, scene);
 
@@ -276,7 +276,7 @@ export class BatchLLMRuleGenerator {
         if (result.completionTokens && (!this.estimatedMaxCompletionTokens || result.completionTokens > this.estimatedMaxCompletionTokens)) {
           this.estimatedMaxCompletionTokens = result.completionTokens;
           clusterEstimatedMaxTokens = result.completionTokens;
-          console.log(`[DEBUG] Updated estimated max completion tokens: ${this.estimatedMaxCompletionTokens}`);
+          logger.debug("batch-llm-generator", `Updated estimated max completion tokens: ${this.estimatedMaxCompletionTokens}`);
         }
 
         return result.rules;
@@ -287,7 +287,7 @@ export class BatchLLMRuleGenerator {
         if (!isTruncation || retryCount >= this.MAX_RETRY_ON_TRUNCATION) {
           // 非截断错误或已达最大重试次数，记录错误并返回空
           if (!isTruncation) {
-            console.log(`[DEBUG] LLM error (non-truncation): ${errorMsg}`);
+            logger.debug("batch-llm-generator", `LLM error (non-truncation): ${errorMsg}`);
             logger.warn("batch-llm", `LLM request failed for cluster ${cluster.cluster_id}`, { error: errorMsg });
           }
           break;
@@ -303,12 +303,12 @@ export class BatchLLMRuleGenerator {
         // 估算值取当前 maxTokens 的 80%，逐步收敛
         const newEstimate = Math.floor(currentMaxTokens * 0.8);
         clusterEstimatedMaxTokens = newEstimate;
-        console.log(`[DEBUG] Truncation detected, reducing estimated max completion tokens: ${newEstimate}`);
+        logger.debug("batch-llm-generator", `Truncation detected, reducing estimated max completion tokens: ${newEstimate}`);
 
         if (newEstimate < 500 && patternsToUse.length === 1) {
           // 连 1 个 pattern 都跑不通（max_tokens 太小无法生成任何有意义的内容），中断
           const fatalMsg = `模型的 token 长度限制无法支持规则生成：即使单个 pattern 也无法完整返回（估算 max_tokens=${newEstimate}）。请考虑更换模型或增大模型的 max_tokens 限制。`;
-          console.log(`[DEBUG] ${fatalMsg}`);
+          logger.debug("batch-llm-generator", fatalMsg);
           logger.error("batch-llm", fatalMsg);
           throw new Error(fatalMsg);
         }
@@ -327,7 +327,7 @@ export class BatchLLMRuleGenerator {
           patternsToUse = patternsToUse.slice(0, newCount);
         }
 
-        console.log(`[DEBUG] Retrying with ${patternsToUse.length} patterns (was ${qualifiedPatterns.length})`);
+        logger.debug("batch-llm-generator", `Retrying with ${patternsToUse.length} patterns (was ${qualifiedPatterns.length})`);
       }
     }
 
@@ -380,8 +380,8 @@ export class BatchLLMRuleGenerator {
     const finishReason = response.choices[0]?.finish_reason;
     const completionTokens = response.usage?.completion_tokens ?? null;
 
-    console.log(`[DEBUG] Response received, finish_reason: ${finishReason}`);
-    console.log(`[DEBUG] LLM call successful, response length: ${responseText.length}`);
+    logger.debug("batch-llm-generator", `Response received, finish_reason: ${finishReason}`);
+    logger.debug("batch-llm-generator", `LLM call successful, response length: ${responseText.length}`);
 
     const responseLog = `\n${"=".repeat(80)}\n` +
       `[${new Date().toISOString()}] [BATCH-LLM RESPONSE] Cluster ${cluster.cluster_id}\n` +
@@ -452,7 +452,7 @@ export class BatchLLMRuleGenerator {
   /**
    * Parse batch LLM response (may contain multiple rules)
    */
-  private parseBatchResponse(response: string, cluster: PatternClusterGroup): Array<{
+  protected parseBatchResponse(response: string, cluster: PatternClusterGroup): Array<{
     title: string;
     description: string;
     rationale: string;
@@ -493,47 +493,62 @@ export class BatchLLMRuleGenerator {
       const extraction = JSONExtractor.extract(response);
 
       if (!extraction.success) {
-        logger.warn("batch-llm", "Failed to parse batch LLM response", {
+        logger.warn("batch-llm", "Initial JSON extraction failed, will attempt repair", {
           responseLength: response.length,
           responseSample: response.slice(0, 500),
           error: extraction.error
         });
-        throw new Error(`JSON extraction failed: ${extraction.error}`);
+      } else {
+        logger.debug("batch-llm", "JSON extracted successfully", {
+          strategy: extraction.strategy,
+          jsonLength: extraction.json?.length
+        });
       }
-
-      logger.debug("batch-llm", "JSON extracted successfully", {
-        strategy: extraction.strategy,
-        jsonLength: extraction.json?.length
-      });
 
       let parsed = extraction.parsed;
 
-      // If parsing still failed, try recovery strategies
+      // If extraction failed, try lenient repair of common LLM JSON defects
+      // (e.g. unterminated keys like "rationale ", trailing commas, unquoted keys).
       if (!parsed) {
-        logger.warn("batch-llm", "Extracted JSON failed to parse, attempting recovery");
+        logger.warn("batch-llm", "Extracted JSON failed to parse, attempting repair", {
+          strategy: extraction.strategy,
+          error: extraction.error
+        });
 
-        const jsonStr = extraction.json!;
-
-        // Strategy 1: Try to extract partial valid JSON up to error position
-        try {
-          const partialJson = this.attemptPartialRecovery(jsonStr, jsonStr.length);
-          if (partialJson) {
-            parsed = JSON.parse(partialJson);
-            logger.info("batch-llm", "Successfully recovered partial JSON");
+        const rawJson = JSONExtractor.extractRaw(response);
+        if (rawJson) {
+          const repaired = JSONExtractor.repairAndParse(rawJson);
+          if (repaired.success && repaired.parsed) {
+            parsed = repaired.parsed;
+            logger.info("batch-llm", "Successfully recovered JSON via repair", {
+              strategy: repaired.strategy
+            });
+          } else {
+            logger.debug("batch-llm", "Repair failed", {
+              error: repaired.error,
+              jsonSample: (repaired.json || "").slice(0, 500)
+            });
           }
-        } catch {
-          // Continue to next strategy
         }
 
-        // Strategy 2: Try removing incomplete last element
+        // Fallback: keep the previous best-effort recovery for genuinely
+        // truncated responses (partial objects / incomplete last element).
         if (!parsed) {
-          const recoveredJson = this.attemptIncompleteElementRemoval(jsonStr);
-          if (recoveredJson) {
-            try {
-              parsed = JSON.parse(recoveredJson);
-              logger.info("batch-llm", "Successfully recovered by removing incomplete element");
-            } catch {
-              // Recovery failed
+          const jsonStr = rawJson || extraction.json || "";
+          try {
+            const partialJson = this.attemptPartialRecovery(jsonStr, jsonStr.length);
+            if (partialJson) parsed = JSON.parse(partialJson);
+          } catch {
+            // Continue to next strategy
+          }
+          if (!parsed) {
+            const recoveredJson = this.attemptIncompleteElementRemoval(jsonStr);
+            if (recoveredJson) {
+              try {
+                parsed = JSON.parse(recoveredJson);
+              } catch {
+                // Recovery failed
+              }
             }
           }
         }
@@ -541,8 +556,8 @@ export class BatchLLMRuleGenerator {
         // If all recovery failed, throw
         if (!parsed) {
           logger.error("batch-llm", "All recovery strategies failed", undefined, {
-            jsonSample: jsonStr.slice(0, 500),
-            jsonEnd: jsonStr.slice(-500)
+            jsonSample: (rawJson || "").slice(0, 500),
+            jsonEnd: (rawJson || "").slice(-500)
           });
           throw new Error("Failed to parse JSON after all recovery attempts");
         }

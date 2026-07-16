@@ -170,7 +170,7 @@ export class AdaptiveSessionAnalyzer {
     const unmatchedContent: string[] = [];
 
     for (const msg of userMessages) {
-      const result = this.signalMatcher.match(
+      const result = await this.signalMatcher.match(
         msg.content,
         sessionData.session_id,
         msg.line_number.toString()
@@ -209,7 +209,7 @@ export class AdaptiveSessionAnalyzer {
       logger.consoleError(`✓ Extracted ${extractionResult.new_signals_added} new signals`);
 
       // Rebuild signal matcher with new signals
-      this.signalMatcher.rebuild();
+      void this.signalMatcher.rebuild();
     }
 
     // Step 3: Convert match results to patterns
@@ -249,7 +249,7 @@ export class AdaptiveSessionAnalyzer {
     let clusteringResult;
     if (options.enableClustering) {
       const labeledContent = this.db.getLabeledContentBySession(sessionData.session_id);
-      const clusters = this.clusterer.clusterPatterns(labeledContent);
+      const clusters = await this.clusterer.clusterPatterns(labeledContent);
       const clusterStats = this.clusterer.getClusterStats(clusters);
 
       logger.consoleError(`✓ Created ${clusters.length} pattern clusters`);

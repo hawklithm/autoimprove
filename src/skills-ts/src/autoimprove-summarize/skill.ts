@@ -191,7 +191,9 @@ async function run() {
       return;
     }
 
-    const ruleIds = rulesResult.rule_ids || [];
+    // generate_rules returns the field as `ids` (see server handler).
+    // Fall back to `rule_ids` for backward compatibility.
+    const ruleIds = (rulesResult as any).ids || rulesResult.rule_ids || [];
     const dedup = rulesResult.deduplication;
 
     // Display generation results with deduplication stats
@@ -825,7 +827,9 @@ Output ONLY the JSON, no explanations.`;
     return;
   }
 
-  const ruleIds = rulesResult.rule_ids || [];
+  // generate_rules returns the field as `ids` (see server handler).
+  // Fall back to `rule_ids` for backward compatibility.
+  const ruleIds = (rulesResult as any).ids || rulesResult.rule_ids || [];
   const dedup = rulesResult.deduplication;
 
   console.log(`✅ Generated ${ruleIds.length} optimized rule(s)\n`);
@@ -1166,7 +1170,9 @@ async function runBatchAnalysis(
         continue;
       }
 
-      const ruleIds = rulesResult.rule_ids || [];
+      // generate_rules returns the field as `ids` (see server handler).
+      // Fall back to `rule_ids` for backward compatibility.
+      const ruleIds = (rulesResult as any).ids || rulesResult.rule_ids || [];
       console.log(`  ✅ Generated ${ruleIds.length} rule(s)`);
 
       totalPatterns += patternsCount;

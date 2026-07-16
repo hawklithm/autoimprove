@@ -119,11 +119,11 @@ export class Personalizer {
    * update the user centroid / thresholds (EMA). No-op when personalization
    * is disabled (legacy behavior preserved).
    */
-  recordFeedback(
+  async recordFeedback(
     userId: string,
     feedbackType: "used" | "ignored" | "corrected" | "disabled",
     signalText?: string
-  ): void {
+  ): Promise<void> {
     if (!this.enabled()) return;
 
     const profile = this.load(userId);
@@ -131,7 +131,7 @@ export class Personalizer {
     const negative = feedbackType === "ignored" || feedbackType === "disabled";
 
     if (signalText && (positive || negative)) {
-      const vec = this.encoder.encode(signalText);
+      const vec = await this.encoder.encode(signalText);
       // EMA update of centroid with the (signed) sample.
       const sign = positive ? 1 : -1;
       if (profile.centroid.length === 0) {
@@ -163,12 +163,12 @@ export class Personalizer {
    * After a session is analyzed, fold the session's positive signals into the
    * user centroid (async-safe; called incrementally).
    */
-  recordSessionAnalyzed(userId: string, positiveSignalTexts: string[]): void {
+  async recordSessionAnalyzed(userId: string, positiveSignalTexts: string[]): Promise<void> {
     if (!this.enabled() || positiveSignalTexts.length === 0) return;
     const profile = this.load(userId);
 
     for (const text of positiveSignalTexts) {
-      const vec = this.encoder.encode(text);
+      const vec = await this.encoder.encode(text);
       if (profile.centroid.length === 0) {
         profile.centroid = Array.from(vec);
       } else {
@@ -209,10 +209,10 @@ export class Personalizer {
    * Cosine between a message vector and the user centroid (for an optional
    * nearest-centroid classifier: "is this message worth extracting as signal?").
    */
-  centroidSimilarity(userId: string, text: string): number {
+  async centroidSimilarity(userId: string, text: string): Promise<number> {
     const profile = this.load(userId);
     if (profile.centroid.length === 0) return 0;
-    const vec = this.encoder.encode(text);
+    const vec = await this.encoder.encode(text);
     let dot = 0;
     for (let i = 0; i < vec.length; i++) dot += vec[i] * profile.centroid[i];
     return dot;

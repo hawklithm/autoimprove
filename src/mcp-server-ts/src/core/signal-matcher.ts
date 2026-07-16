@@ -81,7 +81,7 @@ export class SignalMatcher {
   /**
    * Match signals in content
    */
-  match(content: string, sessionId?: string, messageId?: string): MatchResult {
+  async match(content: string, sessionId?: string, messageId?: string): Promise<MatchResult> {
     this.maybeRebuild();
 
     if (!this.ac) {
@@ -169,10 +169,10 @@ export class SignalMatcher {
   /**
    * Batch match multiple contents
    */
-  batchMatch(contents: Array<{ content: string; sessionId?: string; messageId?: string }>): MatchResult[] {
-    return contents.map(({ content, sessionId, messageId }) =>
+  async batchMatch(contents: Array<{ content: string; sessionId?: string; messageId?: string }>): Promise<MatchResult[]> {
+    return Promise.all(contents.map(({ content, sessionId, messageId }) =>
       this.match(content, sessionId, messageId)
-    );
+    ));
   }
 
   /**

@@ -47,7 +47,7 @@ export class PatternClusterer {
   /**
    * Cluster labeled content by semantic similarity
    */
-  clusterPatterns(labeledContent: LabeledContent[]): PatternCluster[] {
+  async clusterPatterns(labeledContent: LabeledContent[]): Promise<PatternCluster[]> {
     if (labeledContent.length === 0) {
       return [];
     }
@@ -57,7 +57,7 @@ export class PatternClusterer {
     const allClusters: PatternCluster[] = [];
 
     for (const [type, contents] of Object.entries(byType)) {
-      const typeClusters = this.clusterByType(type as PatternType, contents);
+      const typeClusters = await this.clusterByType(type as PatternType, contents);
       allClusters.push(...typeClusters);
     }
 
@@ -83,7 +83,7 @@ export class PatternClusterer {
   /**
    * Cluster content of the same pattern type
    */
-  private clusterByType(patternType: PatternType, contents: LabeledContent[]): PatternCluster[] {
+  private async clusterByType(patternType: PatternType, contents: LabeledContent[]): Promise<PatternCluster[]> {
     const clusters: PatternCluster[] = [];
     const visited = new Set<number>();
 
@@ -116,7 +116,7 @@ export class PatternClusterer {
         const content2 = contents[j];
         if (!content2.id) continue;
 
-        const similarity = this.calculateSimilarity(features[i], features[j]);
+        const similarity = await this.calculateSimilarity(features[i], features[j]);
 
         if (similarity > this.similarityThreshold) {
           // Add to cluster
@@ -214,10 +214,10 @@ export class PatternClusterer {
   /**
    * Calculate similarity between two feature sets
    */
-  private calculateSimilarity(f1: ClusterFeatures, f2: ClusterFeatures): number {
+  private async calculateSimilarity(f1: ClusterFeatures, f2: ClusterFeatures): Promise<number> {
     // Signal similarity (0.7): Jaccard in legacy mode, semantic cosine in semantic mode.
     const signalSimilarity = this.encoder
-      ? this.semanticSimilarity(f1.signals, f2.signals)
+      ? await this.semanticSimilarity(f1.signals, f2.signals)
       : this.jaccardSimilarity(f1.signals, f2.signals);
 
     // Content length similarity (normalized difference)
@@ -237,12 +237,12 @@ export class PatternClusterer {
   }
 
   /** Semantic similarity between two signal-text sets via shared encoder. */
-  private semanticSimilarity(signals1: string[], signals2: string[]): number {
+  private async semanticSimilarity(signals1: string[], signals2: string[]): Promise<number> {
     if (!this.encoder) return 0;
     const t1 = signals1.join(" ");
     const t2 = signals2.join(" ");
     if (!t1 || !t2) return 0;
-    const [v1, v2] = this.encoder.encodeBatch([t1, t2]);
+    const [v1, v2] = await this.encoder.encodeBatch([t1, t2]);
     return EmbeddingEncoder.cosine(v1, v2);
   }
 
@@ -277,7 +277,7 @@ export class PatternClusterer {
   /**
    * Get clusters for a specific pattern type
    */
-  getClustersForType(patternType: PatternType): PatternCluster[] {
+  async getClustersForType(patternType: PatternType): Promise<PatternCluster[]> {
     const labeledContent = this.db.getLabeledContentByPatternType(patternType);
     return this.clusterByType(patternType, labeledContent);
   }
