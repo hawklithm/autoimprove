@@ -9,6 +9,7 @@ import { Pattern, RuleIndexEntry, RuleContent, Scene } from './models.js';
 import { compile } from './rule-template-compiler.js';
 import { TemplateExecutor, ExecutionResult, StepFunction, LLMCaller } from './template-executor.js';
 import { registerStepFunctions } from './template-step-functions.js';
+import { SceneExtractor } from './scene-extractor.js';
 import { logger } from './logger.js';
 import { readFileSync, readdirSync, watch, FSWatcher } from 'fs';
 import { join, dirname } from 'path';
@@ -178,13 +179,53 @@ export class TemplateBasedRuleGenerator {
 
     const result: ExecutionResult = await executor.execute();
 
+    // Determine scenes: prefer explicit scene, then template-derived scenes,
+    // then re-derive from the pattern itself (occurrences + keywords + type)
+    // using the unified SceneExtractor. The template's scene detection often
+    // receives no usable signal (Pattern has no `user_messages` field and
+    // occurrence contexts are frequently "unknown"), so this fallback is what
+    // actually populates scenes during batch rebuild.
+    let scenes: Scene = options.scene
+      || result.finalRule.metadata.scenes
+      || { tech: [], functional: [], business: [] };
+
+    const hasScenes =
+      scenes.tech.length > 0 || scenes.functional.length > 0 || scenes.business.length > 0;
+
+    if (!hasScenes) {
+      try {
+        const sceneExtractor = SceneExtractor.getInstance();
+        const textParts: string[] = [];
+        if (pattern.description) textParts.push(pattern.description);
+        if (pattern.type) textParts.push(pattern.type);
+        for (const occ of pattern.occurrences || []) {
+          if (occ.user_input) textParts.push(occ.user_input);
+          if (occ.context && occ.context !== 'unknown') textParts.push(occ.context);
+        }
+        const derived = sceneExtractor.extractScene({
+          text: textParts.join(' '),
+          keywords: pattern.keywords,
+        });
+        if (derived.tech.length > 0 || derived.functional.length > 0 || derived.business.length > 0) {
+          scenes = derived;
+          logger.info('template-generator', `Scenes re-derived from pattern for ${options.ruleId}:`, {
+            tech: derived.tech,
+            functional: derived.functional,
+            business: derived.business,
+          });
+        }
+      } catch (error: any) {
+        logger.warn('template-generator', `Scene re-derivation failed for ${options.ruleId}: ${error?.message || error}`);
+      }
+    }
+
     // Build index entry
     const indexEntry: RuleIndexEntry = {
       id: options.ruleId,
       type: pattern.type,
       priority: result.finalRule.metadata.priority,
       confidence: result.finalRule.metadata.confidence,
-      scenes: options.scene || result.finalRule.metadata.scenes || { tech: [], functional: [], business: [] },
+      scenes,
       keywords: pattern.keywords,
       created_at: new Date().toISOString(),
       updated_at: new Date().toISOString(),

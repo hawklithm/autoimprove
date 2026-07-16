@@ -11,6 +11,7 @@ import { logger } from './logger.js';
 import { CodeExampleExtractor } from './code-example-extractor.js';
 import { JSONLParser, SessionData } from './jsonl-parser.js';
 import type { Pattern, Scene } from './models.js';
+import { SceneExtractor } from './scene-extractor.js';
 import { readFileSync, readdirSync } from 'fs';
 import { join, resolve } from 'path';
 import { homedir } from 'os';
@@ -147,7 +148,7 @@ export function registerStepFunctions(): Map<string, StepFunction> {
 
     const files = inputs.files || [];
 
-    // Simple file extension-based scene detection
+    // Simple file extension-based scene detection (kept for path-based hints)
     const scene: Scene = { tech: [], functional: [], business: [] };
 
     for (const file of files) {
@@ -177,6 +178,44 @@ export function registerStepFunctions(): Map<string, StepFunction> {
       } else if (file.includes('db') || file.includes('database')) {
         if (!scene.functional.includes('database')) scene.functional.push('database');
       }
+    }
+
+    // 🆕 Derive scenes from the richer signal (user messages + file paths +
+    // keywords) using the unified SceneExtractor. This is what actually
+    // populates scenes during batch rebuild, because pattern occurrences
+    // rarely carry real file paths (context is often "unknown").
+    try {
+      const sceneExtractor = SceneExtractor.getInstance();
+      const textSources: string[] = [];
+      if (Array.isArray(inputs.user_messages)) {
+        textSources.push(...inputs.user_messages);
+      } else if (typeof inputs.user_messages === 'string') {
+        textSources.push(inputs.user_messages);
+      }
+      if (Array.isArray(inputs.keywords)) {
+        textSources.push(...inputs.keywords);
+      }
+      if (typeof inputs.text === 'string') {
+        textSources.push(inputs.text);
+      }
+
+      const extracted = sceneExtractor.extractScene({
+        text: textSources.join(' '),
+        filePaths: files,
+        keywords: Array.isArray(inputs.keywords) ? inputs.keywords : undefined,
+      });
+
+      for (const t of extracted.tech) {
+        if (!scene.tech.includes(t)) scene.tech.push(t);
+      }
+      for (const f of extracted.functional) {
+        if (!scene.functional.includes(f)) scene.functional.push(f);
+      }
+      for (const b of extracted.business) {
+        if (!scene.business.includes(b)) scene.business.push(b);
+      }
+    } catch (error: any) {
+      logger.warn('step-function', `SceneExtractor failed in detect_scene_from_files: ${error?.message || error}`);
     }
 
     return { scenes: scene };
@@ -246,6 +285,16 @@ export function registerStepFunctions(): Map<string, StepFunction> {
       }
     }
 
+    // Normalize scenes from template input (may be undefined / partial)
+    let scenes: Scene = { tech: [], functional: [], business: [] };
+    if (inputs.scenes) {
+      scenes = {
+        tech: Array.isArray(inputs.scenes.tech) ? inputs.scenes.tech : [],
+        functional: Array.isArray(inputs.scenes.functional) ? inputs.scenes.functional : [],
+        business: Array.isArray(inputs.scenes.business) ? inputs.scenes.business : [],
+      };
+    }
+
     return {
       rule_id: ruleId,
       content,
@@ -253,6 +302,7 @@ export function registerStepFunctions(): Map<string, StepFunction> {
         pattern_type: inputs.pattern_type,
         confidence: inputs.confidence || 0.7,
         priority: inputs.priority || 'medium',
+        scenes,
       },
     };
   });
