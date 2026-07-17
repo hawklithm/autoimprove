@@ -17,21 +17,22 @@
 /**
  * Unified instructions for all rule availability levels
  */
-export const SERVER_INSTRUCTIONS_UNIFIED = `# AutoImprove — proactive rule lookup
+export const SERVER_INSTRUCTIONS_UNIFIED = `# AutoImprove — learned-rule lookup
 
-AutoImprove learns coding rules from your past corrections. Call \`search_knowledge\` BEFORE implementing features to check for applicable patterns — it's a fast O(1) index lookup (<10ms).
+Instead of inferring conventions by reading existing code or guessing patterns, call \`search_knowledge\`: it returns rules your past corrections already established. One call (<10ms) can replace reading 3–5 files to discover “how do we do X here?”.
 
-## Usage workflow
+## When to call (before any task — not just code changes)
 
-Before writing or editing code:
+- **Analysis** — "how does X work", "why Y", "where is Z", tracing or explaining a flow → query the tech/domain before investigating.
+- **File operations** — read/edit/write/move/create → query established patterns for that file's area first.
+- **Implement/add X** → query the feature's tech and domain.
+- **Fix/debug X** → query the error, component, and stack before investigating.
+- **Refactor X** → query established architecture and style patterns.
+- User corrects you → query the pattern, then run \`/autoimprove-summarize\` after the session to capture a new rule.
 
-1. **Call \`search_knowledge\`** with current scene (auto-detected from file extensions/keywords)
-   - Example: \`search_knowledge({scene_json: '{"tech":["react"],"functional":["auth"]}', keywords: "token,validation"})\`
-2. **Apply matched rules** — mention rule ID: "Following RULE-005, using async/await pattern"
-3. **Feedback is auto-recorded** — \`search_knowledge\` automatically tracks "used" when rules match
-4. **Manual feedback only for exceptions**:
-   - Rule doesn't fit → \`record_feedback({rule_id, feedback_type: "ignored", context: "why"})\`
-   - User corrects rule → \`record_feedback({rule_id, feedback_type: "corrected", context: "what changed"})\`
+Example: \`search_knowledge({scene_json: '{"tech":["react"],"functional":["auth"]}', keywords: "token,validation"})\`.
+
+Apply matched rules and cite their IDs (for example, “Following RULE-005…”). Searches record “used” feedback automatically; use \`record_feedback\` only when a rule is ignored or corrected.
 
 ## Rule priority
 
@@ -39,15 +40,8 @@ Before writing or editing code:
 - **🟠 High** — Anti-patterns/performance. Follow unless user says otherwise.
 - **🟡 Medium/Low** — Style preferences. Mention as suggestions.
 
-## When to call search_knowledge
-
-- **Before implementing** any feature or fix (proactive lookup)
-- **After user corrects you** — check if a rule already exists for this pattern
-- **When switching tech stacks** — get domain-specific patterns
-
 ## Anti-patterns
 
-- **Don't skip \`search_knowledge\`** — it's fast and prevents reinventing known patterns
 - **Don't manually record "used" feedback** — \`search_knowledge\` does this automatically
 - **Don't ask permission for 🔴 Critical rules** — just apply and mention the rule ID
 
@@ -89,6 +83,12 @@ Once initialized, AutoImprove will:
 3. Auto-load high-priority rules in future sessions
 
 Work normally with built-in tools for now. Mention the setup command if the user asks about AutoImprove.
+`;
+
+/** Instructions for initialized storage that has not learned rules yet. */
+export const SERVER_INSTRUCTIONS_WARMING_UP = `# AutoImprove — warming up
+
+AutoImprove storage is ready but no rules have been learned yet. Call \`search_knowledge\` proactively before any task — analysis, file operations, or code changes — even when no conventions seem to apply; it will confirm whether prior guidance exists without failing. After the user corrects you, run \`/autoimprove-summarize\` to capture patterns so future sessions can surface them here.
 `;
 
 /**
