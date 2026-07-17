@@ -265,7 +265,8 @@ async function installSkills(packageRoot: string, claudeDir: string): Promise<vo
     'autoimprove-status',
     'autoimprove-rules',
     'autoimprove-lessons',
-    'autoimprove-summarize'
+    'autoimprove-summarize',
+    'autoimprove-check'
   ];
 
   for (const skill of skills) {
@@ -276,7 +277,7 @@ async function installSkills(packageRoot: string, claudeDir: string): Promise<vo
       // Copy skill directory
       mkdirSync(targetDir, { recursive: true });
 
-      const files = ['SKILL.md', 'skill.ts'];
+      const files = ['SKILL.md', 'skill.ts', 'manifest.json'];
       for (const file of files) {
         const sourcePath = join(sourceDir, file);
         if (existsSync(sourcePath)) {
@@ -302,6 +303,17 @@ async function configureClaudeMd(storageDir: string, claudeDir: string, template
   }
 
   let content = readFileSync(globalClaudeMd, 'utf-8');
+
+  // Keep the short marker-delimited guidance in sync with setup_claude.sh.
+  const guidanceTemplate = join(templatesDir, 'claude-guidance-template.md');
+  if (existsSync(guidanceTemplate)) {
+    const guidance = readFileSync(guidanceTemplate, 'utf-8').trim();
+    const guidancePattern = /<!-- AUTOIMPROVE_START -->[\s\S]*?<!-- AUTOIMPROVE_END -->/;
+    content = guidancePattern.test(content)
+      ? content.replace(guidancePattern, guidance)
+      : `${content.trimEnd()}\n\n${guidance}\n`;
+    cliLogger.print('  ✓ Updated concise AutoImprove guidance');
+  }
 
   // Add rules reference if not present
   if (!content.includes('autoimprove/rules/claude-index.md')) {

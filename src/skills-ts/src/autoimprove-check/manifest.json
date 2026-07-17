@@ -1,0 +1,7 @@
+{
+  "name": "autoimprove-check",
+  "version": "0.1.0",
+  "description": "Proactively check learned rules before coding",
+  "entry": "../../dist/autoimprove-check/skill.js",
+  "author": "AutoImprove Team"
+}

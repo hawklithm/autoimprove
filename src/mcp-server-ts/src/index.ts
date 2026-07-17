@@ -40,8 +40,10 @@ import { RuleDeduplicator, DeduplicationResult } from "./core/rule-deduplicator.
 import { RuleCleanupService } from "./core/rule-cleanup-service.js";
 import { logger } from "./core/logger.js";
 import { createScene, PatternType, RuleScope, Scene } from "./core/models.js";
-import { existsSync } from "fs";
-import { SERVER_INSTRUCTIONS_UNIFIED, SERVER_INSTRUCTIONS_EMPTY } from "./mcp-instructions.js";
+import { existsSync, readFileSync } from "fs";
+import { SERVER_INSTRUCTIONS_EMPTY } from "./mcp-instructions.js";
+import { selectInstructionsForIndex } from "./instruction-selection.js";
+import { SEARCH_KNOWLEDGE_DESCRIPTION, emptyKnowledgeBaseMessage, noMatchMessage } from "./search-guidance.js";
 import { ProactiveRuleResourceProvider } from "./resources/proactive-rules.js";
 import { BatchRebuildEngine } from "./core/batch-rebuild.js";
 import { PatternEvolutionManager } from "./storage/pattern-evolution.js";
@@ -192,7 +194,7 @@ async function ensureInitialized() {
 // ============================================================================
 
 /**
- * Select appropriate instructions based on storage availability.
+ * Select appropriate instructions based on storage and learned-rule availability.
  */
 function selectInstructions(): string {
   const homeDir = process.env.HOME || process.env.USERPROFILE;
@@ -204,11 +206,10 @@ function selectInstructions(): string {
   }
 
   try {
-    // Use unified instructions for all initialized storage
-    return SERVER_INSTRUCTIONS_UNIFIED;
+    return selectInstructionsForIndex(readFileSync(indexPath, "utf-8"));
   } catch (error) {
     logger.warn("instruction-selection", `Failed to select instructions: ${error}`);
-    return SERVER_INSTRUCTIONS_UNIFIED; // Fallback to unified
+    return SERVER_INSTRUCTIONS_EMPTY;
   }
 }
 
@@ -292,36 +293,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
       },
       {
         name: "search_knowledge",
-        description: `Search rules by scene, keywords, or ID with scope-based filtering. Use this to find applicable coding patterns before implementing.
-
-Usage patterns:
-1. Search by scene (tech stack + functional domain):
-   scene_json: '{"tech":["react","typescript"],"functional":["auth","api"],"business":[]}'
-
-2. Search by keywords:
-   keywords: "validation,async,error-handling"
-
-3. Search by specific rule ID:
-   rule_id: "RULE-010"
-
-4. Combined scene + keywords:
-   scene_json: '{"tech":["python"],"functional":["database"]}', keywords: "orm,query"
-
-5. Scope-aware search (automatically includes global + organization + current project):
-   current_project: "/path/to/project", organization_id: "mycompany"
-
-Scope filtering:
-- GLOBAL: Universal programming patterns (always included by default)
-- ORGANIZATION: Company-specific frameworks/conventions (included if organization_id matches)
-- PROJECT: Project-specific rules (included if current_project matches)
-
-Scene structure:
-- tech: Array of technology keywords (e.g., ["react","vue","python","typescript","java"])
-- functional: Array of functional domain keywords (e.g., ["auth","api","database","validation","testing"])
-- business: Array of business domain keywords (e.g., ["payment","analytics","user-management"])
-- All fields are optional arrays; empty arrays [] are valid
-
-Auto-feedback: When rules match, automatically records "used" feedback unless skip_feedback=true`,
+        description: SEARCH_KNOWLEDGE_DESCRIPTION,
         inputSchema: {
           type: "object",
           properties: {
@@ -1613,7 +1585,7 @@ async function handleSearchKnowledge(args: any) {
         content: [
           {
             type: "text",
-            text: `Error: Rule not found: ${ruleId}`,
+            text: `No rule matched ID \`${ruleId}\`. Try searching with broader keywords or list available rules with \`search_knowledge({})\`.`,
           },
         ],
       };
@@ -1671,7 +1643,7 @@ async function handleSearchKnowledge(args: any) {
           content: [
             {
               type: "text",
-              text: "No matching rules found for the given keywords.",
+              text: indexManager.listRules().length === 0 ? emptyKnowledgeBaseMessage() : noMatchMessage(indexManager.listRules().slice(0, 2).map((rule) => rule.id)),
             },
           ],
         };
@@ -1824,7 +1796,7 @@ async function handleSearchKnowledge(args: any) {
         content: [
           {
             type: "text",
-            text: "No matching rules found for the given scene and keywords.",
+            text: indexManager.listRules().length === 0 ? emptyKnowledgeBaseMessage() : noMatchMessage(indexManager.listRules().slice(0, 2).map((rule) => rule.id)),
           },
         ],
       };
@@ -1890,7 +1862,7 @@ async function handleSearchKnowledge(args: any) {
       content: [
         {
           type: "text",
-          text: "No rules found in the knowledge base.",
+          text: emptyKnowledgeBaseMessage(),
         },
       ],
     };
@@ -1938,7 +1910,7 @@ async function handleGetRuleDetails(args: any) {
       content: [
         {
           type: "text",
-          text: `Error: Rule not found: ${ruleId}`,
+          text: `No rule matched ID \`${ruleId}\`. Search with broader keywords, or list available rules with \`search_knowledge({})\`.`,
         },
       ],
     };
@@ -1950,7 +1922,7 @@ async function handleGetRuleDetails(args: any) {
       content: [
         {
           type: "text",
-          text: `Error: Rule content file not found for: ${ruleId}`,
+          text: `Rule \`${ruleId}\` exists but its content is unavailable. Run \`autoimprove rules\` to inspect or repair the knowledge base.`,
         },
       ],
     };

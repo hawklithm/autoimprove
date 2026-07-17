@@ -139,6 +139,8 @@ AutoImprove runs automatically when you work with Claude Code or Codex. The syst
 3. **Generates** reusable rules with confidence scoring
 4. **Applies** learned rules to future work via `search_knowledge`
 
+`search_knowledge` is a first-step replacement for guessing local conventions: query it when implementing, fixing, debugging, or refactoring instead of inferring patterns from several files. If the knowledge base is still empty, it responds with next steps rather than an error.
+
 ### Available Skills
 
 #### Claude Code
@@ -157,6 +159,9 @@ After running `./setup.sh` or `./setup.sh claude`:
 
 # View learned lessons
 /autoimprove-lessons
+
+# Proactively check applicable rules before editing
+/autoimprove-check
 ```
 
 #### Codex
@@ -185,7 +190,7 @@ The setup script configures AutoImprove guidance in your global configuration:
 - **Codex**: `~/.codex/guidance.md` includes AutoImprove instructions
 
 This ensures Claude automatically:
-- Calls `search_knowledge` before write/edit/debug operations
+- Calls `search_knowledge` instead of guessing conventions for write/edit/debug operations
 - Reviews matched rules before applying fixes
 - Cites rule IDs in responses (e.g., "Following RULE-008...")
 

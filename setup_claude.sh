@@ -24,7 +24,7 @@ echo -e "${BLUE}--- Claude Code: 安装 Skills ---${NC}"
 SKILLS_INSTALL_DIR="$CLAUDE_DIR/skills"
 mkdir -p "$SKILLS_INSTALL_DIR"
 
-for skill in autoimprove-status autoimprove-summarize autoimprove-rules autoimprove-lessons; do
+for skill in autoimprove-status autoimprove-summarize autoimprove-rules autoimprove-lessons autoimprove-check; do
   skill_src="$SKILLS_DIR_SRC/src/$skill"
   skill_install="$SKILLS_INSTALL_DIR/$skill"
 
@@ -32,6 +32,8 @@ for skill in autoimprove-status autoimprove-summarize autoimprove-rules autoimpr
     mkdir -p "$skill_install"
     if [ -f "$skill_src/SKILL.md" ]; then
       cp "$skill_src/SKILL.md" "$skill_install/"
+      [ -f "$skill_src/skill.ts" ] && cp "$skill_src/skill.ts" "$skill_install/"
+      [ -f "$skill_src/manifest.json" ] && cp "$skill_src/manifest.json" "$skill_install/"
       echo -e "${GREEN}✓${NC} Installed skill: $skill"
     else
       echo -e "${YELLOW}⚠${NC} $skill/SKILL.md not found"
@@ -94,7 +96,11 @@ cp "$GLOBAL_CLAUDE_MD" "$GLOBAL_CLAUDE_MD.backup" 2>/dev/null || true
 
 # 写入或替换 <!-- AUTOIMPROVE_START --> 区块
 if grep -q "<!-- AUTOIMPROVE_START -->" "$GLOBAL_CLAUDE_MD" 2>/dev/null; then
-  echo "Updating existing AutoImprove section..."
+  if grep -q "CRITICAL FIRST STEP\|Pre-Action Checklist\|⚠️ \*\*BLOCKING\*\*" "$GLOBAL_CLAUDE_MD" 2>/dev/null; then
+    echo "Migrating legacy AutoImprove guidance to the concise sub-agent block..."
+  else
+    echo "Updating existing AutoImprove section..."
+  fi
   TEMP_OUTPUT=$(mktemp)
   awk -v template="$GUIDANCE_TEMPLATE" '
     /<!-- AUTOIMPROVE_START -->/ {

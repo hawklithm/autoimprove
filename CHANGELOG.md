@@ -1,5 +1,12 @@
 # Changelog
 
+## [Unreleased]
+
+### Changed
+- Made `search_knowledge` the proactive primary lookup for implementation, debugging, and refactoring; empty and unmatched searches now provide success-shaped guidance.
+- Added storage-aware MCP instructions for an empty knowledge base and concise Claude guidance for Task/sub-agents.
+- Added the proactive `/autoimprove-check` skill.
+
 ## [0.1.0] - 2026-06-03
 
 ### Added
