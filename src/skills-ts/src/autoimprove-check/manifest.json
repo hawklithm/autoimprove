@@ -1,7 +1,7 @@
 {
   "name": "autoimprove-check",
   "version": "0.1.0",
-  "description": "Proactively check learned rules before coding",
+  "description": "Proactively check learned rules before any task (analysis, file ops, or code changes) via the slash command; CLI entry is a keywords-only fallback",
   "entry": "../../dist/autoimprove-check/skill.js",
   "author": "AutoImprove Team"
 }
