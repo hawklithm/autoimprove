@@ -4,7 +4,7 @@
 
 ![AutoImprove Logo](https://img.shields.io/badge/AutoImprove-Learn%20From%20Your%20Code-blue?style=for-the-badge)
 
-**An MCP server that learns from user corrections and generates reusable coding rules**
+**An MCP server that learns from user corrections and generates reusable coding rules — continuously improving your development workflow**
 
 [Features](#features) • [Quick Start](#quick-start) • [Installation](#installation) • [Usage](#usage) • [Architecture](#architecture) • [Documentation](#documentation)
 
@@ -14,13 +14,16 @@
 
 ## ✨ Features
 
-- 🧠 **Pattern Detection** - Automatically detects corrections, anti-patterns, preferences, performance issues, and security problems
-- 📚 **Rule Generation** - Converts detected patterns into reusable coding rules with confidence scoring
-- 🎯 **Scene-Based Matching** - 3D scene model (tech stack + functional domain + business domain) for O(1) rule lookups
-- 🔄 **Incremental Analysis** - Efficient session analysis with caching and smart change detection
-- 💾 **Persistent Storage** - User-level rule database at `~/.autoimprove/` with indexed search
-- 🤖 **LLM Enhancement** - Token-optimized LLM prompts for high-quality rule generation (68% token reduction)
-- 🎨 **Multi-Platform** - Native support for both Claude Code and Codex
+- 🧠 **Pattern Detection** — Automatically detects corrections, anti-patterns, preferences, performance issues, and security problems from Claude Code / Codex sessions
+- 📚 **Hybrid Rule Generation** — 4-phase pipeline (heuristic + LLM + code extraction + structured storage) with template-based rule generation for consistent, high-quality rules
+- 🎯 **Scene-Based Matching** — 3D scene model (tech stack + functional domain + business domain) for O(1) rule lookups with overlap scoring
+- 🔄 **Incremental Analysis** — Efficient session analysis with caching, smart change detection, and adaptive session analyzer
+- 💾 **Persistent Storage** — User-level rule database at `~/.autoimprove/` with SQLite-backed rule storage, signal dictionary, and version control
+- 🤖 **LLM Enhancement** — Token-optimized LLM prompts (68% token reduction) with batch processing, configurable model selection, and automatic fallback on failure
+- 🎨 **Multi-Platform** — Native support for both Claude Code and Codex
+- 🧩 **Proactive Rule Loading** — Automatic knowledge retrieval before edits with `search_knowledge` guidance
+- 🔁 **Feedback System** — Track rule usage (used/ignored/corrected/disabled) with adaptive confidence scoring
+- 🧪 **Local ML Enhancement** — CPU-only embedding encoder (char-ngram-tfidf) and message clustering for offline pattern recognition
 
 ## 🚀 Quick Start
 
@@ -42,6 +45,9 @@ cd autoimprove
 # Or setup specific platform
 ./setup.sh claude    # For Claude Code only
 ./setup.sh codex     # For Codex only
+
+# Show help
+./setup.sh --help
 ```
 
 ## 📦 Installation
@@ -125,7 +131,8 @@ mkdir -p ~/.autoimprove/cache
 
 # Create initial config
 cp templates/config.json ~/.autoimprove/config.json
-cp templates/rules-index.json ~/.autoimprove/rules/index.jso`
+cp templates/rules-index.json ~/.autoimprove/rules/index.json
+```
 
 </details>
 
@@ -148,19 +155,19 @@ AutoImprove runs automatically when you work with Claude Code or Codex. The syst
 After running `./setup.sh` or `./setup.sh claude`:
 
 ```bash
-# Check system status
+# Check system status and statistics
 /autoimprove-status
 
-# Analyze sessions and generate rules
+# Analyze sessions and generate rules (supports single/batch/consolidation modes)
 /autoimprove-summarize
 
-# Manage rules
+# Manage and review generated rules
 /autoimprove-rules
 
-# View learned lessons
+# View learned lessons applicable to current work scene
 /autoimprove-lessons
 
-# Proactively check applicable rules before editing
+# Proactively check applicable rules before editing (call before any task)
 /autoimprove-check
 ```
 
@@ -199,23 +206,35 @@ This ensures Claude automatically:
 The MCP server provides 40+ tools accessible via Claude:
 
 **Core Analysis:**
-- `analyze_session` - Detect patterns from session files
-- `generate_rules` - Convert patterns to rules
-- `search_knowledge` - Find applicable rules by scene/keywords
+- `analyze_session` — Detect patterns from session files
+- `generate_rules` — Convert patterns to rules
+- `search_knowledge` — Find applicable rules by scene/keywords
+- `batch_rebuild` — Rebuild all rules from sessions with consistency checks
 
 **Rule Management:**
-- `update_rules` - Modify existing rules
-- `assess_rule_quality` - Quality scoring
-- `detect_rule_conflicts` - cting rules
+- `update_rules` — Modify existing rules
+- `assess_rule_quality` — Quality scoring with Bayesian confidence updates
+- `detect_rule_conflicts` — Detect conflicting rules
+- `cleanup_existing_rules` — Merge duplicates, optimize low-quality rules
+
+**Template System:**
+- `generate_rule_templates` — Create rule templates from existing rules
+- `apply_rule_template` — Apply templates to generate new rules
 
 **Feedback System:**
-- `record_feedback` - Track rule usage (used/ignored/corrected/disabled)
-- `get_feedback_stats` - Analyze feedback patterns
-- `get_rule_usage_stats` - Multi-dimensional statistics
+- `record_feedback` — Track rule usage (used/ignored/corrected/disabled)
+- `get_feedback_stats` — Analyze feedback patterns
+- `get_rule_usage_stats` — Multi-dimensional statistics
 
 **Batch Operations:**
-- `batch_rebuild` - Rebuild all rules from sessions
-- `cleanup_existing_rules` - Merge duplicates, optimize low-quality rules
+- `batch_llm_generate_rules` — Batch LLM-powered rule generation with scene clustering
+- `batch_rebuild` — Rebuild all rules from sessions
+- `cleanup_existing_rules` — Merge duplicates, optimize low-quality rules
+
+**Advanced Features:**
+- `extract_signals` — Extract signal patterns from sessions
+- `match_similar_patterns` — Find similar patterns across sessions
+- `personalize_rules` — Personalize rules based on user behavior
 
 See `docs/MCP_TOOLS_API.md` for complete API reference.
 
@@ -227,18 +246,21 @@ AutoImprove uses `~/.autoimprove/` for all persistent data:
 
 ```
 ~/.autoimprove/
-├── config.json                 # User configuration
+├── config.json                  # User configuration
 ├── rules/
-│   ├── index.json         # Rule metadata (fast lookups)
-│   ├── content/               # Full rule markdown files
-│   └── claude-index.md        # Auto-exported top rules
-├── sessions/                   # Analyzed session metadata
-├── cache/                      # Analysis cache
-├── logs/                       # System logs
-├── feedback_history.jsonl     # Rule usage tracking
+│   ├── index.json               # Rule metadata (fast lookups)
+│   ├── content/                 # Full rule markdown files
+│   ├── claude-index.md          # Auto-exported top rules
+│   └── rules.db                 # SQLite rule storage (v2.2+)
+├── sessions/                    # Analyzed session metadata
+├── cache/                       # Analysis cache (embedding vectors, etc.)
+├── logs/                        # System logs
+├── feedback_history.jsonl       # Rule usage tracking
 ├── signal_dictionary/
-│   └── signals.db             # SQLite signal patterns
-└── versions/                   # Rule version history
+│   └── signals.db               # SQLite signal patterns
+├── versions/                    # Rule version history
+├── templates/                   # Rule templates
+└── pattern-evolution/           # Pattern evolution tracking
 ```
 
 ### Platform Configuration
@@ -329,38 +351,115 @@ autoimprove/
 ├── setup_claude.sh            # Claude Code setup
 ├── setup_codex.sh             # Codex setup
 ├── src/
-│   ├── mcp-server-ts/         # TypeScript MCP Server
+│   ├── mcp-server-ts/         # TypeScript MCP Server (core)
 │   │   ├── src/
 │   │   │   ├── index.ts       # MCP server entry (tool/resource handlers)
 │   │   │   ├── core/          # Business logic
-│   │   │   │   ├── session-analyzer.ts        # Pattern detection
-│   │   │   │   ├── hybrid-rule-generator.ts   # 4-phase rule generation
-│   │   │   │   ├── llm-rule-generator.ts      # LLM enhancement
-│   │   │   │   ├── indexed-rule-matcher.ts    # O(1) rule lookups
-│   │   │   │   └── enhanced-scene-detector.ts # 3D scene model
-│   │   │   └── storage/       # Persistence layer
-│   │   │       ├── rule-index.ts              # In-memory index
-│   │   │       ├── session-analysis-tracker.ts # Cache management
-│   │   │       └── init.ts                     # Storage initialization
-│   │   ├── tests/             # Vitest test suite
+│   │   │   │   ├── session-analyzer.ts            # Pattern detection
+│   │   │   │   ├── adaptive-session-analyzer.ts   # Adaptive pattern analysis
+│   │   │   │   ├── hybrid-rule-generator.ts       # 4-phase rule generation
+│   │   │   │   ├── template-based-rule-generator.ts # Template-driven generation
+│   │   │   │   ├── llm-rule-generator.ts          # LLM enhancement
+│   │   │   │   ├── batch-llm-rule-generator.ts    # Batch LLM processing
+│   │   │   │   ├── llm-prompt-builder.ts          # Token-optimized prompts
+│   │   │   │   ├── llm-config-manager.ts          # LLM model configuration
+│   │   │   │   ├── llm-failure-tracker.ts         # LLM fallback tracking
+│   │   │   │   ├── llm-signal-extractor.ts        # Signal extraction via LLM
+│   │   │   │   ├── indexed-rule-matcher.ts        # O(1) rule lookups
+│   │   │   │   ├── enhanced-scene-detector.ts     # 3D scene model
+│   │   │   │   ├── scene-extractor.ts             # Scene metadata extraction
+│   │   │   │   ├── scene-thesaurus.ts             # Scene synonym mapping
+│   │   │   │   ├── embedding-encoder.ts           # CPU-only text embeddings
+│   │   │   │   ├── message-clusterer.ts           # Message similarity clustering
+│   │   │   │   ├── pattern-clusterer.ts           # Pattern grouping
+│   │   │   │   ├── pattern-similarity-clusterer.ts # Similarity-based clustering
+│   │   │   │   ├── signal-matcher.ts              # Signal pattern matching
+│   │   │   │   ├── neighbor-signal-matcher.ts     # Neighbor-based signal matching
+│   │   │   │   ├── adaptive-confidence.ts         # Confidence scoring
+│   │   │   │   ├── bayesian-confidence-updater.ts # Bayesian confidence updates
+│   │   │   │   ├── personalizer.ts                # User behavior personalization
+│   │   │   │   ├── rule-matcher.ts                # Rule matching engine
+│   │   │   │   ├── rule-quality.ts                # Quality assessment
+│   │   │   │   ├── rule-usage-stats.ts            # Usage statistics
+│   │   │   │   ├── rule-deduplicator.ts           # Duplicate detection
+│   │   │   │   ├── rule-cleanup-service.ts        # Rule maintenance
+│   │   │   │   ├── rule-template-compiler.ts      # Template compilation
+│   │   │   │   ├── template-executor.ts           # Template execution
+│   │   │   │   ├── template-step-functions.ts     # Step function templates
+│   │   │   │   ├── code-example-extractor.ts      # Code example mining
+│   │   │   │   ├── json-extractor.ts              # JSON extraction/repair
+│   │   │   │   ├── jsonl-parser.ts                # JSONL session parsing
+│   │   │   │   ├── unified-session-parser.ts      # Multi-format session parser
+│   │   │   │   ├── keyword-segment-index.ts       # Keyword indexing
+│   │   │   │   ├── pre-filter.ts                  # Pre-filtering logic
+│   │   │   │   ├── jieba-utils.ts                 # Chinese text segmentation
+│   │   │   │   ├── models.ts                      # Type definitions
+│   │   │   │   ├── logger.ts                      # Logging system
+│   │   │   │   └── batch-rebuild.ts               # Batch rebuild engine
+│   │   │   ├── storage/       # Persistence layer
+│   │   │   │   ├── init.ts                        # Storage initialization
+│   │   │   │   ├── rule-index.ts                  # In-memory index
+│   │   │   │   ├── rule-content.ts                # Content management
+│   │   │   │   ├── rule-storage-sqlite.ts         # SQLite-backed storage
+│   │   │   │   ├── rule-version.ts                # Version control
+│   │   │   │   ├── signal-dictionary-db.ts        # SQLite signal dictionary
+│   │   │   │   ├── session-analysis-tracker.ts    # Cache management
+│   │   │   │   ├── session-cache.ts               # Session caching
+│   │   │   │   ├── compact-cache.ts               # Compact cache format
+│   │   │   │   ├── pattern-evolution.ts           # Pattern evolution tracking
+│   │   │   │   ├── migrate-to-sqlite.ts           # SQLite migration
+│   │   │   │   ├── init-signal-dictionary.ts      # Signal dict initialization
+│   │   │   │   └── session-archive.ts             # Session archiving
+│   │   │   ├── tools/         # Tool implementations
+│   │   │   │   └── export-rules-to-claude.ts      # Claude index export
+│   │   │   ├── resources/     # MCP resources
+│   │   │   │   └── proactive-rules.ts             # Proactive rule loading
+│   │   │   ├── extractors/    # Session extractors
+│   │   │   │   ├── claude-code-extractor.ts
+│   │   │   │   ├── codex-extractor.ts
+│   │   │   │   └── vscode-extractor.ts
+│   │   │   ├── rule-templates/ # Rule template definitions
+│   │   │   └── mcp-instructions.ts                # MCP server instructions
+│   │   ├── tests/             # Vitest test suite (17+ test files)
 │   │   └── package.json
-│   └── skills-ts/             # Platform Skills
-│       └── src/
-│           ├── autoimprove-status/
-│           ├── autoimprove-summarize/
-│           ├── autoimprove-rules/
-│           └── autoimprove-lessons/
+│   ├── skills-ts/             # Platform Skills (UI layer)
+│   │   └── src/
+│   │       ├── autoimprove-status/
+│   │       ├── autoimprove-summarize/
+│   │       ├── autoimprove-rules/
+│   │       ├── autoimprove-lessons/
+│   │       ├── autoimprove-check/
+│   │       └── mcp-client.ts
+│   ├── cli/                   # CLI tools
+│   │   ├── index.ts
+│   │   └── commands/
+│   └── utils/                 # Shared utilities
+│       └── cli-logger.ts
 ├── templates/                  # Configuration templates
 │   ├── claude-guidance-template.md
+│   ├── claude-feedback-instructions.md
 │   ├── config.json
 │   └── rules-index.json
 ├── scripts/                    # Utility scripts
-│   └── init-claude-index.js
-└── docs/                       # Documentation
+│   ├── init-claude-index.js
+│   ├── batch-rebuild.js
+│   ├── migrate-config.js
+│   ├── rebuild-rules-direct.ts
+│   ├── rule-usage-stats.ts
+│   ├── check-migration.sh
+│   ├── maintain-db.sh
+│   ├── install-onnx-models.sh
+│   ├── local-ml-ab-compare.mjs
+│   ├── remove-console-logs.sh
+│   └── test-template-config.mjs
+└── docs/                       # Documentation (60+ documents)
     ├── COMPLETE_SUMMARY.md
     ├── HYBRID_RULE_GENERATION.md
     ├── TOKEN_OPTIMIZATION_ANALYSIS.md
-    └── MCP_TOOLS_API.md
+    ├── MCP_TOOLS_API.md
+    ├── LOCAL_ML_ENHANCEMENT_DESIGN.md
+    ├── TRIGGER_MECHANISM_ANALYSIS.md
+    └── ... (50+ additional docs)
 ```
 
 ### Two-Layer Design
@@ -398,28 +497,63 @@ autoimprove/
 - Parses Claude Code/Codex session JSONL files
 - Detects 5 pattern types using 8-class noise filtering
 - Incremental analysis with smart change detection
+- Adaptive analysis via `adaptive-session-analyzer.ts` for evolving patterns
 
 **Hybrid Rule Generator** (`core/hybrid-rule-generator.ts`):
 - **Phase 1**: Basic detection (regex + heuristics)
-- **Phase 2**: LLM enhancement (token-optimized, optional)
+- **Phase 2**: LLM enhancement (token-optimized, optional with fallback)
 - **Phase 3**: Code extraction (mines tool calls for before/after)
 - **Phase 4**: Structured storage (6-section markdown format)
+
+**Template-Based Rule Generator** (`core/template-based-rule-generator.ts`):
+- Creates and applies rule templates from existing rules
+- Compiles templates into executable step functions
+- Enables consistent rule structure across the knowledge base
 
 **Scene Detector** (`core/enhanced-scene-detector.ts`):
 - 3D model: tech stack + functional domain + business domain
 - Auto-detection from file extensions, keywords, directories
 - Overlap scoring for relevance ranking
+- Thesaurus-based synonym expansion (`scene-thesaurus.ts`)
 
 **Rule Matcher** (`core/indexed-rule-matcher.ts`):
 - O(1) lookups via indexed metadata
 - Scene-based filtering with fuzzy matching
 - Confidence-weighted ranking
 
+**Local ML Enhancement** (`core/embedding-encoder.ts`, `core/message-clusterer.ts`):
+- CPU-only char n-gram TF-IDF embeddings (no external API)
+- Message clustering via TF-IDF similarity (solves merge/split problems)
+- Optional ONNX model support (Phase 4)
+- Works for multilingual content (Chinese/English mixed)
+
+**Signal System** (`core/signal-matcher.ts`, `core/neighbor-signal-matcher.ts`):
+- SQLite-backed signal dictionary (`storage/signal-dictionary-db.ts`)
+- Pattern matching with neighbor context
+- LLM-enhanced signal extraction (`llm-signal-extractor.ts`)
+
+**Feedback & Confidence**:
+- `adaptive-confidence.ts`: Confidence scoring with configurable weights
+- `bayesian-confidence-updater.ts`: Bayesian updates from feedback
+- `personalizer.ts`: Personalization based on user behavior
+- `rule-usage-stats.ts`: Multi-dimensional usage analytics
+
 **Storage System** (`storage/`):
 - In-memory rule index for fast queries
+- SQLite-backed rule storage (`rule-storage-sqlite.ts`)
 - Lazy-loaded content files (markdown)
-- Versioning and feedback tracking
-- SQLite signal dictionary (v2.2+)
+- Versioning and feedback tracking (`rule-version.ts`)
+- Signal dictionary with SQLite (`signal-dictionary-db.ts`)
+- Pattern evolution tracking (`pattern-evolution.ts`)
+- Migration tooling (`migrate-to-sqlite.ts`)
+
+**LLM Integration**:
+- `llm-rule-generator.ts`: LLM-powered rule generation
+- `batch-llm-rule-generator.ts`: Batch processing with scene clustering
+- `llm-prompt-builder.ts`: Token-optimized prompt construction (68% reduction)
+- `llm-config-manager.ts`: Flexible model/provider configuration
+- `llm-failure-tracker.ts`: Automatic fallback on LLM failures
+- `llm-signal-extractor.ts`: Signal extraction via LLM
 
 ## 🔧 Development
 
@@ -434,6 +568,13 @@ npm run build
 # Build Skills
 cd src/skills-ts
 npm install
+npm run build
+
+# Build CLI
+cd ../../
+npm run build:cli
+
+# Build all (from root)
 npm run build
 ```
 
@@ -471,9 +612,9 @@ claude mcp restart autoimprove-core
 
 1. Add to `PatternType` enum in `core/models.ts`
 2. Implement `detect*Patterns()` in `core/session-analyzer.ts`
-3. Add confidence threshold in `storage/init.ts`
-4. Update priority logic in `core/rule-generator.ts`
-5. Add tests in `tests/core.test.ts`
+3. Add confidence threshold in `storage/init.ts` or `adaptive-confidence.ts`
+4. Update priority logic in `core/hybrid-rule-generator.ts`
+5. Add tests in relevant test files under `src/mcp-server-ts/tests/`
 
 ### Adding New MCP Tools
 
@@ -591,8 +732,15 @@ grep -A 10 "AUTOIMPROVE_START" ~/.claude/CLAUDE.md
 
 - **[COMPLETE_SUMMARY.md](docs/COMPLETE_SUMMARY.md)** - Comprehensive feature documentation
 - **[HYBRID_RULE_GENERATION.md](docs/HYBRID_RULE_GENERATION.md)** - 4-phase generation implementation
-- **[TOKEN_OPTIMIZATION_ANALYSIS.md](docs/TOKEN_OPTIMIZATION_ANALYSIS.md)** - Token reduction strategy
+- **[TOKEN_OPTIMIZATION_ANALYSIS.md](docs/TOKEN_OPTIMIZATION_ANALYSIS.md)** - Token reduction strategy (68% reduction)
 - **[MCP_TOOLS_API.md](docs/MCP_TOOLS_API.md)** - Complete MCP tools reference
+- **[LOCAL_ML_ENHANCEMENT_DESIGN.md](docs/LOCAL_ML_ENHANCEMENT_DESIGN.md)** - CPU-only ML enhancement design
+- **[LOCAL_ML_ENHANCEMENT_TASKS.md](docs/LOCAL_ML_ENHANCEMENT_TASKS.md)** - ML enhancement implementation tasks
+- **[BATCH_LLM_OPTIMIZATION.md](docs/BATCH_LLM_OPTIMIZATION.md)** - Batch LLM processing optimization
+- **[SOP_COMPILER_ANALYSIS.md](docs/SOP_COMPILER_ANALYSIS.md)** - SOP/template compiler analysis
+- **[TRIGGER_MECHANISM_ANALYSIS.md](docs/TRIGGER_MECHANISM_ANALYSIS.md)** - Trigger mechanism design
+- **[ADAPTIVE_PATTERN_RECOGNITION.md](docs/ADAPTIVE_PATTERN_RECOGNITION.md)** - Adaptive pattern recognition
+- **[PROACTIVE_RULE_LOADING.md](docs/PROACTIVE_RULE_LOADING.md)** - Proactive rule loading design
 - **[CLAUDE.md](CLAUDE.md)** - Project instructions for Claude Code
 
 ## 📄 License
