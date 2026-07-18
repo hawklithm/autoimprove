@@ -111,6 +111,7 @@ export class NeighborSignalMatcher {
     }
 
     const queryVec = await this.encoder.encode(content);
+    logger.info("neighbor-signal-matcher", `encode() called for content: "${content.substring(0, 60)}..."`);
 
     // Top-k neighbor scan (exact; E3 may swap for hnswlib/FAISS).
     const scored: { idx: number; sim: number }[] = [];

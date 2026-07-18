@@ -28,25 +28,10 @@ import { join } from "path";
 import { homedir } from "os";
 import { createRequire } from "module";
 import { logger } from "./logger.js";
+import { ensureJieba, tokenizeWithJieba } from "./jieba-utils.js";
 
 // C3: createRequire lets us load onnxruntime-node synchronously in ESM/tsx.
 const _require = createRequire(import.meta.url);
-
-// C4: jieba tokenizer singleton for Chinese word segmentation (ONNX backend).
-// Loaded lazily on first ONNX encode; falls back to char-level if unavailable.
-let jiebaTokenizer: any = null;
-function ensureJieba(): boolean {
-  if (jiebaTokenizer) return true;
-  try {
-    const { Jieba } = _require("@node-rs/jieba") as any;
-    jiebaTokenizer = new Jieba();
-    logger.info("embedding-onnx", "@node-rs/jieba initialized for Chinese word segmentation");
-    return true;
-  } catch {
-    logger.warn("embedding-onnx", "@node-rs/jieba not available, falling back to character-level tokenization for Chinese text");
-    return false;
-  }
-}
 
 export type EmbeddingBackend = "char-ngram-tfidf" | "onnx-local";
 
@@ -266,7 +251,11 @@ export class EmbeddingEncoder {
    */
   private async encodeOnnx(text: string): Promise<Float32Array> {
     const session = EmbeddingEncoder.onnxSession;
-    if (!session) return new Float32Array(this.onnxDim); // zero vector fallback
+    if (!session) {
+      logger.info("embedding-onnx", "encodeOnnx called but no session — returning zero vector");
+      return new Float32Array(this.onnxDim); // zero vector fallback
+    }
+    logger.info("embedding-onnx", `encodeOnnx invoked: text="${text.substring(0, 60)}..." (len=${text.length})`);
 
     // C4: tokenize with jieba for Chinese, whitespace split for English
     const tokens = this.tokenizeOnnx(text);
@@ -333,36 +322,10 @@ export class EmbeddingEncoder {
   /**
    * Tokenize text for ONNX input: uses jieba for Chinese, whitespace split for English.
    * Falls back to character-level tokenization when jieba is unavailable (C4).
+   * Delegates to shared jieba-utils.
    */
   private tokenizeOnnx(text: string): string[] {
-    const raw = text || "";
-    if (!raw.trim()) return [];
-
-    // Check if text contains Chinese characters
-    const hasChinese = /[一-鿿㐀-䶿]/.test(raw);
-
-    if (hasChinese && ensureJieba()) {
-      // Use jieba with HMM mode for Chinese word segmentation
-      const words = jiebaTokenizer.cut(raw, true) as string[];
-      // Filter out punctuation and whitespace, lowercase
-      return words
-        .filter((w: string) => w.trim().length > 0 && !/^[，。！？、；：""''（）【】《》\s]+$/.test(w))
-        .map((w: string) => w.toLowerCase());
-    }
-
-    // Fallback: whitespace split for English or character-level for Chinese
-    const whitespaceTokens = raw.toLowerCase().split(/\s+/).filter(Boolean);
-    if (whitespaceTokens.length > 1 || !hasChinese) {
-      // English text or mixed with spaces: use whitespace tokens
-      return whitespaceTokens;
-    }
-
-    // Chinese text without jieba: character-level tokenization
-    // This is better than treating the whole sentence as one token
-    return raw.replace(/[^一-鿿㐀-䶿a-zA-Z0-9]/g, " ")
-      .toLowerCase()
-      .split(/\s+/)
-      .filter(Boolean);
+    return tokenizeWithJieba(text, 1);
   }
 
   /** Hash a token into [0, vocabSize) for ONNX input IDs. bge-small-zh vocab is 21128. */

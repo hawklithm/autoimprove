@@ -6,6 +6,7 @@ import { SignalDictionaryDB, LabeledContent } from "../storage/signal-dictionary
 import { PatternType } from "./models.js";
 import { EmbeddingEncoder } from "./embedding-encoder.js";
 import { loadConfig } from "../storage/init.js";
+import { logger } from "./logger.js";
 
 export interface PatternCluster {
   cluster_id: string;
@@ -243,7 +244,9 @@ export class PatternClusterer {
     const t2 = signals2.join(" ");
     if (!t1 || !t2) return 0;
     const [v1, v2] = await this.encoder.encodeBatch([t1, t2]);
-    return EmbeddingEncoder.cosine(v1, v2);
+    const sim = EmbeddingEncoder.cosine(v1, v2);
+    logger.info("pattern-clusterer", `semanticSimilarity: sim=${sim.toFixed(4)} between "${t1.substring(0, 30)}..." and "${t2.substring(0, 30)}..."`);
+    return sim;
   }
 
   /**

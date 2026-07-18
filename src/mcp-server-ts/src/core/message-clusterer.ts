@@ -12,6 +12,7 @@ import { Message } from "./jsonl-parser.js";
 import { EmbeddingEncoder } from "./embedding-encoder.js";
 import { loadConfig } from "../storage/init.js";
 import { ClusterCentroid } from "../storage/session-cache.js";
+import { tokenizeWithJieba } from "./jieba-utils.js";
 
 export interface MessageCandidate {
   message: Message;
@@ -294,7 +295,11 @@ export class MessageClusterer {
   }
 
   /**
-   * Tokenize text into terms (simple word-based)
+   * Tokenize text into terms (word-based with jieba for Chinese).
+   *
+   * Uses jieba for Chinese word segmentation when available, falls back to
+   * whitespace/character-level tokenization. Shared jieba instance from
+   * jieba-utils ensures consistent segmentation across the pipeline.
    */
   private tokenize(text: string): string[] {
     // Handle undefined or null text
@@ -302,29 +307,46 @@ export class MessageClusterer {
       return [];
     }
 
-    // Remove punctuation and convert to lowercase
-    const normalized = text
-      .toLowerCase()
-      .replace(/[^\w\s一-龥]/g, ' ')  // Keep alphanumeric + Chinese chars
-      .trim();
+    // Use jieba for Chinese text, whitespace split for English
+    // minTokenLength=2 so we filter out single-char tokens early
+    const jiebaTokens = tokenizeWithJieba(text, 2);
 
-    // Split into words
-    const words = normalized.split(/\s+/);
+    // If jieba was used (Chinese detected), apply stop word filtering on its output
+    const hasChinese = /[一-鿿㐀-䶿]/.test(text);
+    if (hasChinese) {
+      const stopWords = new Set([
+        '的', '了', '在', '是', '我', '有', '和', '就', '不', '人', '都', '一',
+        '这', '个', '上', '来', '说', '到', '要', '可以', '里', '着', '我们',
+        '他们', '它', '那', '什么', '怎么', '为什么', '这个', '那个', '一个',
+        '没有', '不是', '但是', '如果', '因为', '所以', '而且', '或者', '虽然',
+        '已经', '可以', '应该', '需要', '可能', '然后', '之后', '时候', '问题',
+        '方法', '方式', '情况', '结果', '信息', '内容', '东西', '事情',
+        'the', 'a', 'an', 'and', 'or', 'but', 'in', 'on', 'at', 'to', 'for',
+        'of', 'with', 'by', 'from', 'up', 'about', 'into', 'through', 'is', 'are',
+        'was', 'were', 'be', 'been', 'being', 'have', 'has', 'had', 'do', 'does',
+        'did', 'will', 'would', 'should', 'could', 'can', 'may', 'might', 'must',
+      ]);
 
-    // Filter stop words and short words
+      return jiebaTokens.filter(w =>
+        w.length >= 2 &&
+        !stopWords.has(w) &&
+        !/^\d+$/.test(w)
+      );
+    }
+
+    // English path: use the tokens from jieba-utils directly (it falls back to
+    // whitespace split for non-Chinese text), then apply English stop word filter
     const stopWords = new Set([
       'the', 'a', 'an', 'and', 'or', 'but', 'in', 'on', 'at', 'to', 'for',
       'of', 'with', 'by', 'from', 'up', 'about', 'into', 'through', 'is', 'are',
       'was', 'were', 'be', 'been', 'being', 'have', 'has', 'had', 'do', 'does',
       'did', 'will', 'would', 'should', 'could', 'can', 'may', 'might', 'must',
-      '的', '了', '在', '是', '我', '有', '和', '就', '不', '人', '都', '一',
-      '这', '个', '上', '来', '说', '到', '要', '可以', '里', '着'
     ]);
 
-    return words.filter(w =>
+    return jiebaTokens.filter(w =>
       w.length >= 2 &&
       !stopWords.has(w) &&
-      !/^\d+$/.test(w)  // Remove pure numbers
+      !/^\d+$/.test(w)
     );
   }
 

@@ -8,6 +8,7 @@
 import { Pattern, PatternType } from "./models.js";
 import { EmbeddingEncoder } from "./embedding-encoder.js";
 import { loadConfig } from "../storage/init.js";
+import { tokenizeWithJieba } from "./jieba-utils.js";
 
 export interface PatternClusterGroup {
   cluster_id: string;
@@ -203,14 +204,11 @@ export class PatternSimilarityClusterer {
   }
 
   /**
-   * Tokenize text into words
+   * Tokenize text into words (uses jieba for Chinese, whitespace split for English).
+   * minTokenLength=3 to filter out very short/stop words for keyword matching.
    */
   private tokenize(text: string): string[] {
-    return text
-      .toLowerCase()
-      .replace(/[^\w\s]/g, " ")
-      .split(/\s+/)
-      .filter(w => w.length > 2);
+    return tokenizeWithJieba(text, 3);
   }
 
   /**
