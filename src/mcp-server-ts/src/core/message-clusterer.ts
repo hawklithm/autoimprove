@@ -330,7 +330,8 @@ export class MessageClusterer {
       return jiebaTokens.filter(w =>
         w.length >= 2 &&
         !stopWords.has(w) &&
-        !/^\d+$/.test(w)
+        !/^\d+$/.test(w) &&
+        /[a-zA-Z0-9一-鿿㐀-䶿]/.test(w)  // Must contain at least one alphanumeric or CJK char
       );
     }
 
@@ -346,7 +347,8 @@ export class MessageClusterer {
     return jiebaTokens.filter(w =>
       w.length >= 2 &&
       !stopWords.has(w) &&
-      !/^\d+$/.test(w)
+      !/^\d+$/.test(w) &&
+      /[a-zA-Z0-9一-鿿㐀-䶿]/.test(w)  // Must contain at least one alphanumeric or CJK char
     );
   }
 

@@ -58,14 +58,17 @@ export function tokenizeWithJieba(text: string, minTokenLength: number = 1): str
     return words
       .filter((w: string) => w.trim().length > 0 && !/^[，。！？、；：""''（）【】《》\s]+$/.test(w))
       .map((w: string) => w.toLowerCase())
-      .filter((w: string) => w.length >= minTokenLength);
+      .filter((w: string) => w.length >= minTokenLength && /[a-zA-Z0-9一-鿿㐀-䶿]/.test(w));
   }
 
   // Fallback: whitespace split for English or character-level for Chinese
   const whitespaceTokens = raw.toLowerCase().split(/\s+/).filter(Boolean);
   if (whitespaceTokens.length > 1 || !hasChinese) {
     // English text or mixed with spaces: use whitespace tokens
-    return whitespaceTokens.filter(w => w.length >= minTokenLength);
+    return whitespaceTokens.filter(w =>
+      w.length >= minTokenLength &&
+      /[a-zA-Z0-9一-鿿㐀-䶿]/.test(w)  // Must contain at least one alphanumeric or CJK char
+    );
   }
 
   // Chinese text without jieba: character-level tokenization
