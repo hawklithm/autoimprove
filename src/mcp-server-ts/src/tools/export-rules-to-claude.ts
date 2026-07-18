@@ -258,7 +258,7 @@ export class ClaudeIndexExporter {
   private formatRule(rule: RuleIndexEntry): string[] {
     const lines: string[] = [];
 
-    // Load full content
+    // Load full content (for title only)
     const content = this.contentManager.loadContent(rule.id);
 
     // Create rule header
@@ -276,9 +276,9 @@ export class ClaudeIndexExporter {
     }
 
     if (content) {
-      // Extract a short summary from content (first 2 lines or 150 chars)
-      const summary = this.extractSummary(content.content);
-      lines.push(`**Rule**: ${summary}`);
+      // Use the title from rule content as the one-liner summary
+      const title = content.title || this.extractSummary(content.content);
+      lines.push(`**Rule**: ${title}`);
     }
 
     lines.push("");

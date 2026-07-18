@@ -15,6 +15,8 @@ import { SceneExtractor } from "./scene-extractor.js";
 import { SessionData } from "./jsonl-parser.js";
 import { logger } from "./logger.js";
 import { tokenizeWithJieba } from "./jieba-utils.js";
+import { EmbeddingEncoder } from "./embedding-encoder.js";
+import { loadConfig } from "../storage/init.js";
 import OpenAI from "openai";
 import { appendFileSync } from "fs";
 import { homedir } from "os";
@@ -122,7 +124,7 @@ export class HybridRuleGenerator {
     });
 
     // Phase 1.6: Extract scenes and keywords from pattern
-    const sceneData = this.extractSceneFromPattern(pattern);
+    const sceneData = await this.extractSceneFromPattern(pattern);
     basicRule.indexEntry.scenes = sceneData.scene;
     basicRule.indexEntry.keywords = sceneData.keywords;
 
@@ -872,7 +874,7 @@ Generate enhanced rule following the format specified above.`;
   /**
    * Extract scene and keywords from pattern
    */
-  private extractSceneFromPattern(pattern: Pattern): { scene: Scene; keywords: string[] } {
+  private async extractSceneFromPattern(pattern: Pattern): Promise<{ scene: Scene; keywords: string[] }> {
     const sceneExtractor = SceneExtractor.getInstance();
 
     // Collect all text from pattern for analysis
@@ -921,53 +923,16 @@ Generate enhanced rule following the format specified above.`;
       pattern.keywords.forEach(kw => keywords.add(kw));
     }
 
-    // Extract important technical terms (camelCase, PascalCase, snake_case identifiers)
-    // and Chinese keywords via jieba tokenization
-    const combinedText = texts.join(' ').toLowerCase();
-
-    // Extract English identifiers
-    const identifierRegex = /\b([a-z][a-zA-Z0-9_]*|[A-Z][a-zA-Z0-9]*)\b/g;
-    const matches = combinedText.match(identifierRegex);
-    if (matches) {
-      // Take most frequent terms (simple heuristic)
-      const termCounts = new Map<string, number>();
-      for (const match of matches) {
-        if (match.length > 3 && !['this', 'that', 'from', 'with', 'have', 'should'].includes(match)) {
-          termCounts.set(match, (termCounts.get(match) || 0) + 1);
-        }
-      }
-
-      // Add top 5 most frequent English terms
-      const topTerms = Array.from(termCounts.entries())
-        .sort((a, b) => b[1] - a[1])
-        .slice(0, 5)
-        .map(([term]) => term);
-      topTerms.forEach(term => keywords.add(term));
-    }
-
-    // Extract Chinese keywords via jieba tokenization
-    const hasChinese = /[一-鿿㐀-䶿]/.test(combinedText);
-    if (hasChinese) {
-      const jiebaTokens = tokenizeWithJieba(combinedText, 2);
-      const stopWords = new Set([
-        '的', '了', '在', '是', '我', '有', '和', '就', '不', '人', '都', '一',
-        '这', '个', '上', '来', '说', '到', '要', '可以', '里', '着', '我们',
-        '他们', '它', '那', '什么', '怎么', '为什么', '这个', '那个', '一个',
-        '没有', '不是', '但是', '如果', '因为', '所以', '而且', '或者', '虽然',
-        '已经', '可以', '应该', '需要', '可能', '然后', '之后', '时候', '问题',
-        '方法', '方式', '情况', '结果', '信息', '内容', '东西', '事情', '使用',
-        '一个', '一下', '一些', '一种', '通过', '进行', '以及', '用于', '具有',
-      ]);
-      const filtered = jiebaTokens.filter(w => w.length >= 2 && !stopWords.has(w) && !/^\d+$/.test(w));
-      // Count frequency and add top 5
-      const freq = new Map<string, number>();
-      for (const t of filtered) freq.set(t, (freq.get(t) || 0) + 1);
-      const topChinese = Array.from(freq.entries())
-        .sort((a, b) => b[1] - a[1])
-        .slice(0, 5)
-        .map(([term]) => term);
-      topChinese.forEach(term => keywords.add(term));
-    }
+    // Extract keywords via semantic relevance scoring.
+    // Uses EmbeddingEncoder to compute cosine similarity between the combined
+    // pattern text and each candidate term, then selects the top-K most
+    // semantically relevant terms. This is superior to frequency-based
+    // extraction because a term that appears only once but is highly specific
+    // (e.g. "novel_id", "fix_exclamation") will rank higher than common filler
+    // that happens to appear multiple times (e.g. "function", "need").
+    const combinedText = texts.join(' ');
+    const semanticKeywords = await this.extractSemanticKeywords(combinedText, 10);
+    semanticKeywords.forEach(kw => keywords.add(kw));
 
     // Add tech and functional domains as keywords
     scene.tech.forEach(t => keywords.add(t));
@@ -977,6 +942,99 @@ Generate enhanced rule following the format specified above.`;
       scene,
       keywords: Array.from(keywords).slice(0, 15) // Limit to 15 keywords
     };
+  }
+
+  /**
+   * Extract semantically relevant keywords from text using EmbeddingEncoder.
+   *
+   * Strategy: tokenize text into candidate terms (English identifiers + jieba
+   * Chinese tokens), encode each candidate and the full text as vectors, then
+   * compute cosine similarity. The top-K terms with highest similarity to the
+   * full text are the most semantically representative keywords.
+   *
+   * This is better than frequency-based extraction because:
+   * - A rare but highly specific term (e.g. "novel_id") ranks higher than
+   *   common filler (e.g. "function", "need") that happens to appear often
+   * - Chinese terms segmented by jieba get proper multi-character tokens
+   * - Stop words naturally rank low since their vectors are dissimilar to
+   *   the technical/specific text
+   */
+  private async extractSemanticKeywords(text: string, maxKeywords: number = 10): Promise<string[]> {
+    if (!text || text.trim().length < 3) return [];
+
+    const lowerText = text.toLowerCase();
+    const candidates = new Set<string>();
+
+    // English identifiers (camelCase, PascalCase, snake_case)
+    const identifierRegex = /\b([a-z][a-zA-Z0-9_]*|[A-Z][a-zA-Z0-9]*)\b/g;
+    const matches = lowerText.match(identifierRegex);
+    if (matches) {
+      for (const m of matches) {
+        if (m.length > 3 && !['this', 'that', 'from', 'with', 'have', 'should', 'need', 'must', 'can', 'use', 'get', 'set'].includes(m)) {
+          candidates.add(m);
+        }
+      }
+    }
+
+    // Chinese tokens via jieba
+    const hasChinese = /[一-鿿㐀-䶿]/.test(lowerText);
+    if (hasChinese) {
+      const jiebaTokens = tokenizeWithJieba(lowerText, 2);
+      const stopWords = new Set([
+        '的', '了', '在', '是', '我', '有', '和', '就', '不', '人', '都', '一',
+        '这', '个', '上', '来', '说', '到', '要', '可以', '里', '着', '我们',
+        '他们', '它', '那', '什么', '怎么', '为什么', '这个', '那个', '一个',
+        '没有', '不是', '但是', '如果', '因为', '所以', '而且', '或者', '虽然',
+        '已经', '可以', '应该', '需要', '可能', '然后', '之后', '时候', '问题',
+        '方法', '方式', '情况', '结果', '信息', '内容', '东西', '事情', '使用',
+        '一个', '一下', '一些', '一种', '通过', '进行', '以及', '用于', '具有',
+        '还有', '没有', '不是', '就是', '只是', '但是', '还是', '或者', '而且',
+      ]);
+      for (const t of jiebaTokens) {
+        if (t.length >= 2 && !stopWords.has(t) && !/^\d+$/.test(t)) {
+          candidates.add(t);
+        }
+      }
+    }
+
+    if (candidates.size === 0) return [];
+    if (candidates.size === 1) return [Array.from(candidates)[0]];
+
+    // Build encoder (reuse config from constructor context)
+    const cfg = loadConfig().local_ml;
+    const encoder = new EmbeddingEncoder({
+      backend: (cfg?.embedding_backend as any) || "char-ngram-tfidf",
+    });
+
+    try {
+      // Encode the full text once
+      const textVec = await encoder.encode(text);
+      const candidateArr = Array.from(candidates);
+
+      // Encode all candidates in a batch
+      const candidateVecs = await encoder.encodeBatch(candidateArr);
+
+      // Score each candidate by cosine similarity to the full text
+      const scored = candidateArr.map((term, i) => ({
+        term,
+        score: EmbeddingEncoder.cosine(textVec, candidateVecs[i]),
+      }));
+
+      // Sort by score descending, take top-K
+      const topK = scored
+        .sort((a, b) => b.score - a.score)
+        .slice(0, maxKeywords)
+        .map(s => s.term);
+
+      logger.debug("hybrid-keywords", `Semantic keywords: [${topK.join(", ")}] (from ${candidateArr.length} candidates)`);
+      return topK;
+    } catch {
+      // Fallback: return candidates sorted by length (longer = more specific)
+      logger.warn("hybrid-keywords", "EmbeddingEncoder failed, falling back to length-based keyword extraction");
+      return Array.from(candidates)
+        .sort((a, b) => b.length - a.length)
+        .slice(0, maxKeywords);
+    }
   }
 
   /**
