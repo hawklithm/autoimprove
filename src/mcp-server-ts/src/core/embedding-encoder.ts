@@ -16,13 +16,37 @@
  * unavailable, construction falls back to char-ngram-tfidf with a warning so the
  * application never crashes from a missing native module.
  *
+ * C4: ONNX tokenizer uses @node-rs/jieba for Chinese word segmentation (optional dep).
+ *      When jieba is unavailable, falls back to character-level tokenization so
+ *      Chinese text still produces differentiated vectors.
+ *
  * Vectors are L2-normalized so cosine similarity == dot product.
  */
 
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "fs";
 import { join } from "path";
 import { homedir } from "os";
+import { createRequire } from "module";
 import { logger } from "./logger.js";
+
+// C3: createRequire lets us load onnxruntime-node synchronously in ESM/tsx.
+const _require = createRequire(import.meta.url);
+
+// C4: jieba tokenizer singleton for Chinese word segmentation (ONNX backend).
+// Loaded lazily on first ONNX encode; falls back to char-level if unavailable.
+let jiebaTokenizer: any = null;
+function ensureJieba(): boolean {
+  if (jiebaTokenizer) return true;
+  try {
+    const { Jieba } = _require("@node-rs/jieba") as any;
+    jiebaTokenizer = new Jieba();
+    logger.info("embedding-onnx", "@node-rs/jieba initialized for Chinese word segmentation");
+    return true;
+  } catch {
+    logger.warn("embedding-onnx", "@node-rs/jieba not available, falling back to character-level tokenization for Chinese text");
+    return false;
+  }
+}
 
 export type EmbeddingBackend = "char-ngram-tfidf" | "onnx-local";
 
@@ -50,8 +74,49 @@ export interface EmbeddingCache {
   vectors: number[][];
 }
 
+/**
+ * ONNX singleton initialisation state.
+ * InferenceSession.create() is async (onnxruntime-node v1.17+), so we store
+ * a promise and await it on the first encode/encodeBatch call. This guarantees
+ * ONNX is ready before any encoding happens, without blocking the constructor.
+ */
+let onnxInitPromise: Promise<void> | null = null;
+
+function ensureOnnxInit(modelName?: string): void {
+  if (EmbeddingEncoder.onnxSession) return;        // already initialised
+  if (onnxInitPromise) return;                     // already initialising
+
+  const modelPath = modelName
+    ? join(homedir(), ".autoimprove", "models", modelName)
+    : join(homedir(), ".autoimprove", "models", "bge-small-zh.onnx");
+
+  if (!existsSync(modelPath)) {
+    logger.warn("embedding-onnx", `ONNX model not found at ${modelPath}. Run 'npm run download-models' or set onnx_model. Falling back to char-ngram-tfidf.`);
+    return; // caller handles fallback
+  }
+
+  onnxInitPromise = (async () => {
+    try {
+      // Use dynamic import() for ESM/tsx compatibility.
+      // eslint-disable-next-line @typescript-eslint/no-var-requires
+      // @ts-ignore - onnxruntime-node has no type declarations
+      const ort = await import("onnxruntime-node") as any;
+      const session = await ort.InferenceSession.create(modelPath);
+      if (!session.inputNames || session.inputNames.length === 0) {
+        throw new Error("ONNX session has no input names");
+      }
+      EmbeddingEncoder.onnxSession = session;
+      EmbeddingEncoder.onnxModelPath = modelPath;
+      EmbeddingEncoder.onnxTensorCtor = ort.Tensor;
+      logger.info("embedding-onnx", `ONNX session loaded from ${modelPath}`);
+    } catch (e: any) {
+      logger.warn("embedding-onnx", `ONNX init failed (${e.message}). Falling back to char-ngram-tfidf.`);
+    }
+  })();
+}
+
 export class EmbeddingEncoder {
-  backend: EmbeddingBackend; // mutable for C3 fallback (ONNX unavailable → char-ngram-tfidf)
+  backend: EmbeddingBackend; // mutable for fallback (ONNX unavailable → char-ngram-tfidf)
   readonly version = 2; // bumped from 1→2 for C2/C3 cache format change
   private readonly ngramMin: number;
   private readonly ngramMax: number;
@@ -63,11 +128,11 @@ export class EmbeddingEncoder {
   private numDocsSeen = 0;
   private df: Map<string, number> = new Map();
 
-  // C3: ONNX inference session (lazy singleton, process-wide).
-  private static onnxSession: any = null;
-  private static onnxModelPath: string | null = null;
-  private static onnxInitPromise: Promise<void> | null = null;
-  private static onnxTensorCtor: any = null;
+  // ONNX inference session (process-level singleton, synchronously initialised).
+  static onnxSession: any = null;
+  static onnxModelPath: string | null = null;
+  static onnxTensorCtor: any = null;
+  static onnxInitialising = false;
   private onnxDim = 384; // bge-small output dim
 
   constructor(cfg: EmbeddingEncoderConfig) {
@@ -82,34 +147,51 @@ export class EmbeddingEncoder {
       mkdirSync(this.cacheDir, { recursive: true });
     }
 
-    // C3: if ONNX backend is requested, try to initialise; fall back on failure.
+    // Start async ONNX initialisation (or no-op if already done).
+    // The first encode/encodeBatch call will await it before proceeding.
     if (this.backend === "onnx-local") {
-      this.initOnnx(cfg.onnxModel);
+      ensureOnnxInit(cfg.onnxModel);
+    }
+  }
+
+  /**
+   * Ensure ONNX is initialised before encoding.
+   * If ONNX init is still pending, await it. On success, subsequent calls
+   * skip this check entirely. On failure, backend is downgraded transparently.
+   */
+  private async ensureOnnxReady(): Promise<void> {
+    if (this.backend !== "onnx-local") return;
+    if (EmbeddingEncoder.onnxSession) return; // already ready
+    if (onnxInitPromise) {
+      await onnxInitPromise;
+    }
+    // Downgrade to char-ngram-tfidf if ONNX init failed
+    if (!EmbeddingEncoder.onnxSession) {
+      this.backend = "char-ngram-tfidf";
     }
   }
 
   // ---- public API ----
-  // NOTE: ONNX inference (onnxruntime-node) is inherently async (session.run()
-  // returns a Promise). These methods are therefore async. Callers MUST await
-  // them. The previous synchronous spin-wait implementation blocked the Node
-  // event loop (the .then callback never ran) and burned a 30s busy-wait per
-  // call at 100% CPU — see encodeOnnx.
+  // ONNX inference (session.run()) is inherently async. Callers MUST await
+  // these methods. The first call may block briefly (10-500ms) while ONNX
+  // model loads; subsequent calls are fast.
 
   /** Encode a single text (uses current IDF state; call encodeBatch first for full-corpus IDF). */
   async encode(text: string): Promise<Float32Array> {
-    if (this.backend === "onnx-local" && EmbeddingEncoder.onnxSession) {
+    await this.ensureOnnxReady();
+    if (this.backend === "onnx-local") {
       return this.encodeOnnx(text);
     }
-    // char-ngram-tfidf path (also used as transparent fallback while/if ONNX is unavailable).
+    // char-ngram-tfidf path (also used as transparent fallback when ONNX is unavailable).
     return this.vectorize(this.toNgrams(text));
   }
 
   /** Encode a batch and update IDF statistics from the full batch. */
   async encodeBatch(texts: string[]): Promise<Float32Array[]> {
-    if (this.backend === "onnx-local" && EmbeddingEncoder.onnxSession) {
+    await this.ensureOnnxReady();
+    if (this.backend === "onnx-local") {
       return Promise.all(texts.map(t => this.encodeOnnx(t)));
     }
-
     // char-ngram-tfidf path.
     return this.encodeBatchCharNgram(texts);
   }
@@ -166,99 +248,33 @@ export class EmbeddingEncoder {
     const p = this.cachePath(sessionId);
     if (existsSync(p)) {
       try {
-        const { unlinkSync } = require("fs");
+        const { unlinkSync } = _require("fs");
         unlinkSync(p);
       } catch { /* ignore */ }
     }
   }
 
-  // ---- C3: ONNX backend internals ----
-
-  /**
-   * Lazy-init the ONNX inference session (process-level singleton).
-   * Falls back to char-ngram-tfidf with a warning if onnxruntime-node is
-   * not installed or the model file is missing.
-   *
-   * NOTE: onnxruntime-node v1.17+ only supports the async create() API.
-   * We use a synchronous-looking wrapper that queues encodeOnnx calls
-   * until the session is ready, but since encode/encodeBatch are
-   * synchronous in our API, we store a promise and check it on each
-   * encode call. If the promise is still pending, we fall back to
-   * char-ngram-tfidf for the first calls and switch to ONNX once ready.
-   */
-  private initOnnx(modelName?: string): void {
-    if (EmbeddingEncoder.onnxSession) return; // already initialised
-    if (EmbeddingEncoder.onnxInitPromise) return; // already initialising
-
-    const modelPath = modelName
-      ? join(homedir(), ".autoimprove", "models", modelName)
-      : join(homedir(), ".autoimprove", "models", "bge-small-zh.onnx");
-
-    if (!existsSync(modelPath)) {
-      logger.warn("embedding-onnx", `ONNX model not found at ${modelPath}. Run 'npm run download-models' or set onnx_model. Falling back to char-ngram-tfidf.`);
-      this.backend = "char-ngram-tfidf";
-      return;
-    }
-
-    // Store a promise so concurrent calls don't race.
-    EmbeddingEncoder.onnxInitPromise = (async () => {
-      try {
-        // Use dynamic import() instead of require() for ESM compatibility
-        // (require() fails in tsx/ESM mode with "require is not defined")
-        // eslint-disable-next-line @typescript-eslint/no-var-requires
-        // @ts-ignore - onnxruntime-node has no type declarations
-        const ort = await import("onnxruntime-node") as any;
-        const session = await ort.InferenceSession.create(modelPath);
-        // Validate the session has inputs
-        if (!session.inputNames || session.inputNames.length === 0) {
-          throw new Error("ONNX session has no input names");
-        }
-        EmbeddingEncoder.onnxSession = session;
-        EmbeddingEncoder.onnxModelPath = modelPath;
-        EmbeddingEncoder.onnxTensorCtor = ort.Tensor;
-        logger.info("embedding-onnx", `ONNX session loaded from ${modelPath}`);
-      } catch (e: any) {
-        logger.warn("embedding-onnx", `ONNX init failed (${e.message}). Falling back to char-ngram-tfidf.`);
-        this.backend = "char-ngram-tfidf";
-      }
-    })();
-
-    // Also register a sync fallback: if the promise hasn't resolved by
-    // the time encode/encodeBatch is called, we transparently fall back.
-    EmbeddingEncoder.onnxInitPromise.then(() => {
-      // success — next encode calls will use ONNX
-    }).catch(() => {
-      this.backend = "char-ngram-tfidf";
-    });
-  }
+  // ---- ONNX backend internals ----
 
   /**
    * Encode a single text via the ONNX model.
-   * Tokenization is minimal: we split on whitespace and truncate/pad to 128 tokens
-   * (bge-small supports up to 512; 128 is a pragmatic balance for signal texts).
    *
-   * onnxruntime-node v1.17+ only supports async session.run(). Since our encode()
-   * API is synchronous, we use a spin-wait on the async result (CPU-bound,
-   * typically 10-50ms). For batch encoding, encodeBatch uses the async path
-   * directly via runOnnxBatch.
-   *
-   * NOTE: We avoid child process (execSync) approach because it's unreliable
-   * in ESM/tsx runtime environments. The spin-wait approach works in both CJS
-   * and ESM modes.
+   * Tokenization uses @node-rs/jieba for Chinese + whitespace split for English
+   * (C4). Falls back to character-level tokenization when jieba is unavailable.
+   * Truncate/pad to 128 tokens (bge-small supports up to 512; 128 is a pragmatic
+   * balance for signal texts).
    */
   private async encodeOnnx(text: string): Promise<Float32Array> {
     const session = EmbeddingEncoder.onnxSession;
     if (!session) return new Float32Array(this.onnxDim); // zero vector fallback
 
-    const tokens = (text || "").toLowerCase().split(/\s+/).filter(Boolean);
+    // C4: tokenize with jieba for Chinese, whitespace split for English
+    const tokens = this.tokenizeOnnx(text);
     const MAX_LEN = 128;
     const ids = new Array(MAX_LEN).fill(0);
     const mask = new Array(MAX_LEN).fill(0);
     const typeIds = new Array(MAX_LEN).fill(0);
 
-    // Simple word-level tokenisation: map each word to a hash-based ID
-    // (a proper tokenizer would use the model's vocab; this is a pragmatic
-    // approximation that still captures semantic signal).
     // Use 101 ([CLS]) as the first token for sentence-level embedding.
     ids[0] = 101;
     mask[0] = 1;
@@ -312,6 +328,41 @@ export class EmbeddingEncoder {
       logger.warn("embedding-onnx", `ONNX inference failed: ${e}`);
       return new Float32Array(this.onnxDim);
     }
+  }
+
+  /**
+   * Tokenize text for ONNX input: uses jieba for Chinese, whitespace split for English.
+   * Falls back to character-level tokenization when jieba is unavailable (C4).
+   */
+  private tokenizeOnnx(text: string): string[] {
+    const raw = text || "";
+    if (!raw.trim()) return [];
+
+    // Check if text contains Chinese characters
+    const hasChinese = /[一-鿿㐀-䶿]/.test(raw);
+
+    if (hasChinese && ensureJieba()) {
+      // Use jieba with HMM mode for Chinese word segmentation
+      const words = jiebaTokenizer.cut(raw, true) as string[];
+      // Filter out punctuation and whitespace, lowercase
+      return words
+        .filter((w: string) => w.trim().length > 0 && !/^[，。！？、；：""''（）【】《》\s]+$/.test(w))
+        .map((w: string) => w.toLowerCase());
+    }
+
+    // Fallback: whitespace split for English or character-level for Chinese
+    const whitespaceTokens = raw.toLowerCase().split(/\s+/).filter(Boolean);
+    if (whitespaceTokens.length > 1 || !hasChinese) {
+      // English text or mixed with spaces: use whitespace tokens
+      return whitespaceTokens;
+    }
+
+    // Chinese text without jieba: character-level tokenization
+    // This is better than treating the whole sentence as one token
+    return raw.replace(/[^一-鿿㐀-䶿a-zA-Z0-9]/g, " ")
+      .toLowerCase()
+      .split(/\s+/)
+      .filter(Boolean);
   }
 
   /** Hash a token into [0, vocabSize) for ONNX input IDs. bge-small-zh vocab is 21128. */
