@@ -328,20 +328,30 @@ export class ClaudeIndexExporter {
 
   /**
    * Extract summary from content
+   *
+   * Takes the first 2 sentences or up to 300 characters — whichever is shorter.
+   * This gives a more complete description than the previous 1-sentence/150-char limit.
    */
   private extractSummary(content: string): string {
     // Remove markdown formatting
     let text = content.replace(/[#*`]/g, "");
 
-    // Take first sentence or 150 chars
+    // Take first 2 sentences or 300 chars
+    const MAX_CHARS = 300;
     const sentences = text.split(/[.!?。！？]/);
-    if (sentences.length > 0 && sentences[0].length <= 150) {
+    if (sentences.length >= 2) {
+      const twoSentences = (sentences[0] + "。" + sentences[1]).trim();
+      if (twoSentences.length <= MAX_CHARS) {
+        return twoSentences;
+      }
+    }
+    if (sentences.length > 0 && sentences[0].length <= MAX_CHARS) {
       return sentences[0].trim();
     }
 
-    // Fallback to first 150 chars
-    if (text.length > 150) {
-      return text.substring(0, 147).trim() + "...";
+    // Fallback to first MAX_CHARS chars
+    if (text.length > MAX_CHARS) {
+      return text.substring(0, MAX_CHARS - 3).trim() + "...";
     }
 
     return text.trim();

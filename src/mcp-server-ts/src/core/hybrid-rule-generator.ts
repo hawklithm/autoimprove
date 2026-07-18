@@ -14,6 +14,7 @@ import { ScopeDetector } from "./scope-detector.js";
 import { SceneExtractor } from "./scene-extractor.js";
 import { SessionData } from "./jsonl-parser.js";
 import { logger } from "./logger.js";
+import { tokenizeWithJieba } from "./jieba-utils.js";
 import OpenAI from "openai";
 import { appendFileSync } from "fs";
 import { homedir } from "os";
@@ -921,7 +922,10 @@ Generate enhanced rule following the format specified above.`;
     }
 
     // Extract important technical terms (camelCase, PascalCase, snake_case identifiers)
+    // and Chinese keywords via jieba tokenization
     const combinedText = texts.join(' ').toLowerCase();
+
+    // Extract English identifiers
     const identifierRegex = /\b([a-z][a-zA-Z0-9_]*|[A-Z][a-zA-Z0-9]*)\b/g;
     const matches = combinedText.match(identifierRegex);
     if (matches) {
@@ -933,12 +937,36 @@ Generate enhanced rule following the format specified above.`;
         }
       }
 
-      // Add top 5 most frequent terms
+      // Add top 5 most frequent English terms
       const topTerms = Array.from(termCounts.entries())
         .sort((a, b) => b[1] - a[1])
         .slice(0, 5)
         .map(([term]) => term);
       topTerms.forEach(term => keywords.add(term));
+    }
+
+    // Extract Chinese keywords via jieba tokenization
+    const hasChinese = /[一-鿿㐀-䶿]/.test(combinedText);
+    if (hasChinese) {
+      const jiebaTokens = tokenizeWithJieba(combinedText, 2);
+      const stopWords = new Set([
+        '的', '了', '在', '是', '我', '有', '和', '就', '不', '人', '都', '一',
+        '这', '个', '上', '来', '说', '到', '要', '可以', '里', '着', '我们',
+        '他们', '它', '那', '什么', '怎么', '为什么', '这个', '那个', '一个',
+        '没有', '不是', '但是', '如果', '因为', '所以', '而且', '或者', '虽然',
+        '已经', '可以', '应该', '需要', '可能', '然后', '之后', '时候', '问题',
+        '方法', '方式', '情况', '结果', '信息', '内容', '东西', '事情', '使用',
+        '一个', '一下', '一些', '一种', '通过', '进行', '以及', '用于', '具有',
+      ]);
+      const filtered = jiebaTokens.filter(w => w.length >= 2 && !stopWords.has(w) && !/^\d+$/.test(w));
+      // Count frequency and add top 5
+      const freq = new Map<string, number>();
+      for (const t of filtered) freq.set(t, (freq.get(t) || 0) + 1);
+      const topChinese = Array.from(freq.entries())
+        .sort((a, b) => b[1] - a[1])
+        .slice(0, 5)
+        .map(([term]) => term);
+      topChinese.forEach(term => keywords.add(term));
     }
 
     // Add tech and functional domains as keywords
