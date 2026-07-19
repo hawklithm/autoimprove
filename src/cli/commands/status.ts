@@ -1,4 +1,4 @@
-import { existsSync, readFileSync } from 'fs';
+import { existsSync, readFileSync, readdirSync } from 'fs';
 import { join } from 'path';
 import { homedir } from 'os';
 import { spawn } from 'child_process';
@@ -40,7 +40,7 @@ export async function status() {
 
     const sessionsDir = join(storageDir, 'sessions');
     if (existsSync(sessionsDir)) {
-      const sessions = require('fs').readdirSync(sessionsDir).filter((f: string) => f.endsWith('.json'));
+      const sessions = readdirSync(sessionsDir).filter((f: string) => f.endsWith('.json'));
       cliLogger.print(`✓ Sessions: ${sessions.length} tracked`);
     }
   } else {

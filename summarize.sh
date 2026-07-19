@@ -2,7 +2,7 @@
 #
 # AutoImprove Summarize CLI Wrapper
 #
-# 便捷的 shell 脚本，调用 summarize.ts
+# Convenience shell script that invokes the unified autoimprove CLI.
 #
 
 set -e
@@ -10,22 +10,22 @@ set -e
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR"
 
-# 检查 tsx 是否安装
-if ! command -v tsx &> /dev/null; then
-    echo "❌ tsx not found. Installing..."
-    npm install -g tsx
+# Ensure CLI is built
+if [ ! -f "lib/cli/index.js" ]; then
+    echo "📦 Building CLI..."
+    npm run build:cli
 fi
 
-# 检查 MCP server 是否已构建
+# Ensure MCP server is built (needed at runtime by summarize)
 if [ ! -d "src/mcp-server-ts/dist" ]; then
-    echo "📦 Building MCP server first..."
+    echo "📦 Building MCP server..."
     cd src/mcp-server-ts
-    npm install
+    npm install --silent
     npm run build
     cd "$SCRIPT_DIR"
 fi
 
-# 运行 summarize.ts
+# Run the unified CLI
 echo "🚀 Running AutoImprove Summarize..."
 echo ""
-tsx summarize.ts "$@"
+node lib/cli/index.js summarize "$@"

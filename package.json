@@ -51,9 +51,9 @@
     "lint": "cd src/mcp-server-ts && npm run lint",
     "dev": "npm run build && npm link",
     "prepublishOnly": "npm run build && npm test",
-    "summarize": "tsx summarize.ts",
-    "summarize:force": "tsx summarize.ts --force",
-    "summarize:dry-run": "tsx summarize.ts --dry-run"
+    "summarize": "node lib/cli/index.js summarize",
+    "summarize:force": "node lib/cli/index.js summarize --force",
+    "summarize:dry-run": "node lib/cli/index.js summarize --dry-run"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.0.4",
