@@ -40,7 +40,7 @@ timeout 3 node "$SERVER_PATH" 2>&1 || echo "Server test completed"
 echo ""
 echo "4. Checking Skills installation..."
 echo "--------------------------------------"
-for skill in autoimprove-status autoimprove-rules autoimprove-lessons autoimprove-summarize; do
+for skill in autoimprove-status autoimprove-rules autoimprove-lessons; do
   if [ -f ~/.claude/skills/$skill/SKILL.md ]; then
     echo "✓ $skill installed"
   else

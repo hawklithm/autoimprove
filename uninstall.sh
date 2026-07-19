@@ -33,7 +33,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # Remove Skills
 echo "Removing Skills..."
 skills_dir="$HOME/.claude/skills"
-for skill in autoimprove-status autoimprove-summarize autoimprove-rules autoimprove-lessons; do
+for skill in autoimprove-status autoimprove-rules autoimprove-lessons; do
     if [ -d "$skills_dir/$skill" ]; then
         rm -rf "$skills_dir/$skill"
         echo "  ✅ Removed $skill"

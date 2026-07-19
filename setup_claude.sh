@@ -24,7 +24,7 @@ echo -e "${BLUE}--- Claude Code: 安装 Skills ---${NC}"
 SKILLS_INSTALL_DIR="$CLAUDE_DIR/skills"
 mkdir -p "$SKILLS_INSTALL_DIR"
 
-for skill in autoimprove-status autoimprove-summarize autoimprove-rules autoimprove-lessons autoimprove-check; do
+for skill in autoimprove-status autoimprove-rules autoimprove-lessons autoimprove-check; do
   skill_src="$SKILLS_DIR_SRC/src/$skill"
   skill_install="$SKILLS_INSTALL_DIR/$skill"
 

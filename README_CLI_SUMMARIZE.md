@@ -110,16 +110,18 @@ crontab -e
 0 2 * * * cd /Users/adazhao/workspace/autoimprove && ./summarize.sh >> /tmp/autoimprove.log 2>&1
 ```
 
-## 与 Claude Code 的区别
+## 唯一方式
 
-| 特性 | Claude Code (`/autoimprove-summarize`) | CLI (`./summarize.sh`) |
-|------|----------------------------------------|------------------------|
-| 运行方式 | 在 Claude Code 交互式会话中 | 命令行独立运行 |
-| 适用场景 | 临时分析、探索性使用 | 自动化、批量处理、定时任务 |
-| 交互性 | 可以与 Claude 对话调整参数 | 一次性执行 |
-| 日志输出 | 在会话中显示 | 输出到终端或日志文件 |
+> ⚠️ `autoimprove-summarize` 技能已移除。现在只能通过 CLI 脚本执行 summarize。
 
-两种方式**完全兼容**，使用同一套底层代码，生成的规则会自动合并。
+| 特性 | CLI (`./summarize.sh`) |
+|------|------------------------|
+| 运行方式 | 命令行独立运行 |
+| 适用场景 | 自动化、批量处理、定时任务 |
+| 交互性 | 一次性执行 |
+| 日志输出 | 输出到终端或日志文件 |
+
+这是执行 summarize 的唯一方式。
 
 ## 输出示例
 

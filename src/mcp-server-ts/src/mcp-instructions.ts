@@ -28,7 +28,7 @@ Instead of inferring conventions by reading existing code or guessing patterns, 
 - **Implement/add X** → query the feature's tech and domain.
 - **Fix/debug X** → query the error, component, and stack before investigating.
 - **Refactor X** → query established architecture and style patterns.
-- User corrects you → query the pattern, then run \`/autoimprove-summarize\` after the session to capture a new rule.
+- User corrects you → query the pattern, then run \`npm run summarize\` (or \`tsx summarize.ts\`) in the autoimprove repo after the session to capture a new rule.
 
 Example: \`search_knowledge({scene_json: '{"tech":["react"],"functional":["auth"]}', keywords: "token,validation"})\`.
 
@@ -49,12 +49,12 @@ Apply matched rules and cite their IDs (for example, “Following RULE-005…”
 
 Quality improves when:
 1. You call \`search_knowledge\` consistently → builds usage data
-2. User corrects you → run \`/autoimprove-summarize\` to capture new patterns
+2. User corrects you → run \`npm run summarize\` in the autoimprove repo to capture new patterns
 3. Rules get validated through repeated use → confidence increases
 
 ## Limitations
 
-- Index lags edits by one session (run \`/autoimprove-summarize\` to capture new patterns)
+- Index lags edits by one session (run \`npm run summarize\` in the autoimprove repo to capture new patterns)
 - Scene detection is heuristic (file extensions + user message keywords)
 - Storage is user-level (~/.autoimprove/), not project-specific
 `;
@@ -79,7 +79,7 @@ Or manually: \`claude mcp install src/mcp-server-ts\`
 
 Once initialized, AutoImprove will:
 1. Learn patterns when you correct Claude's code
-2. Generate reusable rules via \`/autoimprove-summarize\`
+2. Generate reusable rules via \`npm run summarize\` in the autoimprove repo
 3. Auto-load high-priority rules in future sessions
 
 Work normally with built-in tools for now. Mention the setup command if the user asks about AutoImprove.
@@ -88,7 +88,7 @@ Work normally with built-in tools for now. Mention the setup command if the user
 /** Instructions for initialized storage that has not learned rules yet. */
 export const SERVER_INSTRUCTIONS_WARMING_UP = `# AutoImprove — warming up
 
-AutoImprove storage is ready but no rules have been learned yet. Call \`search_knowledge\` proactively before any task — analysis, file operations, or code changes — even when no conventions seem to apply; it will confirm whether prior guidance exists without failing. After the user corrects you, run \`/autoimprove-summarize\` to capture patterns so future sessions can surface them here.
+AutoImprove storage is ready but no rules have been learned yet. Call \`search_knowledge\` proactively before any task — analysis, file operations, or code changes — even when no conventions seem to apply; it will confirm whether prior guidance exists without failing. After the user corrects you, run \`npm run summarize\` in the autoimprove repo to capture patterns so future sessions can surface them here.
 `;
 
 /**

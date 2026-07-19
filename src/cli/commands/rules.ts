@@ -1,6 +1,7 @@
 import { existsSync, readFileSync } from 'fs';
 import { join } from 'path';
 import { homedir } from 'os';
+import { cliLogger } from '../utils/logger.js';
 
 interface RulesOptions {
   category?: string;

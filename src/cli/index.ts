@@ -1,10 +1,10 @@
 #!/usr/bin/env node
 import { Command } from 'commander';
-import { setup } from './commands/setup';
-import { uninstall } from './commands/uninstall';
-import { status } from './commands/status';
-import { summarize } from './commands/summarize';
-import { rules } from './commands/rules';
+import { setup } from './commands/setup.js';
+import { uninstall } from './commands/uninstall.js';
+import { status } from './commands/status.js';
+import { summarize } from './commands/summarize.js';
+import { rules } from './commands/rules.js';
 
 const program = new Command();
 

@@ -83,12 +83,12 @@ crontab -e
 ✅ `npm run summarize:dry-run` - 正常
 ✅ Shell 脚本和 NPM scripts 都可以工作
 
-## 与 `/autoimprove-summarize` 的区别
+## 注意事项
 
-- **CLI 脚本**: 独立运行，适合自动化和定时任务
-- **Skill 命令**: 在 Claude Code 中运行，适合临时分析
+> ⚠️ `autoimprove-summarize` 技能已移除。现在只能通过 CLI 脚本执行 summarize。
 
-两者完全兼容，使用同一套代码。
+- **CLI 脚本** (`summarize.ts`): 独立运行，适合自动化和定时任务
+- 这是执行 summarize 的唯一方式
 
 ---
 

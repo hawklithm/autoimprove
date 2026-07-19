@@ -48,7 +48,7 @@ async function run() {
       console.log("\nStorage will be initialized automatically.");
       console.log("\nNext steps:");
       console.log("1. Complete a coding session with Claude Code");
-      console.log("2. Run `/autoimprove-summarize` to analyze the session");
+      console.log("2. Run `npm run summarize` (or `tsx summarize.ts`) in the autoimprove repo to analyze the session");
       console.log("3. Review and activate generated rules with `/autoimprove-rules`");
       return;
     }
@@ -60,7 +60,7 @@ async function run() {
     console.log(`Storage initialized: ${storage.initialized ? "Yes" : "No"}`);
 
     if (storage.rules_count === 0) {
-      console.log("\n💡 No rules yet. Run `/autoimprove-summarize` after a session to start learning.");
+      console.log("\n💡 No rules yet. Run `npm run summarize` in the autoimprove repo after a session to start learning.");
     } else {
       // Show recent activity
       console.log("\n📈 Recent Activity:");

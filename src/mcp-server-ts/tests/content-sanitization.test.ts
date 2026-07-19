@@ -22,7 +22,7 @@ describe('JSONLParser Content Sanitization', () => {
           type: 'user',
           message: {
             role: 'user',
-            content: 'Base directory for this skill: /Users/adazhao/.claude/skills/autoimprove-summarize\n\n# AutoImprove Summarize\n\nActual user content here'
+            content: 'Base directory for this skill: /Users/adazhao/.claude/skillsnpm run summarize\n\n# AutoImprove Summarize\n\nActual user content here'
           },
           timestamp: '2026-07-05T10:00:00Z'
         }
@@ -67,7 +67,7 @@ describe('JSONLParser Content Sanitization', () => {
           type: 'user',
           message: {
             role: 'user',
-            content: '<command-message>autoimprove-summarize</command-message>\nActual content'
+            content: '<command-message>autoimprove-rules</command-message>\nActual content'
           },
           timestamp: '2026-07-05T10:00:00Z'
         }
@@ -87,7 +87,7 @@ describe('JSONLParser Content Sanitization', () => {
           type: 'user',
           message: {
             role: 'user',
-            content: '<command-name>/autoimprove-summarize</command-name>\nActual content'
+            content: '<command-name>npm run summarize</command-name>\nActual content'
           },
           timestamp: '2026-07-05T10:00:00Z'
         }
@@ -129,7 +129,7 @@ describe('JSONLParser Content Sanitization', () => {
           type: 'user',
           message: {
             role: 'user',
-            content: `Base directory for this skill: /Users/adazhao/.claude/skills/autoimprove-summarize
+            content: `Base directory for this skill: /Users/adazhao/.claude/skills/autoimprove-rules
 
 # AutoImprove Summarize
 
@@ -139,7 +139,7 @@ Analyze Claude Code session files and extract reusable patterns:
 
 **Single session (most recent):**
 \`\`\`bash
-/autoimprove-summarize
+npm run summarize
 \`\`\`
 
 User wants to analyze with --rebuild flag`

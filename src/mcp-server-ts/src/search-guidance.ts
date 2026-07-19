@@ -8,11 +8,14 @@ Examples:
 - search_knowledge({keywords: "auth,token,validation", scene_json: '{"tech":["react"],"functional":["auth"]}'})
 - search_knowledge({keywords: "timeout,error", scene_json: '{"tech":["python"],"functional":["api","debug"]}'})
 - search_knowledge({keywords: "migration,transaction", scene_json: '{"tech":["typescript"],"functional":["database"]}'})
+- search_knowledge({}) — list all rules (omit keywords to browse, do NOT pass empty string)
 
-Search by scene, keywords, or rule ID with scope-based filtering. Returns matched rules' IDs + content — cite the rule ID when applying (e.g. "Following RULE-005…"). Auto-records "used" feedback for matched rules unless skip_feedback=true.`;
+Search by scene, keywords, or rule ID with scope-based filtering. Returns matched rules' IDs + content — cite the rule ID when applying (e.g. "Following RULE-005…"). Auto-records "used" feedback for matched rules unless skip_feedback=true.
+
+⚠️  keywords parameter: must not be empty or whitespace-only. If you want to list all rules, omit keywords entirely (pass no keywords parameter), not an empty string.`;
 
 export function emptyKnowledgeBaseMessage(): string {
-  return "No rules in the knowledge base yet. After this coding session, run `/autoimprove-summarize` to capture patterns from your corrections — future sessions will then surface them here.";
+  return "No rules in the knowledge base yet. After this coding session, run `npm run summarize` (or `tsx summarize.ts`) in the autoimprove repo to capture patterns from your corrections — future sessions will then surface them here.";
 }
 
 export function noMatchMessage(similarRuleIds: string[] = []): string {

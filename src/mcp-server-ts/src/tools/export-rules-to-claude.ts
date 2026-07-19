@@ -246,7 +246,7 @@ export class ClaudeIndexExporter {
     lines.push("");
     lines.push("💡 **Scene Matching**: Rules are automatically matched based on file extensions, import statements, and keywords.");
     lines.push("📊 **Full Rule Library**: Run `/autoimprove-rules` to view all rules.");
-    lines.push("🔧 **Rule Management**: If a rule is outdated or inapplicable, inform the user and suggest running `/autoimprove-summarize` to re-learn.");
+    lines.push("🔧 **Rule Management**: If a rule is outdated or inapplicable, inform the user and suggest running `npm run summarize` in the autoimprove repo to re-learn.");
     lines.push("");
 
     return lines.join("\n");

@@ -2,6 +2,7 @@ import { spawn } from 'child_process';
 import { existsSync, mkdirSync, writeFileSync, readFileSync, copyFileSync } from 'fs';
 import { join } from 'path';
 import { homedir } from 'os';
+import { cliLogger } from '../utils/logger.js';
 
 interface SetupOptions {
   force?: boolean;
@@ -228,7 +229,7 @@ async function initializeStorage(storageDir: string, force?: boolean): Promise<v
 `;
   writeFileSync(join(storageDir, 'rules/claude-index.md'), claudeIndex);
 
-  cliLogger.print('✓ Storage initialized at:', storageDir);
+  cliLogger.print(`✓ Storage initialized at: ${storageDir}`);
 }
 
 async function configureMCPServer(mcpServerPath: string, force?: boolean): Promise<void> {
@@ -265,8 +266,7 @@ async function installSkills(packageRoot: string, claudeDir: string): Promise<vo
     'autoimprove-status',
     'autoimprove-rules',
     'autoimprove-lessons',
-    'autoimprove-summarize',
-    'autoimprove-check'
+        'autoimprove-check'
   ];
 
   for (const skill of skills) {

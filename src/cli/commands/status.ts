@@ -87,7 +87,7 @@ export async function status() {
     'autoimprove-status',
     'autoimprove-rules',
     'autoimprove-lessons',
-    'autoimprove-summarize'
+    
   ];
 
   let installedCount = 0;

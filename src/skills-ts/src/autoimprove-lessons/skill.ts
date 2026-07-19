@@ -65,7 +65,7 @@ async function run() {
 
     if (!scenesResult.success || scenesResult.scenes.length === 0) {
       console.log("No known scenes found. No rules have been generated yet.\n");
-      console.log("💡 Run `/autoimprove-summarize` in sessions to build up rules");
+      console.log("💡 Run `npm run summarize` in the autoimprove repo to build up rules");
       return;
     }
 
@@ -130,7 +130,7 @@ async function run() {
     if (matchedScenes.length === 0) {
       console.log(`No lessons found for scene: ${primaryTech}-${primaryFunc}\n`);
       console.log("💡 This means no rules match your current tech stack and domain");
-      console.log("Run `/autoimprove-summarize` in sessions with this tech stack to build up rules");
+      console.log("Run `npm run summarize` in the autoimprove repo with this tech stack to build up rules");
       return;
     }
 
@@ -145,7 +145,7 @@ async function run() {
       if (err.message.includes("No lessons found")) {
         console.log(`No lessons found for scene: ${sceneQuery}\n`);
         console.log("💡 This means no rules match your current tech stack and domain");
-        console.log("Run `/autoimprove-summarize` in sessions with this tech stack to build up rules");
+        console.log("Run `npm run summarize` in the autoimprove repo with this tech stack to build up rules");
       } else {
         throw err;
       }

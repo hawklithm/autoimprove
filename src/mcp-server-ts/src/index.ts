@@ -314,7 +314,8 @@ All fields are arrays. Null/undefined/non-array values are normalized to []. Sce
 - "async,promise,error-handling"
 - "sql,injection,sanitize"
 
-Keywords are matched against rule descriptions, titles, and content. Use specific technical terms for better results.`,
+Keywords are matched against rule descriptions, titles, and content. Use specific technical terms for better results.
+⚠️  Must not be empty or whitespace-only. If you have no keywords, omit this parameter entirely to list all rules.`,
             },
             rule_id: {
               type: "string",
@@ -1268,7 +1269,24 @@ async function handleGenerateRules(args: any) {
     keywords: p.keywords || [],
   }));
 
-  const scene = sceneJson ? JSON.parse(sceneJson) : undefined;
+  let scene: Scene | undefined;
+  if (sceneJson) {
+    try {
+      scene = JSON.parse(sceneJson);
+    } catch (error: any) {
+      return {
+        content: [
+          {
+            type: "text",
+            text: JSON.stringify({
+              success: false,
+              error: `Invalid scene_json: ${error.message}. Must be a valid JSON string like {"tech":["react"],"functional":["auth"]}.`,
+            }),
+          },
+        ],
+      };
+    }
+  }
 
   const nextIdNum = parseInt(indexManager.getNextRuleId().split("-")[1], 10);
 
@@ -1510,7 +1528,28 @@ async function handleSearchKnowledge(args: any) {
   const organizationId = args.organization_id as string | undefined;
   const scopesStr = args.scopes as string | undefined;
 
-  // 🆕 Log search request
+  const startTime = Date.now();
+
+  // 🆕 Validate keywords: reject empty string or whitespace-only values
+  if (keywords !== undefined && keywords !== null && keywords.trim() === "") {
+    logger.warn("search_knowledge", "Rejected empty keywords parameter", {
+      scene_json: sceneJson ? (sceneJson.length > 200 ? sceneJson.substring(0, 200) + "..." : sceneJson) : undefined,
+      rule_id: ruleId || undefined,
+    });
+    return {
+      content: [
+        {
+          type: "text",
+          text: JSON.stringify({
+            success: false,
+            error: "keywords parameter cannot be empty or whitespace-only. Provide at least one meaningful keyword, or omit the parameter entirely.",
+          }),
+        },
+      ],
+    };
+  }
+
+  // 🆕 Log full input parameters
   const searchType = ruleId
     ? "by_id"
     : sceneJson
@@ -1520,11 +1559,15 @@ async function handleSearchKnowledge(args: any) {
         : "list_all";
   logger.info("search_knowledge", "Search request received", {
     search_type: searchType,
-    has_scene: !!sceneJson,
-    has_keywords: !!keywords,
-    has_rule_id: !!ruleId,
-    skip_feedback: skipFeedback,
-    has_scope_filter: !!(scopesStr || currentProject || organizationId),
+    raw_args: {
+      scene_json: sceneJson ? (sceneJson.length > 200 ? sceneJson.substring(0, 200) + "..." : sceneJson) : undefined,
+      keywords: keywords || undefined,
+      rule_id: ruleId || undefined,
+      skip_feedback: skipFeedback,
+      current_project: currentProject || undefined,
+      organization_id: organizationId || undefined,
+      scopes: scopesStr || undefined,
+    },
   });
 
   // Search by ID (returns summary and guide to get full details)
@@ -1541,6 +1584,10 @@ async function handleSearchKnowledge(args: any) {
         priority: rule.priority,
         confidence: rule.confidence,
         has_content: !!content,
+        content_length: content?.content?.length || 0,
+        description_length: content?.description?.length || 0,
+        examples_count: content?.examples?.length || 0,
+        duration_ms: Date.now() - startTime,
       });
 
       // 🆕 Auto-record feedback when rule is queried
@@ -1579,7 +1626,11 @@ async function handleSearchKnowledge(args: any) {
       };
     } else {
       // 🆕 Log failed ID search
-      logger.warn("search_knowledge", "Rule not found by ID", { rule_id: ruleId });
+      logger.warn("search_knowledge", "Rule not found by ID", {
+        rule_id: ruleId,
+        total_rules_in_index: indexManager.listRules().length,
+        duration_ms: Date.now() - startTime,
+      });
 
       return {
         content: [
@@ -1604,7 +1655,10 @@ async function handleSearchKnowledge(args: any) {
     if (kwList && kwList.length > 0) {
       logger.info("search_knowledge", "Searching by keywords only", {
         keywords: kwList,
+        keyword_count: kwList.length,
         scope_filter: scopeFilter,
+        current_project: currentProject,
+        organization_id: organizationId,
       });
 
       const matches = matcher.matchRules(
@@ -1621,7 +1675,10 @@ async function handleSearchKnowledge(args: any) {
           id: m.rule.id,
           relevance: m.relevance_score.toFixed(3),
           priority: m.rule.priority,
+          confidence: m.rule.confidence,
         })),
+        total_rules_in_index: indexManager.listRules().length,
+        duration_ms: Date.now() - startTime,
       });
 
       // Auto-record feedback for matched rules
@@ -1685,7 +1742,26 @@ async function handleSearchKnowledge(args: any) {
 
   // Search by scene
   if (sceneJson) {
-    const parsedScene = JSON.parse(sceneJson);
+    let parsedScene: any;
+    try {
+      parsedScene = JSON.parse(sceneJson);
+    } catch (error: any) {
+      logger.warn("search_knowledge", "Invalid scene_json parameter", {
+        scene_json: sceneJson.length > 200 ? sceneJson.substring(0, 200) + "..." : sceneJson,
+        error: error.message,
+      });
+      return {
+        content: [
+          {
+            type: "text",
+            text: JSON.stringify({
+              success: false,
+              error: `Invalid scene_json: ${error.message}. Must be a valid JSON string like {"tech":["react"],"functional":["auth"]}.`,
+            }),
+          },
+        ],
+      };
+    }
     const scene = createScene(parsedScene); // Normalize to ensure all fields exist
     const kwList = parseCommaSeparated(keywords);
 
@@ -1724,8 +1800,10 @@ async function handleSearchKnowledge(args: any) {
         all_scenes: sceneWeights.map(sw => ({
           tech: sw.scene.tech.join(","),
           functional: sw.scene.functional.join(","),
+          business: sw.scene.business.join(","),
           weight: sw.weight.toFixed(2),
         })),
+        scope_filter: scopeFilter,
       });
 
       matches = matcher.fastMatchMultiScene(
@@ -1746,7 +1824,11 @@ async function handleSearchKnowledge(args: any) {
         functional: funcStr,
         business: bizStr,
         keywords: kwList,
+        keyword_count: kwList?.length || 0,
         scope_filter: scopeFilter,
+        current_project: currentProject,
+        organization_id: organizationId,
+        raw_scene_json: sceneJson ? (sceneJson.length > 500 ? sceneJson.substring(0, 500) + "..." : sceneJson) : undefined,
       });
 
       matches = matcher.matchRules(scene, kwList, undefined, undefined, scopeFilter);
@@ -1766,7 +1848,11 @@ async function handleSearchKnowledge(args: any) {
         id: m.rule.id,
         relevance: m.relevance_score.toFixed(3),
         priority: m.rule.priority,
+        confidence: m.rule.confidence,
+        match_reason: m.match_reason,
       })),
+      total_rules_in_index: indexManager.listRules().length,
+      duration_ms: Date.now() - startTime,
     });
 
     // 🆕 Auto-record feedback for matched rules
@@ -1787,11 +1873,18 @@ async function handleSearchKnowledge(args: any) {
         scene: sceneContext,
         keywords: kwList,
         scope_filter: scopeFilter,
+        rule_ids: matches.map(m => m.rule.id),
+        duration_ms: Date.now() - startTime,
       });
     }
 
     // Format results as markdown (summary only)
     if (matches.length === 0) {
+      logger.info("search_knowledge", "Scene search returned no matches", {
+        total_rules_in_index: indexManager.listRules().length,
+        duration_ms: Date.now() - startTime,
+      });
+
       return {
         content: [
           {
@@ -1854,6 +1947,13 @@ async function handleSearchKnowledge(args: any) {
     avg_confidence: rules.length > 0
       ? (rules.reduce((sum, r) => sum + r.confidence, 0) / rules.length).toFixed(3)
       : 0,
+    top_5_rules: rules.slice(0, 5).map(r => ({
+      id: r.id,
+      priority: r.priority,
+      confidence: r.confidence,
+      type: r.type,
+    })),
+    duration_ms: Date.now() - startTime,
   });
 
   // Format as markdown
@@ -1979,7 +2079,37 @@ async function handleUpdateRules(args: any) {
   const ruleId = args.rule_id as string;
   const updatesJson = args.updates_json as string;
 
-  const updates = JSON.parse(updatesJson);
+  let updates: any;
+  try {
+    updates = JSON.parse(updatesJson);
+  } catch (error: any) {
+    return {
+      content: [
+        {
+          type: "text",
+          text: JSON.stringify({
+            success: false,
+            error: `Invalid updates_json: ${error.message}. Must be a valid JSON string.`,
+          }),
+        },
+      ],
+    };
+  }
+
+  // Validate that updates object is not empty
+  if (!updates || typeof updates !== "object" || Array.isArray(updates) || Object.keys(updates).length === 0) {
+    return {
+      content: [
+        {
+          type: "text",
+          text: JSON.stringify({
+            success: false,
+            error: "updates_json must be a non-empty JSON object",
+          }),
+        },
+      ],
+    };
+  }
 
   // Update index
   if (["priority", "confidence", "scenes", "keywords"].some((k) => k in updates)) {
@@ -2182,47 +2312,77 @@ async function handleCacheStats() {
 }
 
 async function handleCompactCacheStats() {
-  const stats = analyzer.getCompactCacheStats();
+  try {
+    const stats = analyzer.getCompactCacheStats();
 
-  return {
-    content: [
-      {
-        type: "text",
-        text: JSON.stringify({
-          success: true,
-          compact_cache: stats,
-          summary: {
-            total_requests: stats.total_requests,
-            hit_rate: `${(stats.hit_rate * 100).toFixed(1)}%`,
-            time_saved: `${(stats.time_saved_ms / 1000).toFixed(2)}s`,
-            bytes_saved: formatBytes(stats.bytes_saved),
-          }
-        }),
-      },
-    ],
-  };
+    return {
+      content: [
+        {
+          type: "text",
+          text: JSON.stringify({
+            success: true,
+            compact_cache: stats,
+            summary: {
+              total_requests: stats.total_requests,
+              hit_rate: `${(stats.hit_rate * 100).toFixed(1)}%`,
+              time_saved: `${(stats.time_saved_ms / 1000).toFixed(2)}s`,
+              bytes_saved: formatBytes(stats.bytes_saved),
+            }
+          }),
+        },
+      ],
+    };
+  } catch (error: any) {
+    logger.error("compact-cache", "Failed to get compact cache stats", error);
+    return {
+      content: [
+        {
+          type: "text",
+          text: JSON.stringify({
+            success: false,
+            error: `Failed to get compact cache stats: ${error.message}`,
+          }),
+        },
+      ],
+    };
+  }
 }
 
 async function handleClearCompactCache(args: any) {
-  const sessionId = args.seon_id as string | undefined;
+  const sessionId = args.session_id as string | undefined;
 
-  const result = analyzer.clearCompactCache(sessionId);
+  try {
+    const result = analyzer.clearCompactCache(sessionId);
 
-  return {
-    content: [
-      {
-        type: "text",
-        text: JSON.stringify({
-          success: result.errors.length === 0,
-          cleared: result.cleared,
-          errors: result.errors,
-          message: sessionId
-            ? `Cleared compact cache for session ${sessionId}`
-            : `Cleared ${result.cleared} compact cache file(s)`,
-        }),
-      },
-    ],
-  };
+    return {
+      content: [
+        {
+          type: "text",
+          text: JSON.stringify({
+            success: result.errors.length === 0,
+            cleared: result.cleared,
+            errors: result.errors,
+            message: sessionId
+              ? `Cleared compact cache for session ${sessionId}`
+              : `Cleared ${result.cleared} compact cache file(s)`,
+          }),
+        },
+      ],
+    };
+  } catch (error: any) {
+    logger.error("compact-cache", "Failed to clear compact cache", error);
+    return {
+      content: [
+        {
+          type: "text",
+          text: JSON.stringify({
+            success: false,
+            error: `Failed to clear compact cache: ${error.message}`,
+          }),
+        },
+      ],
+    };
+  }
 }
 
 function formatBytes(bytes: number): string {

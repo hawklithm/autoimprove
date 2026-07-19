@@ -7,7 +7,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 AutoImprove is a Claude Code MCP server that learns from user corrections and generates reusable coding rules. It consists of:
 
 1. **MCP Server** (`src/mcp-server-ts`): TypeScript-based server with pattern detection and rule generation
-2. **Skills** (`src/skills-ts`): User-facing slash commands (`/autoimprove-*`)
+2. **Skills** (`src/skills-ts`): User-facing slash commands (`/autoimprove-status`, `/autoimprove-rules`, `/autoimprove-lessons`, `/autoimprove-check`)
 3. **Storage System** (`~/.autoimprove/`): User-level rule database with indexed search
 
 ## Common Commands
@@ -19,6 +19,9 @@ AutoImprove is a Claude Code MCP server that learns from user corrections and ge
 # Manual build
 cd src/mcp-server-ts && npm install && npm run build
 cd src/skills-ts && npm install && npm run build
+
+# Run summarize (script-based)
+npm run summarize
 ```
 
 ### Development
@@ -191,7 +194,7 @@ claude mcp restart autoimprove-core
 - `src/mcp-server-ts/src/core/hybrid-rule-generator.ts`: 4-phase rule generation orchestrator
 - `src/mcp-server-ts/src/core/llm-rule-generator.ts`: Token-optimized LLM prompts
 - `src/mcp-server-ts/src/storage/rule-index.ts`: Indexed rule storage
-- `src/skills-ts/src/autoimprove-summarize/skill.ts`: Primary workflow (analyze → generate → export)
+- `summarize.ts`: CLI script for batch analysis (analyze → generate → export), run via `npm run summarize` or `tsx summarize.ts`
 - `setup.sh`: Automated installation (updates `~/.claude/CLAUDE.md` with guidance)
 - `docs/COMPLETE_SUMMARY.md`: Comprehensive feature documentation
 - `docs/HYBRID_RULE_GENERATION.md`: 4-phase generation implementation

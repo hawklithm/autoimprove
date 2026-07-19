@@ -113,7 +113,7 @@ elif [ "$JSON_EXISTS" = true ]; then
   echo ""
   echo "Migration Options:"
   echo "  1. Automatic: Run any MCP tool that triggers analysis"
-  echo "     Example: /autoimprove-summarize"
+  echo "     Example: npm run summarize"
   echo ""
   echo "  2. Manual: Call triggerMigration() via MCP"
   echo "     The RuleIndexManager will detect JSON backend and migrate"

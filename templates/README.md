@@ -22,7 +22,7 @@ This file stores metadata for all rules in the knowledge base.
 
 Skills are stored in `src/skills-ts/src/*/SKILL.md`:
 - `autoimprove-status/SKILL.md` - System health check skill
-- `autoimprove-summarize/SKILL.md` - Session analysis skill
+- (removed) `autoimprove-summarize` - Session analysis skill (replaced by CLI script `summarize.ts`)
 - `autoimprove-rules/SKILL.md` - Rule management skill
 - `autoimprove-lessons/SKILL.md` - Lessons viewer skill
 

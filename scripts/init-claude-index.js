@@ -30,7 +30,12 @@ function initClaudeIndex() {
 目前还没有生成规则。请运行以下命令开始学习：
 
 \`\`\`bash
-/autoimprove-summarize
+npm run summarize
+\`\`\`
+
+或在 autoimprove 仓库目录下：
+\`\`\`bash
+tsx summarize.ts
 \`\`\`
 
 AutoImprove 会分析你的 Claude Code 会话记录，识别编码模式，并自动生成规则。
@@ -39,7 +44,7 @@ AutoImprove 会分析你的 Claude Code 会话记录，识别编码模式，并�
 
 💡 **动态匹配**: Claude 会根据你当前的代码场景自动应用相关规则。
 📊 **完整规则库**: 运行 \`/autoimprove-rules\` 查看全部规则。
-🔄 **自动更新**: 每次运行 \`/autoimprove-summarize\` 后，此文件会自动更新。
+🔄 **自动更新**: 每次运行 \`npm run summarize\` 后，此文件会自动更新。
 `;
 
   writeFileSync(CLAUDE_INDEX_PATH, content, "utf-8");

@@ -49,7 +49,6 @@ export async function uninstall() {
       'autoimprove-status',
       'autoimprove-rules',
       'autoimprove-lessons',
-      'autoimprove-summarize',
     ];
 
     for (const skill of skillNames) {

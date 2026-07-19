@@ -1,7 +1,8 @@
-import { existsSync, readFileSync } from 'fs';
-import { join } from 'path';
+import { existsSync } from 'fs';
+import { join, dirname } from 'path';
 import { homedir } from 'os';
 import { spawn } from 'child_process';
+import { fileURLToPath } from 'url';
 import { cliLogger } from '../utils/logger.js';
 
 interface SummarizeOptions {
@@ -26,34 +27,8 @@ export async function summarize(options: SummarizeOptions) {
     process.exit(1);
   }
 
-  // Build arguments for the skill invocation
-  const args: string[] = [];
-
-  if (options.all) {
-    args.push('--all');
-  }
-
-  if (options.enhance) {
-    args.push('--enhance');
-  }
-
-  if (options.force) {
-    args.push('--force');
-  }
-
-  if (options.minConfidence !== undefined) {
-    args.push('--min-confidence', options.minConfidence.toString());
-  }
-
   cliLogger.print('Starting session analysis...');
   cliLogger.print('');
-
-  // Check if we have Claude Code available
-  if (!await hasCommand('claude')) {
-    cliLogger.error('❌ Claude Code CLI not found');
-    cliLogger.error('   This command requires Claude Code to be installed');
-    process.exit(1);
-  }
 
   cliLogger.print('Options:');
   cliLogger.print(`  Analyze all sessions: ${options.all ? 'Yes' : 'No (unanalyzed only)'}`);
@@ -64,19 +39,47 @@ export async function summarize(options: SummarizeOptions) {
   }
   cliLogger.print('');
 
-  cliLogger.print('This will invoke the AutoImprove skill within Claude Code.');
-  cliLogger.print('Please use the following command in Claude Code instead:');
+  // Invoke the summarize script directly
+  const rootDir = getPackageRoot();
+  const scriptPath = join(rootDir, 'summarize.ts');
+  const summarizeArgs = ['tsx', scriptPath];
+
+  if (options.force) {
+    summarizeArgs.push('--force');
+  }
+
+  if (options.minConfidence !== undefined) {
+    summarizeArgs.push('--min-confidence', options.minConfidence.toString());
+  }
+
+  cliLogger.print('Running summarize script...');
   cliLogger.print('');
-  cliLogger.print(`  /autoimprove-summarize${args.length > 0 ? ' ' + args.join(' ') : ''}`);
-  cliLogger.print('');
-  cliLogger.print('This ensures the analysis runs within the proper Claude Code context');
-  cliLogger.print('where it has access to session transcripts and can generate rules.');
-  cliLogger.print('');
+
+  const proc = spawn('npx', summarizeArgs, {
+    stdio: 'inherit',
+    env: { ...process.env },
+  });
+
+  proc.on('close', (code) => {
+    if (code !== 0) {
+      cliLogger.error(`❌ Summarize failed with exit code ${code}`);
+      process.exit(code || 1);
+    }
+  });
 }
 
-async function hasCommand(command: string): Promise<boolean> {
-  return new Promise((resolve) => {
-    const proc = spawn('command', ['-v', command], { shell: true });
-    proc.on('close', (code) => resolve(code === 0));
-  });
+/**
+ * Get the package root directory by searching up from the current file.
+ */
+function getPackageRoot(): string {
+  const __dirname = dirname(fileURLToPath(import.meta.url));
+  let current = __dirname;
+  while (current !== '/') {
+    if (existsSync(join(current, 'package.json'))) {
+      return current;
+    }
+    current = join(current, '..');
+  }
+  // Fallback to CWD if not found (e.g., running from source)
+  return process.cwd();
 }

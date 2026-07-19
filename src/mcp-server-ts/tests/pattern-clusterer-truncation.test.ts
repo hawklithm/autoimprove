@@ -209,7 +209,7 @@ describe('PatternClusterer Intelligent Truncation', () => {
       const content: LabeledContent = {
         message_id: 'msg-8',
         session_id: 'test-session',
-        content: '**Single session (most recent):**\n```bash\n/autoimprove-summarize\n```',
+        content: '**Single session (most recent):**\n```bash\nnpm run summarize\n```',
         pattern_type: PatternType.REPEATED_CORRECTION,
         confidence: 0.8,
         matched_signals: '[]',

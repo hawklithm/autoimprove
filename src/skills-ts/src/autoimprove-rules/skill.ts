@@ -37,7 +37,7 @@ async function run() {
 
     if (matches.length === 0) {
       console.log("No rules found yet.");
-      console.log("\n💡 Run `/autoimprove-summarize` after a coding session to generate rules");
+      console.log("\n💡 Run `npm run summarize` (or `tsx summarize.ts`) in the autoimprove repo to generate rules");
       return;
     }
 

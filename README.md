@@ -158,8 +158,8 @@ After running `./setup.sh` or `./setup.sh claude`:
 # Check system status and statistics
 /autoimprove-status
 
-# Analyze sessions and generate rules (supports single/batch/consolidation modes)
-/autoimprove-summarize
+# Analyze sessions and generate rules (via CLI script)
+npm run summarize
 
 # Manage and review generated rules
 /autoimprove-rules
@@ -272,9 +272,9 @@ AutoImprove uses `~/.autoimprove/` for all persistent data:
 ├── CLAUDE.md                   # Global instructions (AutoImprove guidance injected here)
 ├── skills/
 │   ├── autoimprove-status/
-│   ├── autoimprove-summarize/
 │   ├── autoimprove-rules/
-│   └── autoimprove-lessons/
+│   ├── autoimprove-lessons/
+│   └── autoimprove-check/
 └── settings.json               # MCP server config (managed via `claude mcp` CLI)
 ```
 
@@ -425,7 +425,6 @@ autoimprove/
 │   ├── skills-ts/             # Platform Skills (UI layer)
 │   │   └── src/
 │   │       ├── autoimprove-status/
-│   │       ├── autoimprove-summarize/
 │   │       ├── autoimprove-rules/
 │   │       ├── autoimprove-lessons/
 │   │       ├── autoimprove-check/
