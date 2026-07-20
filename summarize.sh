@@ -10,6 +10,12 @@ set -e
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR"
 
+# Ensure root dependencies are installed
+if [ ! -d "node_modules" ]; then
+    echo "📦 Installing root dependencies..."
+    npm install
+fi
+
 # Ensure CLI is built
 if [ ! -f "lib/cli/index.js" ]; then
     echo "📦 Building CLI..."
