@@ -167,6 +167,23 @@ else
   echo -e "${GREEN}✓${NC} better-sqlite3 依赖已验证"
 fi
 
+# Native Node.js modules are ABI-specific. npm list only verifies the package
+# metadata, so explicitly load and rebuild better-sqlite3 when the existing
+# binary was compiled by another Node.js version.
+cd "$MCP_SERVER_DIR"
+if ! node -e "require('better-sqlite3'); console.log('better-sqlite3 native module OK (ABI ' + process.versions.modules + ')')"; then
+  echo "检测到 better-sqlite3 与当前 Node.js ABI 不匹配，正在重新编译..."
+  npm rebuild better-sqlite3
+fi
+
+if ! node -e "require('better-sqlite3')"; then
+  echo -e "${RED}❌ better-sqlite3 无法加载${NC}"
+  echo "Node.js: $(node -v), ABI: $(node -p 'process.versions.modules')"
+  exit 1
+fi
+echo -e "${GREEN}✓${NC} better-sqlite3 native module 与当前 Node.js ABI 匹配"
+cd "$SCRIPT_DIR"
+
 # 创建默认 config（如果不存在）
 if [ ! -f "$AUTOIMPROVE_DIR/config.json" ]; then
   if [ -f "$TEMPLATES_DIR/config.json" ]; then

@@ -22,11 +22,31 @@ if [ ! -f "lib/cli/index.js" ]; then
     npm run build:cli
 fi
 
-# Ensure MCP server is built (needed at runtime by summarize)
-if [ ! -d "src/mcp-server-ts/dist" ]; then
-    echo "📦 Building MCP server..."
-    cd src/mcp-server-ts
+# Ensure MCP server dependencies exist and native modules match this Node.js.
+MCP_SERVER_DIR="$SCRIPT_DIR/src/mcp-server-ts"
+if [ ! -d "$MCP_SERVER_DIR/node_modules" ]; then
+    echo "📦 Installing MCP server dependencies..."
+    cd "$MCP_SERVER_DIR"
     npm install --silent
+    cd "$SCRIPT_DIR"
+fi
+
+if ! (cd "$MCP_SERVER_DIR" && node -e "require('better-sqlite3')"); then
+    echo "🔧 Rebuilding better-sqlite3 for Node.js $(node -v) (ABI $(node -p 'process.versions.modules'))..."
+    cd "$MCP_SERVER_DIR"
+    npm rebuild better-sqlite3
+    cd "$SCRIPT_DIR"
+fi
+
+if ! (cd "$MCP_SERVER_DIR" && node -e "require('better-sqlite3')"); then
+    echo "❌ better-sqlite3 cannot be loaded by Node.js $(node -v) (ABI $(node -p 'process.versions.modules'))"
+    exit 1
+fi
+
+# Ensure MCP server is built (needed at runtime by summarize)
+if [ ! -d "$MCP_SERVER_DIR/dist" ]; then
+    echo "📦 Building MCP server..."
+    cd "$MCP_SERVER_DIR"
     npm run build
     cd "$SCRIPT_DIR"
 fi
