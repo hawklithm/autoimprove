@@ -35,6 +35,9 @@ PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 MCP_SERVER_DIR="$PROJECT_ROOT/src/mcp-server-ts"
 MODEL_DIR="$HOME/.autoimprove/models"
 MODEL_NAME="bge-small-zh.onnx"
+# Pin the source revision so that the downloaded bytes and their checksum do
+# not silently change when the upstream `main` branch is updated.
+MODEL_REVISION="fcecc3c5fef6becfa2b2bdda15c1c938857be534"
 # 模型下载源（按优先级尝试）：
 #   1. huggingface.co — 官方源（需能访问 huggingface）
 #   2. hf-mirror.com — 国内镜像
@@ -42,8 +45,8 @@ MODEL_NAME="bge-small-zh.onnx"
 # 使用 Xenova 社区维护的 ONNX 量化版本（基于 BAAI/bge-small-zh-v1.5，MIT 协议）
 # 量化后约 24MB，适合纯 CPU 推理
 MODEL_URLS=(
-  "https://huggingface.co/Xenova/bge-small-zh-v1.5/resolve/main/onnx/model_quantized.onnx"
-  "https://hf-mirror.com/Xenova/bge-small-zh-v1.5/resolve/main/onnx/model_quantized.onnx"
+  "https://huggingface.co/Xenova/bge-small-zh-v1.5/resolve/$MODEL_REVISION/onnx/model_quantized.onnx"
+  "https://hf-mirror.com/Xenova/bge-small-zh-v1.5/resolve/$MODEL_REVISION/onnx/model_quantized.onnx"
 )
 
 # 如遇网络问题，可配置代理（取消注释并设置正确的代理地址）：
@@ -102,6 +105,105 @@ confirm() {
         [yY]|[yY][eE][sS]) return 0 ;;
         *) return 1 ;;
     esac
+}
+
+get_file_size() {
+    stat -f%z "$1" 2>/dev/null || stat -c%s "$1" 2>/dev/null || echo 0
+}
+
+get_sha256() {
+    if command -v sha256sum &> /dev/null; then
+        sha256sum "$1" | awk '{print $1}'
+    elif command -v shasum &> /dev/null; then
+        shasum -a 256 "$1" | awk '{print $1}'
+    else
+        return 1
+    fi
+}
+
+# Hugging Face exposes the Git-LFS SHA-256 as x-linked-etag/ETag on the
+# resolved file response. Allow an explicit value for mirrors or air-gapped
+# environments, but fail closed when no trusted checksum is available.
+get_expected_sha256() {
+    if [ -n "${ONNX_MODEL_SHA256:-}" ]; then
+        echo "$ONNX_MODEL_SHA256"
+        return 0
+    fi
+
+    local url header checksum
+    for url in "${MODEL_URLS[@]}"; do
+        if command -v curl &> /dev/null; then
+            header=$(curl -sSIL --connect-timeout 30 --max-time 60 "$url" 2>/dev/null || true)
+            checksum=$(printf '%s\n' "$header" \
+                | awk -F': *' 'tolower($1) == "x-linked-etag" || tolower($1) == "etag" { gsub(/["\r]/, "", $2); print $2 }' \
+                | awk '/^[[:xdigit:]]{64}$/ { print tolower($0); exit }')
+            if [ -n "$checksum" ]; then
+                echo "$checksum"
+                return 0
+            fi
+        fi
+    done
+
+    return 1
+}
+
+verify_model_file() {
+    local file="$1"
+    local expected="$2"
+    local actual
+
+    if [ ! -f "$file" ]; then
+        return 1
+    fi
+
+    actual=$(get_sha256 "$file") || {
+        print_error "系统缺少 sha256sum 或 shasum，无法校验模型完整性"
+        return 1
+    }
+
+    if [ "$actual" != "$expected" ]; then
+        print_warning "模型 SHA-256 不匹配"
+        echo "  预期: $expected"
+        echo "  实际: $actual"
+        return 1
+    fi
+
+    return 0
+}
+
+download_model() {
+    local url="$1"
+    local part="$2"
+    local timeout_args=(--connect-timeout 30 --max-time 300)
+
+    if command -v curl &> /dev/null; then
+        # Continue from a partial file when the server supports HTTP Range.
+        if curl -L --fail --continue-at - -o "$part" "$url" --progress-bar "${timeout_args[@]}"; then
+            return 0
+        fi
+
+        # A mirror may not support Range. Retry from scratch in that case.
+        if [ -f "$part" ]; then
+            rm -f "$part"
+        fi
+        curl -L --fail -o "$part" "$url" --progress-bar "${timeout_args[@]}"
+        return $?
+    fi
+
+    if command -v wget &> /dev/null; then
+        if wget -c -O "$part" "$url" -q --show-progress --timeout=30; then
+            return 0
+        fi
+
+        if [ -f "$part" ]; then
+            rm -f "$part"
+        fi
+        wget -O "$part" "$url" -q --show-progress --timeout=30
+        return $?
+    fi
+
+    print_error "未找到 curl 或 wget，无法下载模型"
+    return 1
 }
 
 # ==============================================================================
@@ -231,21 +333,32 @@ echo ""
 print_section "Step 2: 下载 ONNX 模型"
 
 MODEL_TARGET="$MODEL_DIR/$MODEL_NAME"
-MODEL_TAR_DIR="$MODEL_DIR/bge-small-zh"
+MODEL_PART="$MODEL_TARGET.part"
 
 if [ "$MODE" != "--dry-run" ]; then
     # Create model directory
     mkdir -p "$MODEL_DIR"
 
-    # Check if model already exists
-    if [ -f "$MODEL_TARGET" ]; then
-        print_success "模型文件已存在: $MODEL_TARGET"
-        echo "如需重新下载，请先删除旧文件："
-        echo "  rm $MODEL_TARGET"
+    EXPECTED_SHA256=$(get_expected_sha256 || true)
+    if [ -z "$EXPECTED_SHA256" ] || ! printf '%s' "$EXPECTED_SHA256" | grep -Eq '^[[:xdigit:]]{64}$'; then
+        print_error "无法从模型下载源获取可信的 SHA-256"
+        echo "请设置环境变量 ONNX_MODEL_SHA256 后重试。"
+        exit 1
+    fi
+
+    # Existing files are accepted only after cryptographic verification.
+    if [ -f "$MODEL_TARGET" ] && verify_model_file "$MODEL_TARGET" "$EXPECTED_SHA256"; then
+        print_success "模型文件已存在且 SHA-256 校验通过: $MODEL_TARGET"
     else
+        if [ -f "$MODEL_TARGET" ]; then
+            print_warning "已有模型文件校验失败，将重新下载"
+            rm -f "$MODEL_TARGET"
+        fi
+
         echo "正在下载 bge-small-zh ONNX 量化模型..."
-        echo "来源: $MODEL_URL"
+        echo "来源: ${MODEL_URLS[0]}"
         echo "目标: $MODEL_TARGET"
+        echo "临时文件: $MODEL_PART"
         echo ""
 
         # Try multiple download sources with fallback mirrors
@@ -258,22 +371,10 @@ if [ "$MODE" != "--dry-run" ]; then
 
             echo "尝试下载源: $url"
 
-            # Method 1: curl (preferred)
-            if command -v curl &> /dev/null; then
-                echo "使用 curl 下载..."
-                if curl -L -o "$MODEL_TARGET" "$url" --progress-bar --connect-timeout 30 --max-time 300; then
-                    DOWNLOAD_SUCCESS=true
-                    break
-                fi
-            fi
-
-            # Method 2: wget fallback
-            if [ "$DOWNLOAD_SUCCESS" = false ] && command -v wget &> /dev/null; then
-                echo "使用 wget 下载..."
-                if wget -O "$MODEL_TARGET" "$url" -q --show-progress --timeout=30; then
-                    DOWNLOAD_SUCCESS=true
-                    break
-                fi
+            echo "尝试断点续传..."
+            if download_model "$url" "$MODEL_PART"; then
+                DOWNLOAD_SUCCESS=true
+                break
             fi
 
             if [ "$DOWNLOAD_SUCCESS" = false ]; then
@@ -281,18 +382,14 @@ if [ "$MODE" != "--dry-run" ]; then
             fi
         done
 
-        if [ "$DOWNLOAD_SUCCESS" = true ]; then
-            # Verify file size (quantized model is ~24MB, threshold > 1MB)
-            FILE_SIZE=$(stat -f%z "$MODEL_TARGET" 2>/dev/null || stat -c%s "$MODEL_TARGET" 2>/dev/null || echo 0)
-            if [ "$FILE_SIZE" -lt 10000000 ]; then
-                print_warning "模型文件大小异常（${FILE_SIZE} bytes），可能下载不完整"
-                echo "EmbeddingEncoder 会检测到问题并自动回退。"
-                DOWNLOAD_SUCCESS=false
-            else
-                print_success "模型下载成功！($(( FILE_SIZE / 1024 / 1024 ))MB)"
-            fi
+        if [ "$DOWNLOAD_SUCCESS" = true ] && verify_model_file "$MODEL_PART" "$EXPECTED_SHA256"; then
+            FILE_SIZE=$(get_file_size "$MODEL_PART")
+            # Publish only after checksum verification; an interrupted or
+            # corrupt .part file can never become the active model.
+            mv -f "$MODEL_PART" "$MODEL_TARGET"
+            print_success "模型下载成功且 SHA-256 校验通过！($(( FILE_SIZE / 1024 / 1024 ))MB)"
         else
-            print_error "模型下载失败"
+            print_error "模型下载或完整性校验失败"
             echo ""
             echo "可能的原因："
             echo "  1. 无法访问 HuggingFace — 请检查网络/代理"
@@ -302,7 +399,7 @@ if [ "$MODE" != "--dry-run" ]; then
             echo "  $MODEL_TARGET"
             echo ""
             echo "参考命令（需要能访问 huggingface.co）："
-            echo "  curl -L -o \"$MODEL_TARGET\" \"${MODEL_URLS[0]}\""
+            echo "  curl -L -C - -o \"$MODEL_PART\" \"${MODEL_URLS[0]}\""
             echo ""
             echo "如无法直接访问，可配置代理："
             echo "  export https_proxy=http://127.0.0.1:7897"
@@ -316,7 +413,7 @@ if [ "$MODE" != "--dry-run" ]; then
 else
     echo -e "${BLUE}[DRY-RUN]${NC} 将要执行:"
     echo "  mkdir -p $MODEL_DIR"
-    echo "  curl -L -o $MODEL_TARGET $MODEL_URL"
+    echo "  curl -L -C - -o $MODEL_PART ${MODEL_URLS[0]}"
 fi
 
 echo ""
@@ -329,10 +426,10 @@ print_section "Step 3: 验证安装"
 
 if [ "$MODE" != "--dry-run" ]; then
     # Verify model file
-    if [ -f "$MODEL_TARGET" ]; then
-        print_success "模型文件存在: $MODEL_TARGET"
+    if [ -f "$MODEL_TARGET" ] && [ -n "${EXPECTED_SHA256:-}" ] && verify_model_file "$MODEL_TARGET" "$EXPECTED_SHA256"; then
+        print_success "模型文件存在且 SHA-256 校验通过: $MODEL_TARGET"
     else
-        print_error "模型文件未找到: $MODEL_TARGET"
+        print_error "模型文件不存在或 SHA-256 校验失败: $MODEL_TARGET"
         exit 1
     fi
 
