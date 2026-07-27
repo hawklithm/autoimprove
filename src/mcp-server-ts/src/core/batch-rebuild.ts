@@ -260,14 +260,14 @@ export class BatchRebuildEngine {
     // Step 7: Generate rules
     logger.info("batch-rebuild", "\n[7/7] Generating rules...");
 
-    // Clear existing rules
+    // This is a full rebuild: replace the previous generated rule set instead
+    // of appending to it. Otherwise stale low-quality rules survive forever.
     const existingRules = this.indexManager.getAllRules();
-    logger.debug("batch-rebuild", `  Backing up ${existingRules.length} existing rules...`);
+    logger.debug("batch-rebuild", `  Existing rules to replace: ${existingRules.length}`);
 
-    // Get next rule ID
-    const nextId = existingRules.length > 0
-      ? Math.max(...existingRules.map((r: RuleIndexEntry) => parseInt(r.id.replace("rule-", "")))) + 1
-      : 1;
+    // Generate from a clean ID range; the old index is cleared only after
+    // generation succeeds, so a failed LLM call does not erase the database.
+    const nextId = 1;
 
     // Generate rules with batch LLM optimization (if enabled)
     const scene: Scene = { tech: [], functional: [], business: [] };
@@ -306,7 +306,22 @@ export class BatchRebuildEngine {
       logger.info("batch-rebuild", `✓ Generated ${rules.length} rules`);
     }
 
-    // Save rules and update evolution with rule IDs
+    // Reject unusable LLM/fallback output before persisting it.
+    const generatedBeforeQualityFilter = rules.length;
+    rules = rules.filter(rule => {
+      const quality = rule.content.metadata?.quality_score;
+      return quality === undefined || quality >= 0.5;
+    });
+    if (rules.length !== generatedBeforeQualityFilter) {
+      logger.warn("batch-rebuild", `Skipped ${generatedBeforeQualityFilter - rules.length} rules with quality score below 0.5`);
+    }
+
+    // Save rules and update evolution with rule IDs. Replace the previous
+    // generated set only after all generation/quality checks have completed.
+    const removedRules = this.indexManager.clearAllRules();
+    logger.debug("batch-rebuild", `  Removed ${removedRules} previous rules`);
+    const removedContent = this.contentManager.clearAllContent();
+    logger.debug("batch-rebuild", `  Removed ${removedContent} previous rule content files`);
     for (const rule of rules) {
       // Pass content to addRule for SQLite storage (saves content inline)
       this.indexManager.addRule(rule.indexEntry, rule.content);
@@ -392,6 +407,8 @@ export class BatchRebuildEngine {
 
     // Export to Claude index
     logger.debug("batch-rebuild", "\nExporting to Claude index...");
+    const exportEligible = this.indexManager.listRules({ minConfidence: 0.6 }).length;
+    logger.debug("batch-rebuild", `  Export filter: ${exportEligible} rules meet confidence >= 0.6`);
     const exported = this.exporter.export({
       strategy: "category-balanced",
       limit: 10,

@@ -266,6 +266,23 @@ export class RuleIndexManager {
     this.saveIndex(index);
   }
 
+  /** Remove all indexed rules before a full batch rebuild. */
+  clearAllRules(): number {
+    if (this.useSQLite && this.sqliteStorage) {
+      const rules = this.sqliteStorage.listAllRules();
+      for (const rule of rules) {
+        this.sqliteStorage.deleteRule(rule.id);
+      }
+      return rules.length;
+    }
+
+    const index = this.loadIndex();
+    const removed = index.rules.length;
+    index.rules = [];
+    this.saveIndex(index);
+    return removed;
+  }
+
   getRule(ruleId: string): RuleIndexEntry | null {
     if (this.useSQLite && this.sqliteStorage) {
       return this.sqliteStorage.getRule(ruleId);

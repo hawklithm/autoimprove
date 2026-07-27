@@ -4,7 +4,7 @@
  * Manages individual rule content files (rules/content/rule-{id}.md).
  */
 
-import { readFileSync, writeFileSync, unlinkSync, existsSync, mkdirSync, renameSync } from "fs";
+import { readFileSync, writeFileSync, unlinkSync, existsSync, mkdirSync, renameSync, readdirSync } from "fs";
 import { join } from "path";
 import { homedir } from "os";
 import { RuleContent } from "../core/models.js";
@@ -88,6 +88,17 @@ export class RuleContentManager {
 
   private getContentPath(ruleId: string): string {
     return join(this.getContentDir(), `${ruleId}.md`);
+  }
+
+  /** Remove orphaned content files during a full rule rebuild. */
+  clearAllContent(): number {
+    let removed = 0;
+    for (const file of readdirSync(this.getContentDir())) {
+      if (!/^rule-\d+\.md$/.test(file)) continue;
+      unlinkSync(join(this.getContentDir(), file));
+      removed++;
+    }
+    return removed;
   }
 
   loadContent(ruleId: string): RuleContent | null {

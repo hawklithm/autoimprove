@@ -17,6 +17,15 @@ import { loadConfig } from "../storage/init.js";
 import { shouldUseNewPipeline } from "./local-ml-rollout.js";
 import { logger } from "./logger.js";
 
+export function isContextContinuationMessage(content: string): boolean {
+  const normalized = content.trim().toLowerCase();
+  return normalized.includes("this session is being continued from")
+    || normalized.includes("summary below covers the earlier portion")
+    || normalized.includes("ran out of context")
+    || normalized.startsWith("summary of the conversation:")
+    || normalized.startsWith("conversation summary:");
+}
+
 export class SessionAnalyzer {
   private parser: UnifiedSessionParser;
   private confidenceCalc: ConfidenceCalculator;
@@ -491,7 +500,7 @@ export class SessionAnalyzer {
       return {
         message: msg,
         occurrence: this.createOccurrence(sessionData, msg, "explicit_correction"),
-        extractedText: extractedText || msg.content  // Fallback to full content
+        extractedText
       };
     }).filter(c => c.extractedText.length > 0);  // Filter out empty extractions
 
@@ -551,7 +560,7 @@ export class SessionAnalyzer {
       return {
         message: msg,
         occurrence: this.createOccurrence(sessionData, msg, "explicit_correction"),
-        extractedText: extractedText || msg.content
+        extractedText
       };
     }).filter(c => c.extractedText.length > 0);
 
@@ -611,7 +620,7 @@ export class SessionAnalyzer {
       return {
         message: msg,
         occurrence: this.createOccurrence(sessionData, msg, "accept"),
-        extractedText: extractedText || msg.content
+        extractedText
       };
     }).filter(c => c.extractedText.length > 0);
 
@@ -675,7 +684,7 @@ export class SessionAnalyzer {
           ...this.createOccurrence(sessionData, msg, "explicit_correction"),
           performance_improved: true
         },
-        extractedText: extractedText || msg.content
+        extractedText
       };
     }).filter(c => c.extractedText.length > 0);
 
@@ -770,7 +779,7 @@ export class SessionAnalyzer {
           ...this.createOccurrence(sessionData, msg, "explicit_correction"),
           security_issue: keyword
         },
-        extractedText: extractedText || msg.content
+        extractedText
       };
     }).filter(c => c.extractedText.length > 0);
 
@@ -837,7 +846,9 @@ export class SessionAnalyzer {
   }
 
   private getUserMessages(sessionData: SessionData): Message[] {
-    return sessionData.messages.filter(msg => msg.role === "user");
+    return sessionData.messages.filter(msg =>
+      msg.role === "user" && !isContextContinuationMessage(msg.content)
+    );
   }
 
   private createOccurrence(

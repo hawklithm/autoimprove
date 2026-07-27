@@ -236,7 +236,8 @@ export class HybridRuleGenerator {
     }
 
     // Phase 4: Quality assessment and adjustment
-    const qualityScore = this.assessRuleQuality(enhancedContent);
+    let qualityScore = this.assessRuleQuality(enhancedContent);
+    const evidenceConfidence = basicRule.indexEntry.confidence;
 
     // Downgrade confidence for low-quality rules
     if (qualityScore < 0.5) {
@@ -245,6 +246,21 @@ export class HybridRuleGenerator {
         basicRule.indexEntry.confidence,
         0.4 + qualityScore * 0.2  // Cap at 0.4-0.5 for low quality
       );
+
+      // A weak model response must not be allowed to replace a useful
+      // deterministic rule with a copied session request/summary. When the
+      // basic generator has a reusable rule, use it as a safe fallback.
+      const fallback = this.createFallbackContent(basicRule.content, pattern);
+      if (fallback) {
+        enhancedContent = fallback;
+        qualityScore = this.assessRuleQuality(enhancedContent);
+        if (qualityScore >= 0.5) {
+          basicRule.indexEntry.confidence = evidenceConfidence;
+        }
+        logger.info("hybrid-generation", `Using deterministic fallback for ${ruleId} after low-quality LLM response`, {
+          quality_score: qualityScore
+        });
+      }
     }
 
     // Add quality metadata
@@ -261,6 +277,9 @@ export class HybridRuleGenerator {
       };
     }
     enhancedContent.metadata.quality_score = qualityScore;
+    // Keep the persisted content metadata aligned with the index entry. The
+    // exporter filters index confidence, so stale metadata is misleading.
+    enhancedContent.metadata.confidence = basicRule.indexEntry.confidence;
 
     // Add scope metadata from LLM if available
     if (enhancedContent.scope_confidence !== undefined) {
@@ -745,6 +764,12 @@ Generate enhanced rule following the format specified above.`;
     if (content.description) {
       const desc = content.description;
 
+      // These are session artifacts, not reusable rules. They should fail
+      // quality assessment even when they happen to be long enough.
+      if (/this session is being continued from|summary below covers the earlier portion|帮忙梳理|请帮我|帮我看看/i.test(desc)) {
+        score += 0;
+      }
+
       // Check for truncation markers
       if (desc.includes("...") || desc.includes("…")) {
         score += 0.05;  // Truncated, very low score
@@ -841,6 +866,38 @@ Generate enhanced rule following the format specified above.`;
     }
 
     return score / maxScore;  // Normalize to 0-1
+  }
+
+  private createFallbackContent(
+    basicContent: RuleContent,
+    pattern: Pattern
+  ): RuleContent | null {
+    const raw = basicContent.content || "";
+    if (!raw || /requires further refinement|this session is being continued from|summary below covers/i.test(raw)) {
+      return null;
+    }
+
+    const typeLabel = pattern.type.replace(/-/g, " ");
+    const heading = raw.match(/^\*\*([^*]+)\*\*/m)?.[1]?.trim();
+    return {
+      ...basicContent,
+      title: heading ? `Apply ${heading} consistently` : `Apply the learned ${typeLabel} principle consistently`,
+      description: raw,
+      reason: `This reusable ${typeLabel} practice was observed in user corrections. Applying it consistently reduces repeated rework and keeps related code paths predictable.`,
+      how_to_apply: [
+        "Identify the affected code path before making the change.",
+        "Apply the principle consistently across related call sites and files.",
+        "Run the relevant tests or verification checks after the change."
+      ],
+      when_to_use: [
+        "When working in the same technical or functional scene as this pattern.",
+        "When a similar correction or failure mode appears again."
+      ],
+      metadata: {
+        ...basicContent.metadata,
+        source: "learned-deterministic-fallback"
+      }
+    };
   }
 
   /**
