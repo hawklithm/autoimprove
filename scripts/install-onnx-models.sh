@@ -190,8 +190,13 @@ if [ "$MODE" != "--dry-run" ]; then
             ONNX_VERSION="latest"
         fi
 
-        # Install onnxruntime-node
-        if npm install "onnxruntime-node@${ONNX_VERSION}" --save 2>&1; then
+        # Install the package first without lifecycle scripts. The package's
+        # postinstall downloader does not follow HTTP 3xx responses on some
+        # npm mirrors/proxies, so patch it before running the lifecycle script.
+        if npm install "onnxruntime-node@${ONNX_VERSION}" --save --ignore-scripts 2>&1 \
+            && node "$PROJECT_ROOT/scripts/patch-onnxruntime-redirects.mjs" \
+                "$MCP_SERVER_DIR/node_modules/onnxruntime-node" \
+            && npm rebuild onnxruntime-node 2>&1; then
             print_success "onnxruntime-node ${ONNX_VERSION} 安装成功"
         else
             print_error "onnxruntime-node 安装失败"
