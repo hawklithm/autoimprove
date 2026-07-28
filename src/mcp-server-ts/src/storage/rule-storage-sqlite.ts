@@ -238,7 +238,7 @@ export class RuleStorageSQLite {
    */
   getRule(ruleId: string): RuleIndexEntry | null {
     const row = this.db.prepare(`
-      SELECT * FROM rules WHERE id = ?
+      SELECT * FROM rules WHERE lower(id) = lower(?)
     `).get(ruleId) as any;
 
     if (!row) return null;

@@ -1519,6 +1519,30 @@ async function handleGenerateRules(args: any) {
   };
 }
 
+function formatRuleForSearch(rule: any, content: any, index?: number): string {
+  let markdown = `${index !== undefined ? `## ${index}. ` : "# "}${content?.title || rule.id}\n\n`;
+  markdown += `**Rule ID:** \`${rule.id}\`\n\n`;
+  markdown += `**Priority:** ${rule.priority} | **Confidence:** ${(rule.confidence * 100).toFixed(0)}%\n\n`;
+
+  if (!content) {
+    return markdown + `**Content:** unavailable (the index entry exists, but its content file was not found)\n\n`;
+  }
+
+  if (content.description) markdown += `**Description:** ${content.description}\n\n`;
+  if (content.content) markdown += `## Rule Content\n\n${content.content}\n\n`;
+  if (content.reason) markdown += `## Reason\n\n${content.reason}\n\n`;
+  if (content.how_to_apply?.length) {
+    markdown += `## How to Apply\n\n${content.how_to_apply.map((item: string) => `- ${item}`).join("\n")}\n\n`;
+  }
+  if (content.when_to_use?.length) {
+    markdown += `## When to Use\n\n${content.when_to_use.map((item: string) => `- ${item}`).join("\n")}\n\n`;
+  }
+  if (content.exceptions?.length) {
+    markdown += `## Exceptions\n\n${content.exceptions.map((item: string) => `- ${item}`).join("\n")}\n\n`;
+  }
+  return markdown;
+}
+
 async function handleSearchKnowledge(args: any) {
   const sceneJson = args.scene_json as string | undefined;
   const keywords = args.keywords as string | undefined;
@@ -1570,16 +1594,16 @@ async function handleSearchKnowledge(args: any) {
     },
   });
 
-  // Search by ID (returns summary and guide to get full details)
+  // Search by ID (case-insensitive, returns the complete stored rule)
   if (ruleId) {
     logger.info("search_knowledge", "Searching by rule ID", { rule_id: ruleId });
     const rule = indexManager.getRule(ruleId);
     if (rule) {
-      const content = contentManager.loadContent(ruleId);
+      const content = contentManager.loadContent(rule.id);
 
       // 🆕 Log successful ID search
       logger.info("search_knowledge", "Rule found by ID", {
-        rule_id: ruleId,
+        rule_id: rule.id,
         type: rule.type,
         priority: rule.priority,
         confidence: rule.confidence,
@@ -1593,28 +1617,14 @@ async function handleSearchKnowledge(args: any) {
       // 🆕 Auto-record feedback when rule is queried
       if (!skipFeedback) {
         adaptiveConfidence.recordFeedback({
-          rule_id: ruleId,
+          rule_id: rule.id,
           timestamp: new Date().toISOString(),
           feedback_type: "used",
           context: "rule_query_by_id",
         });
       }
 
-      // Format as markdown (summary only)
-      let markdown = `## Get Full Details\n\n`;
-      markdown += `To see the complete rule with application guidance, use the MCP tool **get_rule_details** with the rule ID.\n\n`;
-      markdown += `**get_rule_details** returns:\n`;
-      markdown += `- **How to Apply:** Step-by-step application guide\n`;
-      markdown += `- **When to Use:** Specific scenarios where this rule applies\n`;
-      markdown += `- **Exceptions:** Edge cases where the rule should NOT be applied\n\n`;
-      markdown += `---\n\n`;
-
-      markdown += `# ${content?.title || ruleId}\n\n`;
-      markdown += `**Rule ID:** \`${ruleId}\`\n\n`;
-
-      if (content?.description) {
-        markdown += `**Description:** ${content.description}\n\n`;
-      }
+      const markdown = formatRuleForSearch(rule, content);
 
       return {
         content: [
@@ -1694,7 +1704,7 @@ async function handleSearchKnowledge(args: any) {
         }
       }
 
-      // Format results as markdown (reuse the same summary-only layout)
+      // Format results as markdown with the stored rule content.
       if (matches.length === 0) {
         return {
           content: [
@@ -1706,26 +1716,17 @@ async function handleSearchKnowledge(args: any) {
         };
       }
 
-      let markdown = `## Get Full Details\n\n`;
-      markdown += `To see the complete rule with application guidance, use the MCP tool **get_rule_details** with the rule ID.\n\n`;
-      markdown += `**get_rule_details** returns:\n`;
-      markdown += `- **How to Apply:** Step-by-step application guide\n`;
-      markdown += `- **When to Use:** Specific scenarios where this rule applies\n`;
-      markdown += `- **Exceptions:** Edge cases where the rule should NOT be applied\n\n`;
-      markdown += `---\n\n`;
-      markdown += `# Found ${matches.length} Matching Rule${matches.length > 1 ? 's' : ''}\n\n`;
+      let markdown = `# Found ${matches.length} Matching Rule${matches.length > 1 ? 's' : ''}\n\n`;
 
       matches.forEach((m, idx) => {
         const ruleContent = contentManager.loadContent(m.rule.id);
         if (!ruleContent) {
           logger.warn("search_knowledge", `Failed to load content for rule ${m.rule.id}`);
+          markdown += formatRuleForSearch(m.rule, null, idx + 1);
+          markdown += `---\n\n`;
           return;
         }
-        markdown += `## ${idx + 1}. ${ruleContent.title || m.rule.id}\n\n`;
-        if (ruleContent.description) {
-          markdown += `**Description:** ${ruleContent.description}\n\n`;
-        }
-        markdown += `**Rule ID:** \`${m.rule.id}\`\n\n`;
+        markdown += formatRuleForSearch(m.rule, ruleContent, idx + 1);
         markdown += `---\n\n`;
       });
 
@@ -1895,30 +1896,19 @@ async function handleSearchKnowledge(args: any) {
       };
     }
 
-    let markdown = `## Get Full Details\n\n`;
-    markdown += `To see the complete rule with application guidance, use the MCP tool **get_rule_details** with the rule ID.\n\n`;
-    markdown += `**get_rule_details** returns:\n`;
-    markdown += `- **How to Apply:** Step-by-step application guide\n`;
-    markdown += `- **When to Use:** Specific scenarios where this rule applies\n`;
-    markdown += `- **Exceptions:** Edge cases where the rule should NOT be applied\n\n`;
-    markdown += `---\n\n`;
-    markdown += `# Found ${matches.length} Matching Rule${matches.length > 1 ? 's' : ''}\n\n`;
+    let markdown = `# Found ${matches.length} Matching Rule${matches.length > 1 ? 's' : ''}\n\n`;
 
     matches.forEach((m, idx) => {
       const ruleContent = contentManager.loadContent(m.rule.id);
 
       if (!ruleContent) {
         logger.warn("search_knowledge", `Failed to load content for rule ${m.rule.id}`);
+        markdown += formatRuleForSearch(m.rule, null, idx + 1);
+        markdown += `---\n\n`;
         return;
       }
 
-      markdown += `## ${idx + 1}. ${ruleContent.title || m.rule.id}\n\n`;
-
-      if (ruleContent.description) {
-        markdown += `**Description:** ${ruleContent.description}\n\n`;
-      }
-
-      markdown += `**Rule ID:** \`${m.rule.id}\`\n\n`;
+      markdown += formatRuleForSearch(m.rule, ruleContent, idx + 1);
       markdown += `---\n\n`;
     });
 
@@ -1968,25 +1958,12 @@ async function handleSearchKnowledge(args: any) {
     };
   }
 
-  let markdown = `## Get Full Details\n\n`;
-  markdown += `To see the complete rule with application guidance, use the MCP tool **get_rule_details** with the rule ID.\n\n`;
-  markdown += `**get_rule_details** returns:\n`;
-  markdown += `- **How to Apply:** Step-by-step application guide\n`;
-  markdown += `- **When to Use:** Specific scenarios where this rule applies\n`;
-  markdown += `- **Exceptions:** Edge cases where the rule should NOT be applied\n\n`;
-  markdown += `---\n\n`;
-  markdown += `# All Rules (${rules.length} total)\n\n`;
+  let markdown = `# All Rules (${rules.length} total)\n\n`;
 
   rules.forEach((r, idx) => {
     const ruleContent = contentManager.loadContent(r.id);
 
-    markdown += `## ${idx + 1}. ${ruleContent?.title || r.id}\n\n`;
-
-    if (ruleContent?.description) {
-      markdown += `**Description:** ${ruleContent.description}\n\n`;
-    }
-
-    markdown += `**Rule ID:** \`${r.id}\`\n\n`;
+    markdown += formatRuleForSearch(r, ruleContent, idx + 1);
     markdown += `---\n\n`;
   });
 
@@ -2016,7 +1993,7 @@ async function handleGetRuleDetails(args: any) {
     };
   }
 
-  const content = contentManager.loadContent(ruleId);
+  const content = contentManager.loadContent(rule.id);
   if (!content) {
     return {
       content: [
@@ -2029,9 +2006,9 @@ async function handleGetRuleDetails(args: any) {
   }
 
   // Format as markdown with full details
-  let markdown = `# ${content.title || ruleId}\n\n`;
+  let markdown = `# ${content.title || rule.id}\n\n`;
 
-  markdown += `**Rule ID:** \`${ruleId}\`\n\n`;
+  markdown += `**Rule ID:** \`${rule.id}\`\n\n`;
   markdown += `**Priority:** ${rule.priority} | **Confidence:** ${(rule.confidence * 100).toFixed(0)}%\n\n`;
   markdown += `---\n\n`;
 
@@ -2040,15 +2017,15 @@ async function handleGetRuleDetails(args: any) {
   }
 
   if (content.how_to_apply) {
-    markdown += `## How to Apply\n\n${content.how_to_apply}\n\n`;
+    markdown += `## How to Apply\n\n${content.how_to_apply.map(step => `- ${step}`).join("\n")}\n\n`;
   }
 
   if (content.when_to_use) {
-    markdown += `## When to Use\n\n${content.when_to_use}\n\n`;
+    markdown += `## When to Use\n\n${content.when_to_use.map(item => `- ${item}`).join("\n")}\n\n`;
   }
 
   if (content.exceptions) {
-    markdown += `## Exceptions\n\n${content.exceptions}\n\n`;
+    markdown += `## Exceptions\n\n${content.exceptions.map(item => `- ${item}`).join("\n")}\n\n`;
   }
 
   if (includeExamples && content.examples && content.examples.length > 0) {
@@ -4082,16 +4059,17 @@ async function main() {
 
   logger.info("server", "AutoImprove MCP Server (TypeScript) started");
   // Key lifecycle node: print to console so operators see start/stop clearly
-  console.log(`[AutoImprove] MCP server started. Logs: ${logger.getLogFile()}`);
+  // stdout is reserved for MCP JSON-RPC messages in stdio mode.
+  console.error(`[AutoImprove] MCP server started. Logs: ${logger.getLogFile()}`);
 
   // Key lifecycle node: print on graceful shutdown
   process.on("SIGINT", () => {
-    console.log("[AutoImprove] MCP server shutting down (SIGINT)...");
+    console.error("[AutoImprove] MCP server shutting down (SIGINT)...");
     logger.shutdown();
     process.exit(0);
   });
   process.on("SIGTERM", () => {
-    console.log("[AutoImprove] MCP server shutting down (SIGTERM)...");
+    console.error("[AutoImprove] MCP server shutting down (SIGTERM)...");
     logger.shutdown();
     process.exit(0);
   });
@@ -4099,6 +4077,6 @@ async function main() {
 
 main().catch((error) => {
   logger.error("server", "Server startup failed", error);
-  console.log("[AutoImprove] MCP server failed to start:", error instanceof Error ? error.message : error);
+  console.error("[AutoImprove] MCP server failed to start:", error instanceof Error ? error.message : error);
   process.exit(1);
 });

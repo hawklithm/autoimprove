@@ -69,6 +69,29 @@ describe("RuleIndexManager", () => {
     expect(index.rules[0].confidence).toBe(0.75);
   });
 
+  it("should find a rule by ID without regard to case", () => {
+    const manager = new RuleIndexManager();
+    const entry = {
+      id: "rule-Case-001",
+      type: PatternType.PREFERENCE,
+      priority: Priority.MEDIUM,
+      confidence: 0.8,
+      scenes: createScene(),
+      keywords: [],
+      created_at: "2026-05-30T10:00:00Z",
+      updated_at: "2026-05-30T10:00:00Z",
+    };
+
+    manager.addRule(entry, {
+      id: entry.id,
+      content: "Use the canonical rule ID when loading content.",
+      reason: "Preserves the stored rule identity.",
+      metadata: {},
+    });
+
+    expect(manager.getRule("RULE-case-001")?.id).toBe("rule-Case-001");
+  });
+
   it("should reject duplicate rule ID", () => {
     const manager = new RuleIndexManager();
 

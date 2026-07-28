@@ -148,6 +148,29 @@ AutoImprove runs automatically when you work with Claude Code or Codex. The syst
 
 `search_knowledge` is a first-step replacement for guessing local conventions: query it when implementing, fixing, debugging, or refactoring instead of inferring patterns from several files. If the knowledge base is still empty, it responds with next steps rather than an error.
 
+### Command-Line Search (Without an Agent)
+
+To verify the real MCP `search_knowledge` function directly from a terminal, run:
+
+```bash
+# Search by comma-separated keywords
+./scripts/search-knowledge.sh "sqlite,error"
+
+# Search by scene
+./scripts/search-knowledge.sh --scene-json '{"tech":["typescript"],"functional":["database"]}'
+
+# Fetch a known rule by ID
+./scripts/search-knowledge.sh --rule-id RULE-001
+```
+
+The script starts the local MCP Server subprocess only; it does not start Claude, Codex, or another agent. It skips usage-feedback recording by default. Add `--record-feedback` when you want the query to count as a normal rule use:
+
+```bash
+./scripts/search-knowledge.sh --keywords "sqlite" --record-feedback
+```
+
+Run `./setup.sh` first so that `src/mcp-server-ts/dist/index.js` has been built. If the knowledge base is empty, the command returns a setup/next-steps message rather than treating the search as a server failure.
+
 ### Available Skills
 
 #### Claude Code
@@ -350,6 +373,8 @@ autoimprove/
 ├── setup.sh                    # Unified setup (claude/codex/all)
 ├── setup_claude.sh            # Claude Code setup
 ├── setup_codex.sh             # Codex setup
+├── scripts/
+│   └── search-knowledge.sh      # Direct CLI diagnostic for search_knowledge
 ├── src/
 │   ├── mcp-server-ts/         # TypeScript MCP Server (core)
 │   │   ├── src/
@@ -647,6 +672,26 @@ claude mcp restart autoimprove-core
 
 # Check logs
 tail -f ~/.autoimprove/logs/server.log
+```
+
+### Issue: better-sqlite3 Was Compiled for a Different Node.js Version
+
+`better-sqlite3` is a native Node.js module and its binary is tied to the Node.js ABI. `setup.sh` now verifies that it can be loaded with the current Node.js and automatically runs `npm rebuild better-sqlite3` when necessary. `summarize.sh` performs the same check before running.
+
+If the module still cannot be loaded, rebuild it manually with the same Node.js that will run AutoImprove:
+
+```bash
+cd src/mcp-server-ts
+npm rebuild better-sqlite3
+node -e "require('better-sqlite3'); console.log('better-sqlite3 OK')"
+```
+
+Check that setup and summarize use the same runtime:
+
+```bash
+node -v
+node -p 'process.execPath'
+node -p 'process.versions.modules'
 ```
 
 ### Issue: Skill Not Found in Claude Code

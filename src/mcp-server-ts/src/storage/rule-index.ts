@@ -290,7 +290,8 @@ export class RuleIndexManager {
 
     // Legacy JSON
     const index = this.loadIndex();
-    return index.rules.find(r => r.id === ruleId) || null;
+    const normalizedRuleId = ruleId.trim().toLowerCase();
+    return index.rules.find(r => r.id.toLowerCase() === normalizedRuleId) || null;
   }
 
   listRules(options: {
