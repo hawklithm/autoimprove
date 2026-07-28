@@ -171,7 +171,7 @@ fi
 # Native Node.js modules are ABI-specific. npm list only verifies the package
 # metadata, so explicitly load and rebuild better-sqlite3 when the existing
 # binary was compiled by another Node.js version.
-ensure_better_sqlite3 "$MCP_SERVER_DIR"
+ensure_better_sqlite3 "$MCP_SERVER_DIR" true
 echo -e "${GREEN}✓${NC} better-sqlite3 native module 与当前 Node.js ABI 匹配"
 cd "$SCRIPT_DIR"
 

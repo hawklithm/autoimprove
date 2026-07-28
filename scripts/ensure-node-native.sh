@@ -3,6 +3,7 @@
 
 ensure_better_sqlite3() {
     local mcp_server_dir="$1"
+    local force_rebuild="${2:-false}"
     local node_bin npm_bin npm_real npm_first_line
 
     node_bin="$(command -v node)"
@@ -23,13 +24,22 @@ ensure_better_sqlite3() {
         npm_command=("$npm_bin")
     fi
 
-    if ! (cd "$mcp_server_dir" && "$node_bin" -e "require('better-sqlite3')") >/dev/null 2>&1; then
+    if [[ "$force_rebuild" == "true" ]] || ! (cd "$mcp_server_dir" && "$node_bin" -e "require('better-sqlite3')") >/dev/null 2>&1; then
         echo "Rebuilding better-sqlite3 with $node_bin..." >&2
-        (cd "$mcp_server_dir" && "${npm_command[@]}" rebuild better-sqlite3)
+        # Force the install lifecycle script to run. This handles machines
+        # with npm config set to ignore-scripts, which otherwise leaves the
+        # old ABI-specific .node file untouched.
+        if ! (cd "$mcp_server_dir" && "${npm_command[@]}" rebuild better-sqlite3 --build-from-source --ignore-scripts=false) \
+            || ! (cd "$mcp_server_dir" && "$node_bin" -e "require('better-sqlite3')") >/dev/null 2>&1; then
+            echo "Initial better-sqlite3 rebuild failed; reinstalling its native build..." >&2
+            rm -rf "$mcp_server_dir/node_modules/better-sqlite3/build"
+            (cd "$mcp_server_dir" && "${npm_command[@]}" install better-sqlite3 --build-from-source --ignore-scripts=false --force)
+        fi
     fi
 
     if ! (cd "$mcp_server_dir" && "$node_bin" -e "require('better-sqlite3')") >/dev/null 2>&1; then
         echo "Error: better-sqlite3 cannot be loaded by $node_bin (ABI $("$node_bin" -p 'process.versions.modules'))." >&2
+        (cd "$mcp_server_dir" && "$node_bin" -e "try { console.error(require.resolve('better-sqlite3')); require('better-sqlite3'); } catch (error) { console.error(error.message); process.exitCode = 1; }") >&2 || true
         return 1
     fi
 }
