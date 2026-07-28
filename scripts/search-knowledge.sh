@@ -12,6 +12,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 MCP_SERVER="$PROJECT_ROOT/src/mcp-server-ts/dist/index.js"
+source "$SCRIPT_DIR/ensure-node-native.sh"
 
 if ! command -v node >/dev/null 2>&1; then
     echo "Error: Node.js is not installed or not on PATH." >&2
@@ -23,24 +24,8 @@ if [ ! -f "$MCP_SERVER" ]; then
     exit 1
 fi
 
-# better-sqlite3 is a native module and its binary is tied to the Node.js ABI.
-# Check it before starting the MCP server; otherwise the error only appears
-# later as a JSON-RPC tool failure when the SQLite backend is first accessed.
 MCP_SERVER_DIR="$PROJECT_ROOT/src/mcp-server-ts"
-NODE_ABI="$(node -p 'process.versions.modules')"
-if ! (cd "$MCP_SERVER_DIR" && node -e "require('better-sqlite3')") >/dev/null 2>&1; then
-    echo "better-sqlite3 is incompatible with Node.js $(node -v) (ABI $NODE_ABI); rebuilding..." >&2
-    if ! (cd "$MCP_SERVER_DIR" && npm rebuild better-sqlite3); then
-        echo "Error: failed to rebuild better-sqlite3 for Node.js $(node -v) (ABI $NODE_ABI)." >&2
-        echo "Run: (cd $MCP_SERVER_DIR && npm rebuild better-sqlite3)" >&2
-        exit 1
-    fi
-fi
-
-if ! (cd "$MCP_SERVER_DIR" && node -e "require('better-sqlite3')") >/dev/null 2>&1; then
-    echo "Error: better-sqlite3 cannot be loaded by Node.js $(node -v) (ABI $NODE_ABI)." >&2
-    exit 1
-fi
+ensure_better_sqlite3 "$MCP_SERVER_DIR"
 
 echo "Node: $(node -v) (ABI $(node -p 'process.versions.modules'))" >&2
 echo "Calling search_knowledge through the local MCP server..." >&2

@@ -678,6 +678,19 @@ tail -f ~/.autoimprove/logs/server.log
 
 `better-sqlite3` is a native Node.js module and its binary is tied to the Node.js ABI. `setup.sh` now verifies that it can be loaded with the current Node.js and automatically runs `npm rebuild better-sqlite3` when necessary. `summarize.sh` performs the same check before running.
 
+The same check is also performed by `scripts/search-knowledge.sh`. It prints the actual Node.js and npm paths, then invokes the npm CLI with the selected Node.js executable so that installation and MCP execution use the same ABI. Run the script directly with Bash:
+
+```bash
+./scripts/search-knowledge.sh --rule-id rule-001
+```
+
+Do not invoke it with `sh ./scripts/search-knowledge.sh`, because it is a Bash script. If the output still shows the SQLite error before printing the Node/npm diagnostics, verify that the checkout contains the latest script:
+
+```bash
+git log -1 --oneline
+git show --stat --oneline HEAD
+```
+
 If the module still cannot be loaded, rebuild it manually with the same Node.js that will run AutoImprove:
 
 ```bash
