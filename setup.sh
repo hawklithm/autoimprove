@@ -228,7 +228,8 @@ echo ""
 confirm() {
     local prompt="$1"
     local reply
-    read -r -p "$prompt [y/N] " reply
+    read -r -n 1 -p "$prompt [y/N] " reply
+    echo
     case "$reply" in
         [yY]|[yY][eE][sS]) return 0 ;;
         *) return 1 ;;
