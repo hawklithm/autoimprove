@@ -8,11 +8,13 @@
     "autoimprove-server": "dist/index.js"
   },
   "scripts": {
-    "build": "tsc && node -e \"const{execSync}=require('child_process');const fs=require('fs');fs.mkdirSync('dist/storage',{recursive:true});if(fs.existsSync('src/storage/rule-storage-schema.sql'))fs.copyFileSync('src/storage/rule-storage-schema.sql','dist/storage/rule-storage-schema.sql');console.log('copied rule-storage-schema.sql -> dist/storage/')\"",
+    "build": "tsc && node -e \"const fs=require('fs');fs.mkdirSync('dist/storage',{recursive:true});for(const f of ['rule-storage-schema.sql','memory-storage-schema.sql']){if(fs.existsSync('src/storage/'+f))fs.copyFileSync('src/storage/'+f,'dist/storage/'+f)}console.log('copied storage schemas')\"",
     "dev": "tsx src/index.ts",
     "test": "vitest run",
     "test:watch": "vitest",
     "test:ui": "vitest --ui",
+    "memory:migrate": "tsx src/scripts/migrate-memory-to-sqlite.ts",
+    "memory:benchmark": "tsx src/scripts/memory-benchmark.ts",
     "lint": "eslint src --ext .ts",
     "typecheck": "tsc --noEmit"
   },

@@ -18,6 +18,9 @@ import { LLMRuleGenerator } from "./llm-rule-generator.js";
 import { SignalDictionaryDB } from "../storage/signal-dictionary-db.js";
 import { statSync } from "fs";
 import { logger } from "./logger.js";
+import { memoryFromOccurrence, memoryFromPattern } from "./memory-models.js";
+import { MemoryConsolidator } from "./memory-consolidator.js";
+import { SessionMemoryExtractor } from "./memory-extractor.js";
 
 export interface AdaptiveAnalysisOptions {
   incremental?: boolean;
@@ -61,6 +64,8 @@ export class AdaptiveSessionAnalyzer {
   private clusterer: PatternClusterer;
   private ruleGenerator: LLMRuleGenerator;
   private db: SignalDictionaryDB;
+  private memoryConsolidator: MemoryConsolidator;
+  private memoryExtractor: SessionMemoryExtractor;
 
   constructor() {
     this.parser = new UnifiedSessionParser();
@@ -83,6 +88,8 @@ export class AdaptiveSessionAnalyzer {
     this.clusterer = new PatternClusterer();
     this.ruleGenerator = new LLMRuleGenerator();
     this.db = new SignalDictionaryDB();
+    this.memoryConsolidator = new MemoryConsolidator();
+    this.memoryExtractor = new SessionMemoryExtractor();
   }
 
   /**
@@ -166,7 +173,7 @@ export class AdaptiveSessionAnalyzer {
     const patterns: Pattern[] = [];
 
     // Step 1: Match signals in user messages
-    const matchResults: MatchResult[] = [];
+    let matchResults: MatchResult[] = [];
     const unmatchedContent: string[] = [];
 
     for (const msg of userMessages) {
@@ -208,8 +215,20 @@ export class AdaptiveSessionAnalyzer {
       extractionResult = await this.signalExtractor.extractSignals(unmatchedContent);
       logger.consoleError(`✓ Extracted ${extractionResult.new_signals_added} new signals`);
 
-      // Rebuild signal matcher with new signals
-      void this.signalMatcher.rebuild();
+      // Rebuild and re-run matching so newly learned signals affect the
+      // current session as well as future sessions.
+      this.signalMatcher.rebuild();
+      matchResults = [];
+      unmatchedContent.length = 0;
+      for (const msg of userMessages) {
+        const result = await this.signalMatcher.match(
+          msg.content,
+          sessionData.session_id,
+          msg.line_number.toString()
+        );
+        matchResults.push(result);
+        if (!result.is_matched) unmatchedContent.push(msg.content);
+      }
     }
 
     // Step 3: Convert match results to patterns
@@ -232,6 +251,51 @@ export class AdaptiveSessionAnalyzer {
     // Calculate confidence for all patterns
     for (const pattern of patterns) {
       pattern.confidence = this.confidenceCalc.calculateConfidence(pattern);
+
+      const evidence = pattern.occurrences.map((occurrence) => {
+        const source = userMessages.find(message => message.content.includes(occurrence.user_input || ""));
+        return {
+          session_id: sessionData.session_id,
+          message_lines: source ? [source.line_number] : [],
+          tool_names: sessionData.tool_calls.map(tool => tool.tool_name),
+          source_excerpt: occurrence.user_input || pattern.description
+        };
+      });
+      const proceduralMemory = memoryFromPattern(pattern, evidence, this.inferScene(sessionData), "procedural");
+      proceduralMemory.namespace = { project_path: sessionData.project_path, session_id: sessionData.session_id };
+      const mutation = this.memoryConsolidator.persist(proceduralMemory);
+      logger.debug("memory", `Consolidated ${mutation.decision} memory for ${sessionData.session_id}`);
+
+      // Preserve the session-specific episode and its original wording. Only
+      // repeated, validated observations should become reusable procedures.
+      for (const occurrence of pattern.occurrences) {
+        const source = userMessages.find(message => message.content === occurrence.user_input);
+        const episodicMemory = memoryFromOccurrence(
+          pattern,
+          occurrence,
+          {
+            session_id: sessionData.session_id,
+            message_lines: source ? [source.line_number] : [],
+            tool_names: sessionData.tool_calls.map(tool => tool.tool_name),
+            source_excerpt: occurrence.user_input || pattern.description
+          },
+          this.inferScene(sessionData)
+        );
+        episodicMemory.namespace = { project_path: sessionData.project_path, session_id: sessionData.session_id };
+        this.memoryConsolidator.persist(episodicMemory);
+      }
+    }
+
+    // Background-style reflection: extract facts/preferences and contextual
+    // decisions from the full episode after signal-based analysis completes.
+    // The extractor falls back to deterministic heuristics when no LLM exists.
+    const reflectedMemories = await this.memoryExtractor.extract(
+      sessionData,
+      patterns,
+      this.inferScene(sessionData)
+    );
+    for (const memory of reflectedMemories) {
+      this.memoryConsolidator.persist(memory);
     }
 
     // Cache results
@@ -357,18 +421,25 @@ export class AdaptiveSessionAnalyzer {
     const description = this.consolidateDescriptions(descriptions, type);
 
     // Extract timestamps from results - MatchResult doesn't have timestamp field
-    const firstTimestamp = new Date().toISOString();
-    const lastTimestamp = new Date().toISOString();
+    const sourceMessages = sessionData.messages.filter(message =>
+      results.some(result => result.content === message.content)
+    );
+    const firstTimestamp = sourceMessages[0]?.timestamp || new Date().toISOString();
+    const lastTimestamp = sourceMessages[sourceMessages.length - 1]?.timestamp || firstTimestamp;
 
     const pattern = createPattern({
       type,
       description,
-      occurrences: results.map((result) => ({
+      occurrences: results.map((result) => {
+        const source = sessionData.messages.find(message => message.content === result.content);
+        return {
         session_id: sessionData.session_id,
-        timestamp: new Date().toISOString(),
-        user_action: "explicit_correction" as const,
-        context: result.matched_signals.map(s => s.signal_text).join(", ")
-      })),
+        timestamp: source?.timestamp || firstTimestamp,
+        user_action: this.inferUserAction(type),
+        context: result.matched_signals.map(s => s.signal_text).join(", "),
+        user_input: result.content
+        };
+      }),
       first_seen: firstTimestamp,
       last_seen: lastTimestamp
     });
@@ -376,6 +447,20 @@ export class AdaptiveSessionAnalyzer {
     pattern.keywords = Array.from(keywordSet);
 
     return pattern;
+  }
+
+  private inferUserAction(type: PatternType): "explicit_correction" | "amend" | "undo" | "accept" {
+    if (type === PatternType.REPEATED_CORRECTION || type === PatternType.ANTI_PATTERN) {
+      return "explicit_correction";
+    }
+    return type === PatternType.PREFERENCE ? "accept" : "amend";
+  }
+
+  private inferScene(sessionData: SessionData) {
+    const text = sessionData.messages.map(message => message.content).join(" ").toLowerCase();
+    const tech = ["typescript", "javascript", "python", "react", "vue", "sqlite", "postgres", "node"].filter(term => text.includes(term));
+    const functional = ["testing", "database", "authentication", "api", "performance", "security"].filter(term => text.includes(term));
+    return { tech, functional, business: [] };
   }
 
   /**

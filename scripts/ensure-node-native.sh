@@ -29,11 +29,14 @@ ensure_better_sqlite3() {
         # Force the install lifecycle script to run. This handles machines
         # with npm config set to ignore-scripts, which otherwise leaves the
         # old ABI-specific .node file untouched.
-        if ! (cd "$mcp_server_dir" && "${npm_command[@]}" rebuild better-sqlite3 --build-from-source --ignore-scripts=false) \
+        # npm 11+ warns about the legacy --build-from-source CLI config. Pass
+        # the node-gyp option through npm's supported environment variable so
+        # npm itself does not treat it as an unknown command-line config.
+        if ! (cd "$mcp_server_dir" && npm_config_build_from_source=true "${npm_command[@]}" rebuild better-sqlite3 --ignore-scripts=false) \
             || ! (cd "$mcp_server_dir" && "$node_bin" -e "require('better-sqlite3')") >/dev/null 2>&1; then
             echo "Initial better-sqlite3 rebuild failed; reinstalling its native build..." >&2
             rm -rf "$mcp_server_dir/node_modules/better-sqlite3/build"
-            (cd "$mcp_server_dir" && "${npm_command[@]}" install better-sqlite3 --build-from-source --ignore-scripts=false --force)
+            (cd "$mcp_server_dir" && npm_config_build_from_source=true "${npm_command[@]}" install better-sqlite3 --ignore-scripts=false --force)
         fi
     fi
 

@@ -47,6 +47,8 @@ import { SEARCH_KNOWLEDGE_DESCRIPTION, emptyKnowledgeBaseMessage, noMatchMessage
 import { ProactiveRuleResourceProvider } from "./resources/proactive-rules.js";
 import { BatchRebuildEngine } from "./core/batch-rebuild.js";
 import { PatternEvolutionManager } from "./storage/pattern-evolution.js";
+import { MemoryRepository } from "./core/memory-models.js";
+import { createDefaultMemoryRepository } from "./storage/memory-sqlite-store.js";
 
 // ============================================================================
 // Initialization
@@ -124,6 +126,7 @@ let claudeIndexExporter: ClaudeIndexExporter;
 let statsAnalyzer: RuleUsageStatsAnalyzer;
 let batchRebuildEngine: BatchRebuildEngine;
 let patternEvolution: PatternEvolutionManager;
+let memoryStore: MemoryRepository;
 // Adaptive pattern recognition components (initialized but reserved for future use)
 // Reserved for future adaptive pattern recognition features
 let _signalDB: SignalDictionaryDB;
@@ -142,6 +145,7 @@ async function ensureInitialized() {
     const config = loadConfig();
 
     indexManager = new RuleIndexManager();
+    memoryStore = createDefaultMemoryRepository();
 
     // Trigger migration if needed (JSON → SQLite)
     const migrationStatus = indexManager.getMigrationStatus();
@@ -344,6 +348,24 @@ Keywords are matched against rule descriptions, titles, and content. Use specifi
         },
       },
       {
+        name: "search_memory",
+        description: "Search structured semantic, episodic, and procedural memories learned from sessions. Results include provenance, confidence, scope, and temporal status.",
+        inputSchema: {
+          type: "object",
+          properties: {
+            query: {
+              type: "string",
+              description: "Natural-language query such as 'SQLite migration testing' or 'user preference for error handling'."
+            },
+            limit: {
+              type: "number",
+              description: "Maximum number of active memories to return. Default: 8."
+            }
+          },
+          required: ["query"]
+        }
+      },
+      {
         name: "get_rule_details",
         description: `Get the full content and details of a specific rule by ID.
 
@@ -482,6 +504,10 @@ Returns: Rule metadata + full content (title, description, how_to_apply, when_to
             rule_id: {
               type: "string",
               description: "ID of rule",
+            },
+            memory_id: {
+              type: "string",
+              description: "Optional memory ID to update memory usage strength alongside rule feedback",
             },
           },
           required: ["rule_id"],
@@ -1003,6 +1029,9 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
       case "search_knowledge":
         return await handleSearchKnowledge(request.params.arguments);
+
+      case "search_memory":
+        return await handleSearchMemory(request.params.arguments);
 
       case "get_rule_details":
         return await handleGetRuleDetails(request.params.arguments);
@@ -1543,6 +1572,48 @@ function formatRuleForSearch(rule: any, content: any, index?: number): string {
   return markdown;
 }
 
+async function handleSearchMemory(args: any) {
+  const query = typeof args?.query === "string" ? args.query.trim() : "";
+  const limit = typeof args?.limit === "number" ? Math.max(1, Math.min(50, args.limit)) : 8;
+  if (!query) {
+    return { content: [{ type: "text", text: JSON.stringify({ success: false, error: "query is required" }) }] };
+  }
+
+  const scoredMemories = memoryStore.searchScored
+    ? memoryStore.searchScored(query, limit)
+    : memoryStore.search(query, limit).map(memory => ({ memory, score: 0, reasons: ["legacy-search"] }));
+  return {
+    content: [{
+      type: "text",
+      text: JSON.stringify({
+        success: true,
+        query,
+        count: scoredMemories.length,
+        memories: scoredMemories.map(result => ({
+          score: result.score,
+          match_reasons: result.reasons,
+          ...(() => { const memory = result.memory; return {
+          id: memory.id,
+          kind: memory.kind,
+          content: memory.content,
+          summary: memory.summary,
+          pattern_type: memory.pattern_type,
+          scene: memory.scene,
+          keywords: memory.keywords,
+          confidence: memory.confidence,
+          importance: memory.importance,
+          strength: memory.strength,
+          valid_from: memory.valid_from,
+          valid_to: memory.valid_to,
+          status: memory.status,
+          evidence: memory.evidence
+          }; })()
+        }))
+      }, null, 2)
+    }]
+  };
+}
+
 async function handleSearchKnowledge(args: any) {
   const sceneJson = args.scene_json as string | undefined;
   const keywords = args.keywords as string | undefined;
@@ -1717,6 +1788,15 @@ async function handleSearchKnowledge(args: any) {
       }
 
       let markdown = `# Found ${matches.length} Matching Rule${matches.length > 1 ? 's' : ''}\n\n`;
+
+      const relatedMemories = memoryStore.search(kwList.join(" "), 5, { projectPath: currentProject });
+      if (relatedMemories.length > 0) {
+        markdown += `## Related Learned Memories\n\n`;
+        for (const memory of relatedMemories) {
+          markdown += `- **${memory.kind}** ${memory.summary} (confidence ${(memory.confidence * 100).toFixed(0)}%, evidence ${memory.evidence.length})\n`;
+        }
+        markdown += "\n";
+      }
 
       matches.forEach((m, idx) => {
         const ruleContent = contentManager.loadContent(m.rule.id);
@@ -2551,6 +2631,7 @@ async function handleRollbackRule(args: any) {
 
 async function handleRecordFeedback(args: any) {
   const ruleId = args.rule_id as string;
+  const memoryId = args.memory_id as string | undefined;
   const feedbackType = args.feedback_type as "used" | "ignored" | "corrected" | "disabled";
   const userRating = args.user_rating as number | undefined;
   const context = args.context as string | undefined;
@@ -2564,6 +2645,10 @@ async function handleRecordFeedback(args: any) {
   };
 
   adaptiveConfidence.recordFeedback(feedback);
+  if (memoryId && memoryStore.recordUsage) {
+    const event = feedbackType === "used" ? "applied" : feedbackType === "corrected" ? "corrected" : feedbackType === "disabled" ? "rejected" : "recalled";
+    memoryStore.recordUsage(memoryId, event);
+  }
   logger.info("feedback", `Recorded ${feedbackType} feedback for rule ${ruleId}`, {
     rating: userRating,
   });
