@@ -37,7 +37,7 @@ export async function summarize(options: SummarizeOptions) {
 
   cliLogger.print('Options:');
   cliLogger.print(`  Force reanalysis: ${(options.force || options.all) ? 'Yes' : 'No (unanalyzed only)'}`);
-  cliLogger.print(`  AI enhancement: ${options.enhance ? 'Yes' : options.noLlm ? 'No' : 'Yes (default)'}`);
+  cliLogger.print(`  AI enhancement: ${options.noLlm ? 'No' : 'Yes'}`);
   if (options.minConfidence !== undefined) {
     cliLogger.print(`  Min confidence: ${options.minConfidence}`);
   }
@@ -69,7 +69,10 @@ export async function summarize(options: SummarizeOptions) {
       minConfidence: options.minConfidence ?? 0.6,
       dryRun: !!options.dryRun,
       noCleanup: !!options.noCleanup,
-      noLlm: !!(options.noLlm || !options.enhance),
+      // Commander sets `noLlm` to true only when --no-llm is supplied.
+      // `--enhance` is documented as enabled by default, so an omitted
+      // --enhance flag must not accidentally disable LLM enhancement.
+      noLlm: !!options.noLlm,
       noExport: !!options.noExport,
     });
 
