@@ -6,6 +6,7 @@
 #   ./scripts/search-knowledge.sh --keywords "sqlite,error"
 #   ./scripts/search-knowledge.sh --scene-json '{"tech":["typescript"]}'
 #   ./scripts/search-knowledge.sh --rule-id RULE-001
+#   ./scripts/search-knowledge.sh --keywords "sqlite" --full-display
 
 set -euo pipefail
 
@@ -60,6 +61,7 @@ const optionMap = {
   "--scopes": "scopes",
   "--current-project": "current_project",
   "--organization-id": "organization_id",
+  "--full-display": "full_display",
 };
 
 function usage(message) {
@@ -77,6 +79,7 @@ Options:
   --scopes <csv>         global,organization,project
   --current-project <p>  Project path for project-scoped rules
   --organization-id <id> Organization identifier
+  --full-display          Return all stored rule fields, including keywords and scene
   --record-feedback      Record normal search feedback (default: skipped)
   --help                 Show this help`);
   process.exit(message ? 2 : 0);
@@ -91,6 +94,10 @@ for (let i = 0; i < cliArgs.length; i += 1) {
   }
   const key = optionMap[arg];
   if (key) {
+    if (key === "full_display") {
+      args[key] = true;
+      continue;
+    }
     if (i + 1 >= cliArgs.length) usage(`${arg} requires a value`);
     args[key] = cliArgs[++i];
     continue;

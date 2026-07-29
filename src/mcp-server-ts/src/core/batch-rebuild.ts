@@ -407,12 +407,12 @@ export class BatchRebuildEngine {
 
     // Export to Claude index
     logger.debug("batch-rebuild", "\nExporting to Claude index...");
-    const exportEligible = this.indexManager.listRules({ minConfidence: 0.6 }).length;
-    logger.debug("batch-rebuild", `  Export filter: ${exportEligible} rules meet confidence >= 0.6`);
+    const exportEligible = this.indexManager.listRules({ minConfidence }).length;
+    logger.debug("batch-rebuild", `  Export filter: ${exportEligible} rules meet confidence >= ${minConfidence}`);
     const exported = this.exporter.export({
       strategy: "category-balanced",
       limit: 10,
-      minConfidence: 0.6,
+      minConfidence,
     });
 
     logger.info("batch-rebuild", `✓ Exported ${exported.rulesExported} rules to Claude index`);

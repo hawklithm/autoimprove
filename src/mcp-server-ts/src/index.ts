@@ -344,6 +344,11 @@ Keywords are matched against rule descriptions, titles, and content. Use specifi
 - "global,project" - Universal + current project rules
 - "organization,project" - Organization + project rules (no global)`,
             },
+            full_display: {
+              type: "boolean",
+              description: "Return all stored rule fields, including keywords, scene, scope, metadata, examples, and related rules. Default: false (agent-focused summary).",
+              default: false,
+            },
           },
         },
       },
@@ -1548,18 +1553,47 @@ async function handleGenerateRules(args: any) {
   };
 }
 
-function formatRuleForSearch(rule: any, content: any, index?: number): string {
+function formatRuleForSearch(rule: any, content: any, index?: number, fullDisplay = false): string {
   let markdown = `${index !== undefined ? `## ${index}. ` : "# "}${content?.title || rule.id}\n\n`;
   markdown += `**Rule ID:** \`${rule.id}\`\n\n`;
-  markdown += `**Priority:** ${rule.priority} | **Confidence:** ${(rule.confidence * 100).toFixed(0)}%\n\n`;
+  markdown += `**Confidence:** ${(rule.confidence * 100).toFixed(0)}%\n\n`;
+
+  if (fullDisplay) {
+    markdown += `**Priority:** ${rule.priority}\n\n`;
+    markdown += "**Type:** " + (rule.type || "unknown") + "\n\n";
+    markdown += "**Keywords:** " + ((rule.keywords || []).join(", ") || "none") + "\n\n";
+    markdown += "## Scene\n\n";
+    markdown += "- **Tech:** " + ((rule.scenes?.tech || []).join(", ") || "none") + "\n";
+    markdown += "- **Functional:** " + ((rule.scenes?.functional || []).join(", ") || "none") + "\n";
+    markdown += "- **Business:** " + ((rule.scenes?.business || []).join(", ") || "none") + "\n\n";
+    markdown += "**Scope:** " + (rule.scope || "global") + "\n\n";
+    if (rule.scope_context && Object.keys(rule.scope_context).length > 0) {
+      markdown += "**Scope Context:**\n\n```json\n" +
+        JSON.stringify(rule.scope_context, null, 2) + "\n```\n\n";
+    }
+    markdown += "**Created At:** " + (rule.created_at || "unknown") + "\n\n";
+    markdown += "**Updated At:** " + (rule.updated_at || "unknown") + "\n\n";
+  }
 
   if (!content) {
     return markdown + `**Content:** unavailable (the index entry exists, but its content file was not found)\n\n`;
   }
 
   if (content.description) markdown += `**Description:** ${content.description}\n\n`;
-  if (content.content) markdown += `## Rule Content\n\n${content.content}\n\n`;
-  if (content.reason) markdown += `## Reason\n\n${content.reason}\n\n`;
+  // The legacy `content` field is usually a complete markdown document that
+  // repeats the title and description already rendered above. Keep it for
+  // full inspection, but omit it from the agent-focused response to avoid
+  // sending the same rule twice.
+  const hasStructuredContent = Boolean(
+    content.description ||
+    content.how_to_apply?.length ||
+    content.when_to_use?.length ||
+    content.exceptions?.length
+  );
+  if (content.content && (fullDisplay || !hasStructuredContent)) {
+    markdown += `## Rule Content\n\n${content.content}\n\n`;
+  }
+  if (fullDisplay && content.reason) markdown += `## Reason\n\n${content.reason}\n\n`;
   if (content.how_to_apply?.length) {
     markdown += `## How to Apply\n\n${content.how_to_apply.map((item: string) => `- ${item}`).join("\n")}\n\n`;
   }
@@ -1568,6 +1602,24 @@ function formatRuleForSearch(rule: any, content: any, index?: number): string {
   }
   if (content.exceptions?.length) {
     markdown += `## Exceptions\n\n${content.exceptions.map((item: string) => `- ${item}`).join("\n")}\n\n`;
+  }
+  if (fullDisplay) {
+    if (content.examples?.length) {
+      markdown += "## Examples\n\n" + content.examples.map((example: any, exampleIndex: number) => {
+        const bad = example.bad ? "\n**Bad:**\n\n```\n" + example.bad + "\n```\n" : "";
+        return "### Example " + (exampleIndex + 1) +
+          (example.language ? " (" + example.language + ")" : "") + "\n" + bad +
+          "\n**Good:**\n\n```\n" + example.good + "\n```\n\n" +
+          (example.explanation || "");
+      }).join("\n\n") + "\n\n";
+    }
+    if (content.related_rules?.length) {
+      markdown += "**Related Rules:** " + content.related_rules.join(", ") + "\n\n";
+    }
+    if (content.metadata && Object.keys(content.metadata).length > 0) {
+      markdown += "## Metadata\n\n```json\n" +
+        JSON.stringify(content.metadata, null, 2) + "\n```\n\n";
+    }
   }
   return markdown;
 }
@@ -1622,6 +1674,7 @@ async function handleSearchKnowledge(args: any) {
   const currentProject = args.current_project as string | undefined;
   const organizationId = args.organization_id as string | undefined;
   const scopesStr = args.scopes as string | undefined;
+  const fullDisplay = args.full_display === true;
 
   const startTime = Date.now();
 
@@ -1695,7 +1748,7 @@ async function handleSearchKnowledge(args: any) {
         });
       }
 
-      const markdown = formatRuleForSearch(rule, content);
+      const markdown = formatRuleForSearch(rule, content, undefined, fullDisplay);
 
       return {
         content: [
@@ -1802,11 +1855,11 @@ async function handleSearchKnowledge(args: any) {
         const ruleContent = contentManager.loadContent(m.rule.id);
         if (!ruleContent) {
           logger.warn("search_knowledge", `Failed to load content for rule ${m.rule.id}`);
-          markdown += formatRuleForSearch(m.rule, null, idx + 1);
+          markdown += formatRuleForSearch(m.rule, null, idx + 1, fullDisplay);
           markdown += `---\n\n`;
           return;
         }
-        markdown += formatRuleForSearch(m.rule, ruleContent, idx + 1);
+        markdown += formatRuleForSearch(m.rule, ruleContent, idx + 1, fullDisplay);
         markdown += `---\n\n`;
       });
 
@@ -1983,12 +2036,12 @@ async function handleSearchKnowledge(args: any) {
 
       if (!ruleContent) {
         logger.warn("search_knowledge", `Failed to load content for rule ${m.rule.id}`);
-        markdown += formatRuleForSearch(m.rule, null, idx + 1);
+        markdown += formatRuleForSearch(m.rule, null, idx + 1, fullDisplay);
         markdown += `---\n\n`;
         return;
       }
 
-      markdown += formatRuleForSearch(m.rule, ruleContent, idx + 1);
+      markdown += formatRuleForSearch(m.rule, ruleContent, idx + 1, fullDisplay);
       markdown += `---\n\n`;
     });
 
@@ -2043,7 +2096,7 @@ async function handleSearchKnowledge(args: any) {
   rules.forEach((r, idx) => {
     const ruleContent = contentManager.loadContent(r.id);
 
-    markdown += formatRuleForSearch(r, ruleContent, idx + 1);
+    markdown += formatRuleForSearch(r, ruleContent, idx + 1, fullDisplay);
     markdown += `---\n\n`;
   });
 

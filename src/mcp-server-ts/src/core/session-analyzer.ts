@@ -16,6 +16,9 @@ import { statSync } from "fs";
 import { loadConfig } from "../storage/init.js";
 import { shouldUseNewPipeline } from "./local-ml-rollout.js";
 import { logger } from "./logger.js";
+import { memoryFromOccurrence, memoryFromPattern } from "./memory-models.js";
+import { MemoryConsolidator } from "./memory-consolidator.js";
+import { SessionMemoryExtractor } from "./memory-extractor.js";
 
 export function isContextContinuationMessage(content: string): boolean {
   const normalized = content.trim().toLowerCase();
@@ -33,6 +36,8 @@ export class SessionAnalyzer {
   private compactCache: CompactCacheManager;
   private clusterer: MessageClusterer;
   private preFilter: PreFilter;
+  private memoryConsolidator: MemoryConsolidator;
+  private memoryExtractor: SessionMemoryExtractor;
   private lastPreFilterResult: FilterResult | null = null;
 
   constructor() {
@@ -42,6 +47,8 @@ export class SessionAnalyzer {
     this.compactCache = new CompactCacheManager();
     this.clusterer = new MessageClusterer();
     this.preFilter = new PreFilter();
+    this.memoryConsolidator = new MemoryConsolidator();
+    this.memoryExtractor = new SessionMemoryExtractor();
   }
 
   /**
@@ -127,6 +134,52 @@ export class SessionAnalyzer {
     );
   }
 
+  /** Persist procedural, episodic, and reflected memories for every standard analysis. */
+  private async persistSessionMemories(sessionData: SessionData, patterns: Pattern[]): Promise<void> {
+    const scene = this.inferMemoryScene(sessionData);
+    const userMessages = sessionData.messages.filter(message => message.role === "user");
+    const toolNames = sessionData.tool_calls.map(tool => tool.tool_name);
+
+    for (const pattern of patterns) {
+      const evidence = pattern.occurrences.map(occurrence => {
+        const source = userMessages.find(message => message.content.includes(occurrence.user_input || ""));
+        return {
+          session_id: sessionData.session_id,
+          message_lines: source ? [source.line_number] : [],
+          tool_names: toolNames,
+          source_excerpt: (occurrence.user_input || pattern.description).slice(0, 500)
+        };
+      });
+      const procedural = memoryFromPattern(pattern, evidence, scene, "procedural");
+      procedural.namespace = { project_path: sessionData.project_path, session_id: sessionData.session_id };
+      this.memoryConsolidator.persist(procedural);
+
+      for (const occurrence of pattern.occurrences) {
+        const source = userMessages.find(message => message.content === occurrence.user_input);
+        const episodic = memoryFromOccurrence(pattern, occurrence, {
+          session_id: sessionData.session_id,
+          message_lines: source ? [source.line_number] : [],
+          tool_names: toolNames,
+          source_excerpt: (occurrence.user_input || pattern.description).slice(0, 500)
+        }, scene);
+        episodic.namespace = { project_path: sessionData.project_path, session_id: sessionData.session_id };
+        this.memoryConsolidator.persist(episodic);
+      }
+    }
+
+    const reflected = await this.memoryExtractor.extract(sessionData, patterns, scene);
+    for (const memory of reflected) this.memoryConsolidator.persist(memory);
+  }
+
+  private inferMemoryScene(sessionData: SessionData) {
+    const text = sessionData.messages.map(message => message.content).join(" ").toLowerCase();
+    return {
+      tech: ["typescript", "javascript", "python", "react", "vue", "sqlite", "postgres", "node"].filter(term => text.includes(term)),
+      functional: ["testing", "database", "authentication", "api", "performance", "security"].filter(term => text.includes(term)),
+      business: []
+    };
+  }
+
   /**
    * G1: emit a local_ml metrics summary when local_ml is enabled. Surfaces
    * pre-filter kept-rate and clustering singleton-rate for observability.
@@ -172,6 +225,8 @@ export class SessionAnalyzer {
     for (const pattern of patterns) {
       pattern.confidence = this.confidenceCalc.calculateConfidence(pattern);
     }
+
+    await this.persistSessionMemories(sessionData, patterns);
 
     // Cache results
     const stats = statSync(sessionFile);
@@ -236,6 +291,8 @@ export class SessionAnalyzer {
     for (const pattern of newPatterns) {
       pattern.confidence = this.confidenceCalc.calculateConfidence(pattern);
     }
+
+    await this.persistSessionMemories(partialSessionData, newPatterns);
 
     // D3: when semantic clustering is active, try incremental cluster merge
     // using cached centroids before falling back to full pattern merge.

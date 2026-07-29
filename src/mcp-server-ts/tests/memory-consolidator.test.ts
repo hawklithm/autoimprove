@@ -5,6 +5,7 @@ import { join } from "path";
 import { MemoryConsolidator } from "../src/core/memory-consolidator.js";
 import { MemoryRecord } from "../src/core/memory-models.js";
 import { MemoryStore } from "../src/storage/memory-store.js";
+import { SQLiteMemoryStore } from "../src/storage/memory-sqlite-store.js";
 
 function memory(id: string, content: string, session = "s1"): MemoryRecord {
   return {
@@ -26,6 +27,22 @@ function memory(id: string, content: string, session = "s1"): MemoryRecord {
 }
 
 describe("MemoryConsolidator", () => {
+  it("persists optional fields as SQL NULL values", () => {
+    const root = mkdtempSync(join(tmpdir(), "autoimprove-memory-sqlite-"));
+    try {
+      const store = new SQLiteMemoryStore(join(root, "memory.sqlite"));
+      const consolidator = new MemoryConsolidator(store);
+      const mutation = consolidator.persist(memory("sqlite-1", "Always run TypeScript tests before committing"));
+      expect(mutation.decision).toBe("ADD");
+      expect(store.list()).toHaveLength(1);
+      expect(store.list()[0].valid_to).toBeUndefined();
+      expect(store.list()[0].supersedes).toBeUndefined();
+      store.close();
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it("adds new memories and merges repeated evidence", () => {
     const root = mkdtempSync(join(tmpdir(), "autoimprove-memory-"));
     const path = join(root, "memories.jsonl");

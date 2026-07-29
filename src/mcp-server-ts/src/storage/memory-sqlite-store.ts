@@ -97,6 +97,8 @@ export class SQLiteMemoryStore implements MemoryRepository {
     return {
       ...record,
       pattern_type: record.pattern_type || null,
+      valid_to: record.valid_to ?? null,
+      supersedes: record.supersedes ?? null,
       scene_json: JSON.stringify(record.scene),
       keywords_json: JSON.stringify(record.keywords),
       evidence_json: JSON.stringify(record.evidence),
