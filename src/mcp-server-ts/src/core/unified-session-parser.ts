@@ -21,7 +21,7 @@ export class UnifiedSessionParser {
    * Get supported formats
    */
   getSupportedFormats(): string[] {
-    return ["claude-code", "codex"];
+    return ["claude-code", "codex", "kiro"];
   }
 }
 

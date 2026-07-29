@@ -26,6 +26,8 @@ export interface CompactCache {
 
   messages: CompactMessage[];
   tool_calls: CompactToolCall[];
+  metadata: Record<string, any>;
+  project_path?: string;
 
   statistics: {
     total_messages: number;
@@ -91,8 +93,12 @@ export class CompactCacheManager {
    * Get cache file path for a session file
    */
   private getCacheFilePath(sessionFile: string): string {
-    // Extract session ID from filename
-    const sessionId = sessionFile.split("/").pop()?.replace(".jsonl", "") || "unknown";
+    const normalized = sessionFile.replace(/\\/g, "/");
+    const filename = normalized.split("/").pop() || "";
+    const parent = normalized.split("/").slice(-2, -1)[0] || "";
+    const sessionId = filename === "messages.json"
+      ? parent.replace(/^sess_/, "")
+      : filename.replace(/\.(jsonl|json)$/, "") || "unknown";
     return join(this.cacheDir, `${sessionId}.compact.json`);
   }
 
@@ -118,7 +124,7 @@ export class CompactCacheManager {
       }
 
       // Cache version mismatch
-      if (cache.version !== "1.0") {
+      if (cache.version !== "1.1") {
         return true;
       }
 
@@ -146,7 +152,7 @@ export class CompactCacheManager {
 
     // Build compact cache
     const cache: CompactCache = {
-      version: "1.0",
+      version: "1.1",
       session_id: sessionData.session_id,
       original_file: sessionFile,
       original_size: stats.size,
@@ -167,6 +173,9 @@ export class CompactCacheManager {
         timestamp: tc.timestamp || "",
         line_number: tc.line_number
       })),
+
+      metadata: sessionData.metadata,
+      project_path: sessionData.project_path,
 
       statistics: {
         total_messages: sessionData.messages.length,
@@ -230,7 +239,8 @@ export class CompactCacheManager {
         timestamp: tc.timestamp,
         line_number: tc.line_number
       })),
-      metadata: {}
+      metadata: cache.metadata || {},
+      project_path: cache.project_path
     };
   }
 

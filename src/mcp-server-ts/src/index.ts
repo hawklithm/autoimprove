@@ -285,7 +285,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
             },
             session_dir: {
               type: "string",
-              description: "Path to session files directory (default: ~/.claude/sessions)",
+              description: "Path to session files directory (Claude: ~/.claude/sessions, Kiro: ~/.kiro/sessions)",
             },
             max_examples: {
               type: "number",

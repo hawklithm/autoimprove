@@ -441,6 +441,9 @@ export class BatchRebuildEngine {
    * Discover all session .jsonl and .json files
    */
   private discoverSessionFiles(baseDir: string): string[] {
+    if (baseDir.replace(/\\/g, "/").includes("/.kiro/sessions")) {
+      return this.discoverKiroSessionFiles(baseDir);
+    }
     const sessionFiles: string[] = [];
 
     try {
@@ -470,6 +473,28 @@ export class BatchRebuildEngine {
     }
 
     return sessionFiles;
+  }
+
+  private discoverKiroSessionFiles(baseDir: string): string[] {
+    const result: string[] = [];
+    const walk = (dir: string): void => {
+      let entries: string[];
+      try { entries = readdirSync(dir); } catch { return; }
+      for (const entry of entries) {
+        const path = join(dir, entry);
+        let stat;
+        try { stat = statSync(path); } catch { continue; }
+        if (stat.isDirectory()) { walk(path); continue; }
+        const normalized = path.replace(/\\/g, "/");
+        if (entry.endsWith(".jsonl") && normalized.includes("/.kiro/sessions/cli/")) {
+          result.push(path);
+        } else if (entry === "messages.json" && /\/sess_[^/]+\/messages\.json$/i.test(normalized)) {
+          result.push(path);
+        }
+      }
+    };
+    walk(baseDir);
+    return result;
   }
 
   /**
@@ -518,7 +543,12 @@ export class BatchRebuildEngine {
    * Extract session ID from file path
    */
   private extractSessionId(filePath: string): string {
-    const filename = filePath.split("/").pop() || "";
+    const normalized = filePath.replace(/\\/g, "/");
+    const filename = normalized.split("/").pop() || "";
+    if (filename === "messages.json") {
+      const parent = normalized.split("/").slice(-2, -1)[0] || "";
+      return parent.replace(/^sess_/, "");
+    }
     return filename.replace(/\.(jsonl|json)$/, "");
   }
 
