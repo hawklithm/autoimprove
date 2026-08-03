@@ -57,9 +57,34 @@ export class RuleStorageSQLite {
     if (schemaPath) {
       const schema = readFileSync(schemaPath, 'utf-8');
       this.db.exec(schema);
+      this.ensureRuleColumns();
       logger.info("rule-storage-sqlite", `Database schema initialized from ${schemaPath}`);
     } else {
       logger.warn("rule-storage-sqlite", "Schema file not found in any candidate path, database may not be properly initialized");
+    }
+  }
+
+  private ensureRuleColumns(): void {
+    const existing = new Set((this.db.prepare("PRAGMA table_info(rules)").all() as Array<{ name: string }>).map(column => column.name));
+    const columns: Record<string, string> = {
+      scope_project_id: "TEXT",
+      scope_team_id: "TEXT",
+      scope_repository: "TEXT",
+      scope_branch: "TEXT",
+      scope_confidence: "REAL",
+      scope_reason: "TEXT",
+      description: "TEXT",
+      source_memory_ids: "TEXT NOT NULL DEFAULT '[]'",
+      status: "TEXT NOT NULL DEFAULT 'active'",
+      last_validated_at: "TEXT",
+      last_applied_at: "TEXT",
+      usage_count: "INTEGER NOT NULL DEFAULT 0",
+      acceptance_count: "INTEGER NOT NULL DEFAULT 0",
+      correction_count: "INTEGER NOT NULL DEFAULT 0",
+      contradiction_count: "INTEGER NOT NULL DEFAULT 0"
+    };
+    for (const [name, type] of Object.entries(columns)) {
+      if (!existing.has(name)) this.db.exec(`ALTER TABLE rules ADD COLUMN ${name} ${type}`);
     }
   }
 
@@ -71,23 +96,32 @@ export class RuleStorageSQLite {
       // Insert rule metadata
       this.db.prepare(`
         INSERT INTO rules (
-          id, type, priority, confidence,
+           id, type, priority, confidence, status,
           tech_scene, functional_scene, business_scene,
-          scope, scope_project_path, scope_organization_id,
-          keywords, created_at, updated_at, content_file
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+           scope, scope_project_path, scope_project_id, scope_organization_id, scope_team_id, scope_repository, scope_branch,
+           scope_confidence, scope_reason, source_memory_ids, keywords, description, created_at, updated_at, content_file
+         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `).run(
         entry.id,
         entry.type,
         entry.priority,
         entry.confidence,
+        entry.status || "active",
         JSON.stringify(entry.scenes?.tech || []),
         JSON.stringify(entry.scenes?.functional || []),
         JSON.stringify(entry.scenes?.business || []),
         entry.scope || RuleScope.GLOBAL,
         entry.scope_context?.project_path || null,
+        entry.scope_context?.project_id || null,
         entry.scope_context?.organization_id || null,
+        entry.scope_context?.team_id || null,
+        entry.scope_context?.repository || null,
+        entry.scope_context?.branch || null,
+        entry.scope_confidence ?? null,
+        entry.scope_reason ?? null,
+        JSON.stringify(entry.source_memory_ids || []),
         JSON.stringify(entry.keywords),
+        entry.description || content.description || null,
         entry.created_at,
         entry.updated_at,
         `${entry.id}.md`
@@ -376,6 +410,44 @@ export class RuleStorageSQLite {
         values.push(JSON.stringify(updates.keywords));
       }
 
+      if (updates.description !== undefined) {
+        fields.push('description = ?');
+        values.push(updates.description);
+      }
+      if (updates.scope !== undefined) {
+        fields.push('scope = ?');
+        values.push(updates.scope);
+      }
+      if (updates.scope_context !== undefined) {
+        fields.push('scope_project_path = ?', 'scope_project_id = ?', 'scope_organization_id = ?', 'scope_team_id = ?', 'scope_repository = ?', 'scope_branch = ?');
+        values.push(
+          updates.scope_context.project_path || null,
+          updates.scope_context.project_id || null,
+          updates.scope_context.organization_id || null
+          , updates.scope_context.team_id || null,
+          updates.scope_context.repository || null,
+          updates.scope_context.branch || null
+        );
+      }
+      if (updates.scope_confidence !== undefined) {
+        fields.push('scope_confidence = ?');
+        values.push(updates.scope_confidence);
+      }
+      if (updates.scope_reason !== undefined) {
+        fields.push('scope_reason = ?');
+        values.push(updates.scope_reason);
+      }
+      if (updates.source_memory_ids !== undefined) {
+        fields.push('source_memory_ids = ?');
+        values.push(JSON.stringify(updates.source_memory_ids));
+      }
+      for (const field of ['status', 'last_validated_at', 'last_applied_at', 'usage_count', 'acceptance_count', 'correction_count', 'contradiction_count'] as const) {
+        if (updates[field] !== undefined) {
+          fields.push(`${field} = ?`);
+          values.push(updates[field]);
+        }
+      }
+
       fields.push('updated_at = ?');
       values.push(new Date().toISOString());
       values.push(ruleId);
@@ -462,6 +534,13 @@ export class RuleStorageSQLite {
       type: row.type,
       priority: row.priority,
       confidence: row.confidence,
+      status: row.status || "active",
+      last_validated_at: row.last_validated_at || undefined,
+      last_applied_at: row.last_applied_at || undefined,
+      usage_count: Number(row.usage_count || 0),
+      acceptance_count: Number(row.acceptance_count || 0),
+      correction_count: Number(row.correction_count || 0),
+      contradiction_count: Number(row.contradiction_count || 0),
       scenes: createScene({
         tech: JSON.parse(row.tech_scene || '[]'),
         functional: JSON.parse(row.functional_scene || '[]'),
@@ -470,8 +549,16 @@ export class RuleStorageSQLite {
       scope: row.scope as RuleScope,
       scope_context: {
         project_path: row.scope_project_path,
+        project_id: row.scope_project_id,
         organization_id: row.scope_organization_id
+        , team_id: row.scope_team_id
+        , repository: row.scope_repository
+        , branch: row.scope_branch
       },
+      scope_confidence: row.scope_confidence,
+      scope_reason: row.scope_reason,
+      source_memory_ids: JSON.parse(row.source_memory_ids || '[]'),
+      description: row.description,
       keywords: JSON.parse(row.keywords || '[]'),
       created_at: row.created_at,
       updated_at: row.updated_at

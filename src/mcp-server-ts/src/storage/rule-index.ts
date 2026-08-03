@@ -7,7 +7,7 @@
 import { readFileSync, writeFileSync, existsSync, mkdirSync, renameSync } from "fs";
 import { join } from "path";
 import { homedir } from "os";
-import { RuleIndex, RuleIndexEntry, createRuleIndex, createScene } from "../core/models.js";
+import { RuleIndex, RuleIndexEntry, createRuleContent, createRuleIndex, createScene } from "../core/models.js";
 import { logger } from "./../core/logger.js";
 import { RuleStorageSQLite } from "./rule-storage-sqlite.js";
 import { SQLiteMigration } from "./migrate-to-sqlite.js";
@@ -24,6 +24,7 @@ function normalizeRuleIndexEntry(entry: RuleIndexEntry | undefined | null): Rule
     ...entry,
     confidence: typeof entry.confidence === "number" && !isNaN(entry.confidence) ? entry.confidence : 0.5,
     keywords: Array.isArray(entry.keywords) ? entry.keywords : [],
+    source_memory_ids: Array.isArray(entry.source_memory_ids) ? entry.source_memory_ids : [],
     scenes: createScene(entry.scenes || undefined) // Normalizes missing tech/functional/business arrays
   };
 }
@@ -124,7 +125,9 @@ export class RuleIndexManager {
       // Load from SQLite
       const rules = this.sqliteStorage.listAllRules();
       return {
-        version: "2.0",
+        // Keep the public index contract compatible with the legacy JSON
+        // backend; the physical backend is exposed through getMigrationStatus.
+        version: "1.0",
         rules
       };
     }
@@ -157,6 +160,16 @@ export class RuleIndexManager {
   }
 
   saveIndex(index: RuleIndex): void {
+    if (this.useSQLite && this.sqliteStorage) {
+      // saveIndex historically meant "replace the complete index". Preserve
+      // that behavior when the active backend is SQLite as well.
+      this.sqliteStorage.clearAll();
+      for (const entry of index.rules || []) {
+        this.addRule(entry);
+      }
+      return;
+    }
+
     this.ensureDirectory();
 
     const indexPath = this.getIndexPath();
@@ -169,6 +182,9 @@ export class RuleIndexManager {
   }
 
   addRule(entry: RuleIndexEntry, content?: any): void {
+    if (!entry) {
+      throw new Error("Failed to normalize rule entry");
+    }
     if (this.useSQLite && this.sqliteStorage) {
       // Check if rule exists
       const existing = this.sqliteStorage.getRule(entry.id);
@@ -187,7 +203,15 @@ export class RuleIndexManager {
         const contentManager = new RuleContentManager();
         content = contentManager.loadContent(entry.id);
         if (!content) {
-          throw new Error(`Content not found for rule ${entry.id}`);
+          // Keep the index API backward compatible: older callers only
+          // supplied an index entry. SQLite still requires a content row, so
+          // materialize a minimal, deterministic fallback instead of failing
+          // the entire rebuild.
+          content = createRuleContent({
+            id: entry.id,
+            content: entry.description || entry.id,
+            reason: "Imported from rule index"
+          });
         }
       }
 

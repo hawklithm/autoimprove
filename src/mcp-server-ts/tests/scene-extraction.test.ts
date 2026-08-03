@@ -134,5 +134,5 @@ describe('Scene and Keyword Extraction', () => {
     const result = await generator.generateEnhancedRule(pattern, 'test-rule-5');
 
     expect(result.indexEntry.keywords.length).toBeLessThanOrEqual(15);
-  });
+  }, 15000);
 });

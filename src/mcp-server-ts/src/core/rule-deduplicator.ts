@@ -8,7 +8,7 @@
  * - Type consistency (10%)
  */
 
-import { RuleIndexEntry, RuleContent } from "./models.js";
+import { RuleIndexEntry, RuleContent, RuleScope } from "./models.js";
 
 export interface SimilarityResult {
   existingRuleId: string;
@@ -36,7 +36,8 @@ export class RuleDeduplicator {
    */
   findSimilarRules(
     newRule: RuleIndexEntry,
-    existingRules: RuleIndexEntry[]
+    existingRules: RuleIndexEntry[],
+    contentByRuleId?: Map<string, RuleContent>
   ): SimilarityResult[] {
     const similarities: SimilarityResult[] = [];
 
@@ -46,7 +47,18 @@ export class RuleDeduplicator {
         continue;
       }
 
-      const similarity = this.calculateSimilarity(newRule, existing);
+      // Scope is part of a rule's meaning. Never merge global, organization,
+      // and project rules, or two different project/organization contexts.
+      if (!this.isCompatibleScope(newRule, existing)) {
+        continue;
+      }
+
+      const similarity = this.calculateSimilarity(
+        newRule,
+        existing,
+        contentByRuleId?.get(newRule.id),
+        contentByRuleId?.get(existing.id)
+      );
 
       if (similarity >= this.SIMILAR_THRESHOLD) {
         similarities.push({
@@ -63,12 +75,36 @@ export class RuleDeduplicator {
     return similarities.sort((a, b) => b.similarity - a.similarity);
   }
 
+  private isCompatibleScope(a: RuleIndexEntry, b: RuleIndexEntry): boolean {
+    const scopeA = a.scope || RuleScope.GLOBAL;
+    const scopeB = b.scope || RuleScope.GLOBAL;
+    if (scopeA !== scopeB) return false;
+    if (scopeA === RuleScope.PROJECT) {
+      const pathA = this.normalizePath(a.scope_context?.project_path);
+      const pathB = this.normalizePath(b.scope_context?.project_path);
+      return Boolean(pathA && pathB && (pathA === pathB || pathA.startsWith(`${pathB}/`) || pathB.startsWith(`${pathA}/`)));
+    }
+    if (scopeA === RuleScope.ORGANIZATION) {
+      const orgA = a.scope_context?.organization_id;
+      const orgB = b.scope_context?.organization_id;
+      return Boolean(orgA && orgB && orgA.toLowerCase() === orgB.toLowerCase());
+    }
+    return true;
+  }
+
+  private normalizePath(path: string | undefined): string {
+    return (path || "").replace(/\\/g, "/").replace(/\/+$/, "").toLowerCase();
+  }
+
   /**
    * Calculate overall similarity between two rules
    */
-  calculateSimilarity(rule1: RuleIndexEntry, rule2: RuleIndexEntry): number {
+  calculateSimilarity(rule1: RuleIndexEntry, rule2: RuleIndexEntry, content1?: RuleContent, content2?: RuleContent): number {
     const keywordSim = this.calculateKeywordSimilarity(rule1.keywords, rule2.keywords);
-    const descSim = this.calculateDescriptionSimilarity(rule1.id, rule2.id);
+    const descSim = this.calculateDescriptionSimilarity(
+      rule1.description || content1?.description || content1?.content || "",
+      rule2.description || content2?.description || content2?.content || ""
+    );
     const sceneSim = this.calculateSceneSimilarity(rule1.scenes, rule2.scenes);
     const typeSim = rule1.type === rule2.type ? 1.0 : 0.0;
 
@@ -96,11 +132,14 @@ export class RuleDeduplicator {
    * Simple description similarity using word overlap
    * (lightweight alternative to embeddings)
    */
-  private calculateDescriptionSimilarity(id1: string, id2: string): number {
-    // For now, compare rule IDs as a simple heuristic
-    // In practice, this would load and compare actual rule descriptions
-    // but we avoid that here to keep deduplication lightweight
-    return 0.0; // Rely on keywords and scenes for similarity
+  private calculateDescriptionSimilarity(description1: string, description2: string): number {
+    if (!description1 || !description2) return 0;
+    const words1 = new Set(this.extractWords(description1));
+    const words2 = new Set(this.extractWords(description2));
+    if (words1.size === 0 && words2.size === 0) return 1;
+    if (words1.size === 0 || words2.size === 0) return 0;
+    return new Set([...words1].filter(word => words2.has(word))).size /
+      new Set([...words1, ...words2]).size;
   }
 
   /**
@@ -266,6 +305,10 @@ export class RuleDeduplicator {
       keywords: mergedKeywords,
       scenes: mergedScenes,
       confidence: mergedConfidence,
+      source_memory_ids: Array.from(new Set([
+        ...(existing.source_memory_ids || []),
+        ...(newRule.source_memory_ids || [])
+      ])),
       updated_at: now,
     };
 
@@ -299,6 +342,14 @@ export class RuleDeduplicator {
       ...existing,
       description: mergedDescription,
       examples: uniqueExamples,
+      metadata: {
+        ...existing.metadata,
+        ...newContent.metadata,
+        source_memory_ids: Array.from(new Set([
+          ...((existing.metadata?.source_memory_ids as string[] | undefined) || []),
+          ...((newContent.metadata?.source_memory_ids as string[] | undefined) || [])
+        ]))
+      }
     };
   }
 

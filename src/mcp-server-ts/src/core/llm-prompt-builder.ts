@@ -25,6 +25,8 @@ export interface PromptEvidence {
   contentExamples?: string[];
   /** User input context (optional) */
   userContext?: string[];
+  /** Project roots observed for scope classification (optional) */
+  projectPaths?: string[];
 }
 
 /**
@@ -163,6 +165,9 @@ ${qualitySection}`;
         // Add user context if available
         if (e.userContext && e.userContext.length > 0) {
           pattern.user_context = e.userContext;
+        }
+        if (e.projectPaths && e.projectPaths.length > 0) {
+          pattern.project_paths = e.projectPaths;
         }
 
         return pattern;
@@ -425,10 +430,10 @@ Generate 1 rule following the output format below.`;
     let section = `Output ${outputType}: `;
 
     if (isBatchMode) {
-      section += `[{"title":"...","description":"...","rationale":"...","scope":"global","scenes":{"tech":[],"functional":[],"business":[]},"how_to_apply":[...],"when_to_use":[...],"exceptions":[...],"source_patterns":["pattern 1","pattern 2"],"merged_count":2}]\n\n`;
+      section += `[{"title":"...","description":"...","rationale":"...","scope":"global","scope_confidence":0.9,"scope_reason":"...","scope_context":{},"scenes":{"tech":[],"functional":[],"business":[]},"how_to_apply":[...],"when_to_use":[...],"exceptions":[...],"source_patterns":["pattern 1","pattern 2"],"merged_count":2}]\n\n`;
       section += `If all patterns are similar, return 1 rule. If distinct, return multiple rules.\n\n`;
     } else {
-      section += `{"title":"...","description":"...","rationale":"...","scope":"global","scenes":{"tech":[],"functional":[],"business":[]},"how_to_apply":[...],"when_to_use":[...],"exceptions":[]}\n\n`;
+      section += `{"title":"...","description":"...","rationale":"...","scope":"global","scope_confidence":0.9,"scope_reason":"...","scope_context":{},"scenes":{"tech":[],"functional":[],"business":[]},"how_to_apply":[...],"when_to_use":[...],"exceptions":[]}\n\n`;
     }
 
     section += `Rules:
@@ -436,6 +441,9 @@ Generate 1 rule following the output format below.`;
 - description: what to do/avoid, 3-5 sentences, specific
 - rationale: why (2-4 sentences, concrete benefits/risks)
 - scope: rule applicability scope (required, see Scope Determination below)
+- scope_confidence: confidence in the scope classification (0.0-1.0)
+- scope_reason: concise evidence-based explanation for the scope
+- scope_context: organization_id/project_id/project_path when applicable
 - scenes: applicable technology/domain context (required, see Scene Tagging below)
 - how_to_apply: 3-6 actionable steps (array)
 - when_to_use: 3-5 conditions (array)
@@ -623,7 +631,8 @@ Quality checklist:
       confidence: pattern.confidence,
       occurrences: pattern.occurrences.length,
       keywords: pattern.keywords,
-      userContext: userContext.length > 0 ? userContext : undefined
+      userContext: userContext.length > 0 ? userContext : undefined,
+      projectPaths: pattern.project_paths
     };
   }
 

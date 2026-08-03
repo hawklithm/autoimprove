@@ -24,7 +24,7 @@ describe('PatternClusterer Intelligent Truncation', () => {
   });
 
   describe('extractRepresentativePhrase', () => {
-    it('should preserve complete words instead of cutting mid-word', () => {
+    it('should preserve complete words instead of cutting mid-word', async () => {
       const content: LabeledContent = {
         message_id: 'msg-1',
         session_id: 'test-session',
@@ -39,7 +39,7 @@ describe('PatternClusterer Intelligent Truncation', () => {
       // Store and cluster to trigger representative phrase extraction
       db.saveLabeledContent(content);
       const allContent = db.getLabeledContentByPatternType(PatternType.REPEATED_CORRECTION);
-      const clusters = clusterer.clusterPatterns(allContent);
+      const clusters = await clusterer.clusterPatterns(allContent);
 
       expect(clusters.length).toBeGreaterThan(0);
       const phrase = clusters[0].representative_phrases[0];
@@ -55,7 +55,7 @@ describe('PatternClusterer Intelligent Truncation', () => {
       }
     });
 
-    it('should extract first complete sentence when within limit', () => {
+    it('should extract first complete sentence when within limit', async () => {
       const content: LabeledContent = {
         message_id: 'msg-2',
         session_id: 'test-session',
@@ -69,7 +69,7 @@ describe('PatternClusterer Intelligent Truncation', () => {
 
       db.saveLabeledContent(content);
       const allContent = db.getLabeledContentByPatternType(PatternType.REPEATED_CORRECTION);
-      const clusters = clusterer.clusterPatterns(allContent);
+      const clusters = await clusterer.clusterPatterns(allContent);
 
       const phrase = clusters[0].representative_phrases[0];
 
@@ -77,7 +77,7 @@ describe('PatternClusterer Intelligent Truncation', () => {
       expect(phrase).not.toContain('second sentence');
     });
 
-    it('should extract first paragraph when within limit', () => {
+    it('should extract first paragraph when within limit', async () => {
       const content: LabeledContent = {
         message_id: 'msg-3',
         session_id: 'test-session',
@@ -91,7 +91,7 @@ describe('PatternClusterer Intelligent Truncation', () => {
 
       db.saveLabeledContent(content);
       const allContent = db.getLabeledContentByPatternType(PatternType.REPEATED_CORRECTION);
-      const clusters = clusterer.clusterPatterns(allContent);
+      const clusters = await clusterer.clusterPatterns(allContent);
 
       const phrase = clusters[0].representative_phrases[0];
 
@@ -99,7 +99,7 @@ describe('PatternClusterer Intelligent Truncation', () => {
       expect(phrase).not.toContain('Second paragraph');
     });
 
-    it('should return full content when shorter than limit', () => {
+    it('should return full content when shorter than limit', async () => {
       const content: LabeledContent = {
         message_id: 'msg-4',
         session_id: 'test-session',
@@ -113,7 +113,7 @@ describe('PatternClusterer Intelligent Truncation', () => {
 
       db.saveLabeledContent(content);
       const allContent = db.getLabeledContentByPatternType(PatternType.REPEATED_CORRECTION);
-      const clusters = clusterer.clusterPatterns(allContent);
+      const clusters = await clusterer.clusterPatterns(allContent);
 
       const phrase = clusters[0].representative_phrases[0];
 
@@ -121,7 +121,7 @@ describe('PatternClusterer Intelligent Truncation', () => {
       expect(phrase).not.toContain('...');
     });
 
-    it('should truncate at word boundary for long content', () => {
+    it('should truncate at word boundary for long content', async () => {
       const longContent = 'A'.repeat(50) + ' word boundary test ' + 'B'.repeat(200);
 
       const content: LabeledContent = {
@@ -137,7 +137,7 @@ describe('PatternClusterer Intelligent Truncation', () => {
 
       db.saveLabeledContent(content);
       const allContent = db.getLabeledContentByPatternType(PatternType.REPEATED_CORRECTION);
-      const clusters = clusterer.clusterPatterns(allContent);
+      const clusters = await clusterer.clusterPatterns(allContent);
 
       const phrase = clusters[0].representative_phrases[0];
 
@@ -151,7 +151,7 @@ describe('PatternClusterer Intelligent Truncation', () => {
       expect(phrase.length).toBeLessThanOrEqual(203); // 200 + "..."
     });
 
-    it('should handle content without sentence boundaries', () => {
+    it('should handle content without sentence boundaries', async () => {
       const content: LabeledContent = {
         message_id: 'msg-6',
         session_id: 'test-session',
@@ -165,7 +165,7 @@ describe('PatternClusterer Intelligent Truncation', () => {
 
       db.saveLabeledContent(content);
       const allContent = db.getLabeledContentByPatternType(PatternType.REPEATED_CORRECTION);
-      const clusters = clusterer.clusterPatterns(allContent);
+      const clusters = await clusterer.clusterPatterns(allContent);
 
       const phrase = clusters[0].representative_phrases[0];
 
@@ -180,7 +180,7 @@ describe('PatternClusterer Intelligent Truncation', () => {
   });
 
   describe('Regression: No more "AutoImprove Su..." truncation', () => {
-    it('should not create "AutoImprove Su..." pattern', () => {
+    it('should not create "AutoImprove Su..." pattern', async () => {
       const content: LabeledContent = {
         message_id: 'msg-7',
         session_id: 'test-session',
@@ -194,7 +194,7 @@ describe('PatternClusterer Intelligent Truncation', () => {
 
       db.saveLabeledContent(content);
       const allContent = db.getLabeledContentByPatternType(PatternType.REPEATED_CORRECTION);
-      const clusters = clusterer.clusterPatterns(allContent);
+      const clusters = await clusterer.clusterPatterns(allContent);
 
       const phrase = clusters[0].representative_phrases[0];
 
@@ -205,7 +205,7 @@ describe('PatternClusterer Intelligent Truncation', () => {
       expect(phrase).toContain('AutoImprove Summarize');
     });
 
-    it('should not create "**Single sessio" pattern', () => {
+    it('should not create "**Single sessio" pattern', async () => {
       const content: LabeledContent = {
         message_id: 'msg-8',
         session_id: 'test-session',
@@ -219,7 +219,7 @@ describe('PatternClusterer Intelligent Truncation', () => {
 
       db.saveLabeledContent(content);
       const allContent = db.getLabeledContentByPatternType(PatternType.REPEATED_CORRECTION);
-      const clusters = clusterer.clusterPatterns(allContent);
+      const clusters = await clusterer.clusterPatterns(allContent);
 
       const phrase = clusters[0].representative_phrases[0];
 
@@ -234,7 +234,7 @@ describe('PatternClusterer Intelligent Truncation', () => {
   });
 
   describe('Multiple representative phrases in cluster', () => {
-    it('should apply intelligent truncation to all phrases in cluster', () => {
+    it('should apply intelligent truncation to all phrases in cluster', async () => {
       const contents: LabeledContent[] = [
         {
           message_id: 'msg-9',
@@ -270,7 +270,7 @@ describe('PatternClusterer Intelligent Truncation', () => {
 
       contents.forEach(c => db.saveLabeledContent(c));
       const allContent = db.getLabeledContentByPatternType(PatternType.REPEATED_CORRECTION);
-      const clusters = clusterer.clusterPatterns(allContent);
+      const clusters = await clusterer.clusterPatterns(allContent);
 
       expect(clusters.length).toBeGreaterThan(0);
 

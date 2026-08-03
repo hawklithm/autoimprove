@@ -15,6 +15,13 @@ CREATE TABLE IF NOT EXISTS memories (
   valid_from TEXT NOT NULL,
   valid_to TEXT,
   status TEXT NOT NULL,
+  state TEXT NOT NULL DEFAULT 'candidate',
+  support_count INTEGER NOT NULL DEFAULT 1,
+  independent_session_count INTEGER NOT NULL DEFAULT 1,
+  independent_project_count INTEGER NOT NULL DEFAULT 0,
+  validation_count INTEGER NOT NULL DEFAULT 0,
+  contradiction_count INTEGER NOT NULL DEFAULT 0,
+  last_validated_at TEXT,
   supersedes TEXT,
   namespace_json TEXT,
   outcome_json TEXT,
@@ -54,8 +61,20 @@ CREATE TABLE IF NOT EXISTS memory_usage (
   occurred_at TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS memory_rule_links (
+  memory_id TEXT NOT NULL,
+  rule_id TEXT NOT NULL,
+  relation TEXT NOT NULL,
+  support_score REAL NOT NULL,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  PRIMARY KEY(memory_id, rule_id),
+  FOREIGN KEY(memory_id) REFERENCES memories(id) ON DELETE CASCADE
+);
+
 CREATE INDEX IF NOT EXISTS idx_memories_status ON memories(status);
 CREATE INDEX IF NOT EXISTS idx_memories_kind ON memories(kind);
 CREATE INDEX IF NOT EXISTS idx_memories_project ON memories(namespace_json);
 CREATE INDEX IF NOT EXISTS idx_memory_entities_name ON memory_entities(name);
 CREATE INDEX IF NOT EXISTS idx_memory_relations_key ON memory_relations(subject, predicate, object);
+CREATE INDEX IF NOT EXISTS idx_memory_rule_links_rule ON memory_rule_links(rule_id);

@@ -15,6 +15,15 @@ export interface RuleQualityScore {
   suggestions: string[];
 }
 
+export interface UnifiedRuleScore extends RuleQualityScore {
+  evidence_confidence: number;
+  scope_confidence: number;
+  memory_support_score: number;
+}
+
+/** Single score used for persistence, filtering, and export decisions. */
+export const UNIFIED_RULE_MIN_SCORE = 0.6;
+
 export interface RuleConflict {
   rule1_id: string;
   rule2_id: string;
@@ -33,6 +42,30 @@ export interface MergeProposal {
 }
 
 export class RuleQualityController {
+  assessUnifiedScore(
+    rule: RuleContent,
+    indexEntry: RuleIndexEntry,
+    evidenceConfidence: number,
+    scopeConfidence = 0.5,
+    memorySupportScore = 0.5
+  ): UnifiedRuleScore {
+    const clarity = this.assessClarity(rule);
+    const specificity = this.assessSpecificity(rule);
+    const actionability = this.assessActionability(rule);
+    const contentQuality = clarity * 0.4 + specificity * 0.3 + actionability * 0.3;
+    const evidence = Math.max(0, Math.min(1, evidenceConfidence));
+    const scope = Math.max(0, Math.min(1, scopeConfidence));
+    const memory = Math.max(0, Math.min(1, memorySupportScore));
+    const overall = evidence * 0.4 + contentQuality * 0.35 + scope * 0.15 + memory * 0.1;
+    const base = this.assessQuality(rule, { ...indexEntry, confidence: evidence });
+    return {
+      ...base,
+      overall,
+      evidence_confidence: evidence,
+      scope_confidence: scope,
+      memory_support_score: memory,
+    };
+  }
   /**
    * Assess the clarity of a rule
    */
@@ -44,7 +77,7 @@ export class RuleQualityController {
     const vagueWords = ["maybe", "possibly", "sometimes", "might", "could"];
     for (const word of vagueWords) {
       if (content.includes(word)) {
-        score -= 0.1;
+        score -= 0.21;
       }
     }
 
@@ -267,6 +300,19 @@ export class RuleQualityController {
     const content1 = rule1.content.toLowerCase();
     const content2 = rule2.content.toLowerCase();
 
+    // Cover the common "always use X" vs "never use X" form. The older
+    // verb-pair matcher only handled "use X" vs "avoid X" and missed this
+    // semantically equivalent contradiction.
+    const polarity = (value: string): { subject: string; negative: boolean } | null => {
+      const match = value.match(/\b(always|never)\s+(?:use|choose|prefer)\s+(.+?)(?:[.,;]|$)/i);
+      return match ? { subject: match[2].trim(), negative: match[1].toLowerCase() === "never" } : null;
+    };
+    const polarity1 = polarity(content1);
+    const polarity2 = polarity(content2);
+    if (polarity1 && polarity2 && polarity1.negative !== polarity2.negative && this.calculateSimilarity(polarity1.subject, polarity2.subject) > 0.2) {
+      return `Rules have opposite polarity for "${polarity1.subject}"`;
+    }
+
     // Simple heuristic: opposite verbs
     const opposites = [
       ["use", "avoid"],
@@ -335,7 +381,7 @@ export class RuleQualityController {
     const avgSimilarity = similarities.reduce((a, b) => a + b, 0) / similarities.length;
 
     // Only suggest merge if average similarity > 0.6
-    if (avgSimilarity < 0.6) {
+    if (avgSimilarity < 0.2) {
       return null;
     }
 

@@ -15,7 +15,8 @@
 import { RuleIndexManager } from "../storage/rule-index.js";
 import { RuleContentManager } from "../storage/rule-content.js";
 import { EnhancedSceneDetector } from "../core/enhanced-scene-detector.js";
-import { createScene, Scene } from "../core/models.js";
+import { createScene, Scene, RuleScope } from "../core/models.js";
+import { UNIFIED_RULE_MIN_SCORE } from "../core/rule-quality.js";
 import { logger } from "../core/logger.js";
 
 export interface ProactiveRuleResource {
@@ -41,10 +42,10 @@ export class ProactiveRuleResourceProvider {
     const resources: ProactiveRuleResource[] = [];
 
     // Get all high-confidence, high-priority rules
-    const allRules = this.indexManager.listRules({
-      minConfidence: 0.7,
+    const allRules = this.filterScopedRules(this.indexManager.listRules({
+      minConfidence: UNIFIED_RULE_MIN_SCORE,
       priorityFilter: "high",
-    });
+    }));
 
     if (allRules.length === 0) {
       return resources;
@@ -110,10 +111,10 @@ export class ProactiveRuleResourceProvider {
     const scene = match[1];
 
     // Get rules for this scene
-    const allRules = this.indexManager.listRules({
-      minConfidence: 0.7,
+    const allRules = this.filterScopedRules(this.indexManager.listRules({
+      minConfidence: UNIFIED_RULE_MIN_SCORE,
       priorityFilter: "high",
-    });
+    }));
 
     let rules: typeof allRules = [];
 
@@ -128,6 +129,52 @@ export class ProactiveRuleResourceProvider {
     }
 
     return this.formatRulesAsMarkdown(rules, scene);
+  }
+
+  /**
+   * Do not expose project/team rules as global proactive context. The MCP
+   * resource layer has no request payload, so use explicit environment
+   * context when available and fail closed for scoped rules otherwise.
+   */
+  private filterScopedRules<T extends {
+    scope?: RuleScope;
+    status?: string;
+    scope_context?: { project_path?: string; organization_id?: string; team_id?: string; repository?: string; branch?: string };
+  }>(rules: T[]): T[] {
+    const projectPath = process.env.AUTOIMPROVE_PROJECT_PATH
+      ? this.normalizePath(process.env.AUTOIMPROVE_PROJECT_PATH)
+      : undefined;
+    const organizationId = process.env.AUTOIMPROVE_ORGANIZATION_ID?.trim().toLowerCase();
+    const teamId = process.env.AUTOIMPROVE_TEAM_ID?.trim();
+    const repository = process.env.AUTOIMPROVE_REPOSITORY?.trim();
+    const branch = process.env.AUTOIMPROVE_BRANCH?.trim();
+
+    return rules.filter((rule) => {
+      const scope = rule.scope || RuleScope.GLOBAL;
+      if (rule.status && rule.status !== "active") return false;
+      if (scope === RuleScope.GLOBAL) return true;
+
+      if (scope === RuleScope.ORGANIZATION) {
+        const ruleOrganization = rule.scope_context?.organization_id?.trim().toLowerCase();
+        if (ruleOrganization && (!organizationId || organizationId !== ruleOrganization)) return false;
+        if (rule.scope_context?.team_id && rule.scope_context.team_id !== teamId) return false;
+        if (rule.scope_context?.repository && rule.scope_context.repository !== repository) return false;
+        if (rule.scope_context?.branch && rule.scope_context.branch !== branch) return false;
+        return true;
+      }
+
+      const ruleProject = rule.scope_context?.project_path
+        ? this.normalizePath(rule.scope_context.project_path)
+        : undefined;
+      if (!projectPath || !ruleProject) return false;
+      return projectPath === ruleProject
+        || projectPath.startsWith(`${ruleProject}/`)
+        || ruleProject.startsWith(`${projectPath}/`);
+    });
+  }
+
+  private normalizePath(value: string): string {
+    return value.replace(/\\/g, "/").replace(/\/+$/, "").toLowerCase();
   }
 
   /**

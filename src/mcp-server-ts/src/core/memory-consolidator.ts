@@ -35,9 +35,34 @@ export class MemoryConsolidator {
         ...existing.memory,
         evidence: this.mergeEvidence(existing.memory, candidate),
         keywords: Array.from(new Set([...existing.memory.keywords, ...candidate.keywords])),
+        entities: this.mergeEntities(existing.memory.entities || [], candidate.entities || []),
+        relations: this.mergeRelations(existing.memory.relations || [], candidate.relations || []),
+        outcome: candidate.outcome?.status !== "unknown" ? candidate.outcome : existing.memory.outcome,
+        metadata: {
+          ...(existing.memory.metadata || {}),
+          ...(candidate.metadata || {}),
+          project_paths: Array.from(new Set([
+            ...((existing.memory.metadata?.project_paths as string[] | undefined) || []),
+            ...((candidate.metadata?.project_paths as string[] | undefined) || [])
+          ]))
+        },
         confidence: Math.max(existing.memory.confidence, candidate.confidence),
         importance: Math.max(existing.memory.importance, candidate.importance),
         strength: existing.memory.strength + candidate.strength,
+        state: this.nextState(existing.memory, candidate),
+        support_count: (existing.memory.support_count || 1) + (candidate.support_count || 1),
+        independent_session_count: new Set([
+          ...existing.memory.evidence.map(item => item.session_id),
+          ...candidate.evidence.map(item => item.session_id)
+        ]).size,
+        independent_project_count: new Set([
+          ...((existing.memory.metadata?.project_paths as string[] | undefined) || []),
+          ...((candidate.metadata?.project_paths as string[] | undefined) || []),
+          existing.memory.namespace?.project_path,
+          candidate.namespace?.project_path
+        ].filter(Boolean)).size,
+        validation_count: (existing.memory.validation_count || 0) + (candidate.validation_count || 0),
+        contradiction_count: (existing.memory.contradiction_count || 0) + (candidate.contradiction_count || 0),
         updated_at: candidate.updated_at
       };
       return { decision: "UPDATE", memory: merged, previous_id: existing.memory.id };
@@ -71,5 +96,23 @@ export class MemoryConsolidator {
     const left = new Set((a.relations || []).map(relation => `${relation.subject}|${relation.predicate}`));
     const right = new Set((b.relations || []).map(relation => `${relation.subject}|${relation.predicate}`));
     return left.size > 0 && [...left].some(key => right.has(key));
+  }
+
+  private mergeEntities(a: NonNullable<MemoryRecord["entities"]>, b: NonNullable<MemoryRecord["entities"]>) {
+    const merged = new Map(a.map(entity => [entity.id || `${entity.type}:${entity.name}`, entity]));
+    for (const entity of b) merged.set(entity.id || `${entity.type}:${entity.name}`, entity);
+    return Array.from(merged.values());
+  }
+
+  private mergeRelations(a: NonNullable<MemoryRecord["relations"]>, b: NonNullable<MemoryRecord["relations"]>) {
+    const merged = new Map(a.map(relation => [`${relation.subject}|${relation.predicate}|${relation.object}`, relation]));
+    for (const relation of b) merged.set(`${relation.subject}|${relation.predicate}|${relation.object}`, relation);
+    return Array.from(merged.values());
+  }
+
+  private nextState(existing: MemoryRecord, candidate: MemoryRecord): MemoryRecord["state"] {
+    if (existing.state === "validated" || candidate.state === "validated") return "validated";
+    const support = (existing.support_count || 1) + (candidate.support_count || 1);
+    return support >= 2 ? "supported" : "observed";
   }
 }

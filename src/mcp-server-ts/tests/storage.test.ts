@@ -13,6 +13,7 @@ describe("RuleIndexManager", () => {
   let tempDir: string;
   let originalHome: string | undefined;
   let originalStorageRoot: string | undefined;
+  let activeManager: RuleIndexManager | undefined;
 
   beforeEach(() => {
     // Create unique temp directory for each test
@@ -26,6 +27,10 @@ describe("RuleIndexManager", () => {
   });
 
   afterEach(() => {
+    // Release SQLite handles before removing the temporary directory on
+    // Windows.  SQLite keeps WAL/shm files locked until the connection closes.
+    activeManager?.close();
+
     // Restore env vars
     if (originalStorageRoot !== undefined) {
       process.env.AUTOIMPROVE_STORAGE_ROOT = originalStorageRoot;
@@ -40,7 +45,7 @@ describe("RuleIndexManager", () => {
   });
 
   it("should load empty index", () => {
-    const manager = new RuleIndexManager();
+    const manager = activeManager = new RuleIndexManager();
     const index = manager.loadIndex();
 
     expect(index.version).toBe("1.0");
@@ -48,7 +53,7 @@ describe("RuleIndexManager", () => {
   });
 
   it("should save and load index", () => {
-    const manager = new RuleIndexManager();
+    const manager = activeManager = new RuleIndexManager();
 
     const entry = {
       id: "rule-001",
@@ -70,7 +75,7 @@ describe("RuleIndexManager", () => {
   });
 
   it("should find a rule by ID without regard to case", () => {
-    const manager = new RuleIndexManager();
+    const manager = activeManager = new RuleIndexManager();
     const entry = {
       id: "rule-Case-001",
       type: PatternType.PREFERENCE,
@@ -93,7 +98,7 @@ describe("RuleIndexManager", () => {
   });
 
   it("should reject duplicate rule ID", () => {
-    const manager = new RuleIndexManager();
+    const manager = activeManager = new RuleIndexManager();
 
     const entry = {
       id: "rule-001",
@@ -112,7 +117,7 @@ describe("RuleIndexManager", () => {
   });
 
   it("should update rule", () => {
-    const manager = new RuleIndexManager();
+    const manager = activeManager = new RuleIndexManager();
 
     const entry = {
       id: "rule-001",
@@ -134,7 +139,7 @@ describe("RuleIndexManager", () => {
   });
 
   it("should remove rule", () => {
-    const manager = new RuleIndexManager();
+    const manager = activeManager = new RuleIndexManager();
 
     const entry = {
       id: "rule-001",
@@ -154,7 +159,7 @@ describe("RuleIndexManager", () => {
   });
 
   it("should list rules with filters", () => {
-    const manager = new RuleIndexManager();
+    const manager = activeManager = new RuleIndexManager();
 
     for (let i = 0; i < 3; i++) {
       const entry = {
@@ -181,7 +186,7 @@ describe("RuleIndexManager", () => {
   });
 
   it("should generate next ID", () => {
-    const manager = new RuleIndexManager();
+    const manager = activeManager = new RuleIndexManager();
 
     expect(manager.getNextRuleId()).toBe("rule-001");
 

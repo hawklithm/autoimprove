@@ -4,6 +4,7 @@
  */
 
 import { readFileSync } from "fs";
+import { basename } from "path";
 import { SessionExtractor, Message, ToolCall } from "./session-extractor.interface.js";
 import { logger } from "../logger.js";
 
@@ -15,7 +16,7 @@ export class CodexSessionExtractor extends SessionExtractor {
   protected extractSessionId(filePath: string): string {
     // Codex format: rollout-2026-04-11T23-04-49-019d7d12-fba7-70c1-9942-d5b67682a097.jsonl
     // Extract the UUID at the end
-    const fileName = filePath.split("/").pop()?.replace(".jsonl", "") || "unknown";
+    const fileName = basename(filePath).replace(/\.jsonl$/, "") || "unknown";
     const match = fileName.match(/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/);
     return match ? match[1] : fileName;
   }
@@ -79,6 +80,18 @@ export class CodexSessionExtractor extends SessionExtractor {
               line_number: lineNum
             };
             messages.push(message);
+          }
+        }
+
+        if (Array.isArray(payload.content)) {
+          for (const block of payload.content) {
+            if (!block || !["tool_use", "tool_call"].includes(block.type)) continue;
+            toolCalls.push({
+              tool_name: block.name || block.tool_name || "unknown",
+              input: block.input || block.arguments || {},
+              timestamp: data.timestamp,
+              line_number: lineNum
+            });
           }
         }
       }

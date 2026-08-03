@@ -37,9 +37,9 @@ describe("Personalizer", () => {
     expect(p.getSimilarityThreshold("u1")).toBeCloseTo(0.25, 2);
   });
 
-  it("updates centroid and tightens threshold toward positives via EMA", () => {
+  it("updates centroid and tightens threshold toward positives via EMA", async () => {
     for (let i = 0; i < 5; i++) {
-      p.recordFeedback("u1", "used", "use useMemo to avoid re-render");
+      await p.recordFeedback("u1", "used", "use useMemo to avoid re-render");
     }
     const path = join(TMP_ROOT, "personalization", "u1.json");
     expect(existsSync(path)).toBe(true);
@@ -50,27 +50,27 @@ describe("Personalizer", () => {
     expect(prof.matchThreshold).toBeGreaterThanOrEqual(0.62);
   });
 
-  it("loosens threshold when negatives dominate", () => {
+  it("loosens threshold when negatives dominate", async () => {
     for (let i = 0; i < 5; i++) {
-      p.recordFeedback("u2", "ignored", "unrelated noise signal text");
+      await p.recordFeedback("u2", "ignored", "unrelated noise signal text");
     }
     const prof = JSON.parse(require("fs").readFileSync(join(TMP_ROOT, "personalization", "u2.json"), "utf-8"));
     expect(prof.negative_count).toBe(5);
     expect(prof.matchThreshold).toBeLessThan(0.62);
   });
 
-  it("folds session signals into centroid via recordSessionAnalyzed", () => {
-    p.recordSessionAnalyzed("u3", ["use useMemo to avoid re-render", "prevent duplicate rendering with React.memo"]);
+  it("folds session signals into centroid via recordSessionAnalyzed", async () => {
+    await p.recordSessionAnalyzed("u3", ["use useMemo to avoid re-render", "prevent duplicate rendering with React.memo"]);
     const prof = JSON.parse(require("fs").readFileSync(join(TMP_ROOT, "personalization", "u3.json"), "utf-8"));
     expect(prof.positive_count).toBe(2);
     expect(prof.centroid.length).toBeGreaterThan(0);
   });
 
-  it("centroidSimilarity is higher for on-style text than off-style text", () => {
-    p.recordFeedback("u4", "used", "use useMemo to avoid re-render");
-    p.recordFeedback("u4", "used", "prevent duplicate rendering with React.memo");
-    const onStyle = p.centroidSimilarity("u4", "avoid re-render with useMemo");
-    const offStyle = p.centroidSimilarity("u4", "今天天气真好我们去吃饭吧");
+  it("centroidSimilarity is higher for on-style text than off-style text", async () => {
+    await p.recordFeedback("u4", "used", "use useMemo to avoid re-render");
+    await p.recordFeedback("u4", "used", "prevent duplicate rendering with React.memo");
+    const onStyle = await p.centroidSimilarity("u4", "avoid re-render with useMemo");
+    const offStyle = await p.centroidSimilarity("u4", "今天天气真好我们去吃饭吧");
     expect(onStyle).toBeGreaterThan(offStyle);
   });
 });

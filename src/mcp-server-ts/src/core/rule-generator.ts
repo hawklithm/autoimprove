@@ -54,6 +54,9 @@ export class RuleGenerator {
       keywords: pattern.keywords,
       created_at: now,
       updated_at: now,
+      description: pattern.description,
+      scope_confidence: sessionContext ? 0.5 : 0.5,
+      scope_reason: sessionContext ? "Scope inferred from session/project context" : "No project context supplied; defaulted to global",
       scope,
       scope_context: scopeContext
     };
@@ -73,8 +76,8 @@ export class RuleGenerator {
         last_seen: pattern.last_seen,
         keywords: pattern.keywords,
         scope,
-        scope_confidence: 1.0,
-        scope_reason: sessionContext ? "Detected from session context" : "Global rule"
+        scope_confidence: 0.5,
+        scope_reason: sessionContext ? "Detected from session context" : "No project context supplied; defaulted to global"
       }
     };
 

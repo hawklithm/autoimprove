@@ -10,7 +10,7 @@
 import { Pattern, RuleIndexEntry, RuleContent, Scene, CodeExample, RuleScope } from "./models.js";
 import { RuleGenerator } from "./rule-generator.js";
 import { CodeExampleExtractor } from "./code-example-extractor.js";
-import { ScopeDetector } from "./scope-detector.js";
+import { ScopeDetector, ScopeContext } from "./scope-detector.js";
 import { SceneExtractor } from "./scene-extractor.js";
 import { SessionData } from "./jsonl-parser.js";
 import { logger } from "./logger.js";
@@ -21,6 +21,7 @@ import OpenAI from "openai";
 import { appendFileSync } from "fs";
 import { homedir } from "os";
 import { join } from "path";
+import { RuleQualityController, UNIFIED_RULE_MIN_SCORE } from "./rule-quality.js";
 
 // Log file path
 const LLM_LOG_FILE = join(homedir(), ".autoimprove", "llm-calls.log");
@@ -40,6 +41,9 @@ export interface EnhancedRuleOptions {
 
   /** Session data for scope detection */
   sessionData?: SessionData;
+
+  /** Classify scope with a dedicated LLM call even when content enhancement is off. */
+  useLLMScopeClassification?: boolean;
 }
 
 export class HybridRuleGenerator {
@@ -48,11 +52,13 @@ export class HybridRuleGenerator {
   private scopeDetector: ScopeDetector;
   private openai: OpenAI | null;
   private model: string;
+  private qualityController: RuleQualityController;
 
   constructor() {
     this.basicGenerator = new RuleGenerator();
     this.exampleExtractor = new CodeExampleExtractor();
     this.scopeDetector = new ScopeDetector();
+    this.qualityController = new RuleQualityController();
 
     // Support multiple API key sources: ANTHROPIC_API_KEY, ANTHROPIC_AUTH_TOKEN, LLM_API_KEY
     const apiKey = process.env.ANTHROPIC_API_KEY
@@ -99,15 +105,23 @@ export class HybridRuleGenerator {
       extractCodeExamples = true,
       sessionDir = "~/.claude/sessions",
       maxExamples = 3,
-      sessionData
+      sessionData,
+      useLLMScopeClassification = true
     } = options;
 
     // Phase 1: Generate basic rule
     const basicRule = this.basicGenerator.generateRule(pattern, ruleId, scene);
 
     // Phase 1.5: Detect and assign scope
-    const scopeContext = this.scopeDetector.detectScope(pattern, sessionData);
+    const scopeSessionData = sessionData || (pattern.project_paths?.length === 1
+      ? { project_path: pattern.project_paths[0] } as SessionData
+      : undefined);
+    const scopeContext = this.scopeDetector.detectScope(pattern, scopeSessionData);
+    let resolvedScopeConfidence = scopeContext.confidence || 0.5;
+    let resolvedScopeReason = scopeContext.reason;
     basicRule.indexEntry.scope = scopeContext.scope;
+    basicRule.indexEntry.scope_confidence = resolvedScopeConfidence;
+    basicRule.indexEntry.scope_reason = resolvedScopeReason;
     if (scopeContext.project_path || scopeContext.organization_id || scopeContext.project_id) {
       basicRule.indexEntry.scope_context = {
         organization_id: scopeContext.organization_id,
@@ -122,6 +136,24 @@ export class HybridRuleGenerator {
       project_path: scopeContext.project_path,
       project_id: scopeContext.project_id
     });
+
+    // Scope classification is independent from prose enhancement. This keeps
+    // organization/project boundaries accurate even in fast batch mode.
+    if (useLLMScopeClassification && this.openai && !useLLMEnhancement) {
+      const llmScope = await this.classifyScopeWithLLM(pattern, scopeContext);
+      if (llmScope) {
+        resolvedScopeConfidence = llmScope.confidence || resolvedScopeConfidence;
+        resolvedScopeReason = llmScope.reason || resolvedScopeReason;
+        basicRule.indexEntry.scope = llmScope.scope;
+        basicRule.indexEntry.scope_confidence = resolvedScopeConfidence;
+        basicRule.indexEntry.scope_reason = resolvedScopeReason;
+        basicRule.indexEntry.scope_context = {
+          organization_id: llmScope.organization_id,
+          project_id: llmScope.project_id,
+          project_path: llmScope.project_path || scopeContext.project_path
+        };
+      }
+    }
 
     // Phase 1.6: Extract scenes and keywords from pattern
     const sceneData = await this.extractSceneFromPattern(pattern);
@@ -151,6 +183,8 @@ export class HybridRuleGenerator {
         // Phase 2 LLM has final say on scope - override Phase 1 result if LLM provided scope
         if (enhancedContent.scope) {
           basicRule.indexEntry.scope = enhancedContent.scope;
+          basicRule.indexEntry.scope_confidence = enhancedContent.scope_confidence || resolvedScopeConfidence;
+          basicRule.indexEntry.scope_reason = enhancedContent.scope_reason || resolvedScopeReason;
           logger.info("hybrid-generation", `Scope determined by LLM for ${ruleId}: ${enhancedContent.scope} (confidence: ${enhancedContent.scope_confidence?.toFixed(2) || 'N/A'})`);
 
           // Update scope_context if LLM provided it
@@ -235,12 +269,20 @@ export class HybridRuleGenerator {
       }
     }
 
-    // Phase 4: Quality assessment and adjustment
-    let qualityScore = this.assessRuleQuality(enhancedContent);
+    // Phase 4: Unified quality assessment. Evidence confidence, content
+    // quality, and scope certainty now produce one persisted score.
+    basicRule.indexEntry.description = enhancedContent.description || pattern.description;
     const evidenceConfidence = basicRule.indexEntry.confidence;
+    let unifiedScore = this.qualityController.assessUnifiedScore(
+      enhancedContent,
+      basicRule.indexEntry,
+      evidenceConfidence,
+      enhancedContent.scope_confidence || resolvedScopeConfidence
+    );
+    let qualityScore = unifiedScore.overall;
 
     // Downgrade confidence for low-quality rules
-    if (qualityScore < 0.5) {
+    if (qualityScore < UNIFIED_RULE_MIN_SCORE) {
       logger.warn("hybrid-generation", `⚠️  Rule ${ruleId} has low quality score: ${qualityScore.toFixed(2)}`);
       basicRule.indexEntry.confidence = Math.min(
         basicRule.indexEntry.confidence,
@@ -253,10 +295,13 @@ export class HybridRuleGenerator {
       const fallback = this.createFallbackContent(basicRule.content, pattern);
       if (fallback) {
         enhancedContent = fallback;
-        qualityScore = this.assessRuleQuality(enhancedContent);
-        if (qualityScore >= 0.5) {
-          basicRule.indexEntry.confidence = evidenceConfidence;
-        }
+        unifiedScore = this.qualityController.assessUnifiedScore(
+          enhancedContent,
+          basicRule.indexEntry,
+          evidenceConfidence,
+          enhancedContent.scope_confidence || resolvedScopeConfidence
+        );
+        qualityScore = unifiedScore.overall;
         logger.info("hybrid-generation", `Using deterministic fallback for ${ruleId} after low-quality LLM response`, {
           quality_score: qualityScore
         });
@@ -276,7 +321,10 @@ export class HybridRuleGenerator {
         keywords: pattern.keywords
       };
     }
+    basicRule.indexEntry.confidence = qualityScore;
     enhancedContent.metadata.quality_score = qualityScore;
+    enhancedContent.metadata.evidence_confidence = unifiedScore.evidence_confidence;
+    enhancedContent.metadata.content_quality = unifiedScore.clarity * 0.4 + unifiedScore.specificity * 0.3 + unifiedScore.actionability * 0.3;
     // Keep the persisted content metadata aligned with the index entry. The
     // exporter filters index confidence, so stale metadata is misleading.
     enhancedContent.metadata.confidence = basicRule.indexEntry.confidence;
@@ -284,9 +332,13 @@ export class HybridRuleGenerator {
     // Add scope metadata from LLM if available
     if (enhancedContent.scope_confidence !== undefined) {
       enhancedContent.metadata.scope_confidence = enhancedContent.scope_confidence;
+    } else {
+      enhancedContent.metadata.scope_confidence = resolvedScopeConfidence;
     }
     if (enhancedContent.scope_reason) {
       enhancedContent.metadata.scope_reason = enhancedContent.scope_reason;
+    } else if (resolvedScopeReason) {
+      enhancedContent.metadata.scope_reason = resolvedScopeReason;
     }
 
     // ✅ NEW: Sync scenes from indexEntry to metadata (ensure consistency)
@@ -359,6 +411,49 @@ export class HybridRuleGenerator {
   /**
    * Phase 2: Enhance rule content with LLM
    */
+  private async classifyScopeWithLLM(pattern: Pattern, fallback: ScopeContext): Promise<ScopeContext | null> {
+    if (!this.openai) return null;
+    const evidence = pattern.occurrences.slice(-5).map((occurrence, index) =>
+      `${index + 1}. user=${occurrence.user_input || ""}; context=${occurrence.context || ""}`
+    ).join("\n");
+    const prompt = `Classify the applicability scope of this coding rule. Return JSON only.
+Allowed scope values:
+- global: broadly valid across unrelated projects
+- organization: depends on a team's internal system, private package, shared middleware, company convention, or organization-wide tooling
+- project: depends on one repository's code, custom module, file layout, business workflow, or project-only implementation
+Prefer the narrowest scope supported by evidence. Do not classify a generic best practice as project or organization merely because it was observed in one project.
+Return: {"scope":"global|organization|project","confidence":0.0,"reason":"...","organization_id":"...","project_id":"..."}
+Rule: ${pattern.description}
+Keywords: ${pattern.keywords.join(", ")}
+Observed project roots: ${(pattern.project_paths || []).join(", ") || "unknown"}
+Evidence:\n${evidence}`;
+    try {
+      const response = await this.openai.chat.completions.create({
+        model: this.model,
+        max_tokens: 300,
+        messages: [{ role: "user", content: prompt }]
+      });
+      const text = response.choices[0]?.message?.content || "";
+      const match = text.match(/\{[\s\S]*\}/);
+      const parsed = JSON.parse(match ? match[0] : text) as Record<string, any>;
+      const scope = parsed.scope;
+      if (![RuleScope.GLOBAL, RuleScope.ORGANIZATION, RuleScope.PROJECT].includes(scope)) return fallback;
+      return {
+        scope,
+        confidence: Math.max(0, Math.min(1, Number(parsed.confidence) || fallback.confidence || 0.5)),
+        reason: typeof parsed.reason === "string" ? parsed.reason : fallback.reason,
+        organization_id: parsed.organization_id || fallback.organization_id,
+        project_id: parsed.project_id || fallback.project_id,
+        project_path: fallback.project_path
+      };
+    } catch (error) {
+      logger.warn("hybrid-generation", "LLM scope classification failed; using heuristic scope", {
+        error: error instanceof Error ? error.message : String(error)
+      });
+      return fallback;
+    }
+  }
+
   private async enhanceWithLLM(
     pattern: Pattern,
     basicContent: RuleContent,

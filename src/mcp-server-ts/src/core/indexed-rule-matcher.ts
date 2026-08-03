@@ -21,6 +21,7 @@ export class IndexedRuleMatcher {
   private indexBuilt: boolean = false;
   private lastIndexBuildTime: number = 0;
   private indexManager: RuleIndexManager;
+  private rulesById: Map<string, RuleIndexEntry> = new Map();
 
   constructor(indexManager: RuleIndexManager) {
     this.indexManager = indexManager;
@@ -35,8 +36,10 @@ export class IndexedRuleMatcher {
     this.techIndex.clear();
     this.functionalIndex.clear();
     this.businessIndex.clear();
+    this.rulesById.clear();
 
     for (const rule of rules) {
+      this.rulesById.set(rule.id.toLowerCase(), rule);
       // Index keywords
       if (rule.keywords) {
         for (const keyword of rule.keywords) {
@@ -155,7 +158,7 @@ export class IndexedRuleMatcher {
     // Convert candidates to matches
     const matches: RuleMatch[] = [];
     for (const [ruleId, scoreInfo] of candidateScores.entries()) {
-      const rule = this.indexManager.getRule(ruleId);
+      const rule = this.rulesById.get(ruleId.toLowerCase()) || this.indexManager.getRule(ruleId);
       if (!rule) continue;
 
       // Filter by confidence
@@ -192,10 +195,17 @@ export class IndexedRuleMatcher {
       scopes?: RuleScope[];
       current_project?: string;
       organization_id?: string;
+      team_id?: string;
+      repository?: string;
+      branch?: string;
     }
   ): boolean {
     // If no scope specified, default to GLOBAL
     const ruleScope = rule.scope || RuleScope.GLOBAL;
+
+    if (rule.status && rule.status !== "active") {
+      return false;
+    }
 
     // If no scopes filter provided, allow all
     if (!scopeFilter.scopes || scopeFilter.scopes.length === 0) {
@@ -212,22 +222,30 @@ export class IndexedRuleMatcher {
       if (!scopeFilter.current_project || !rule.scope_context?.project_path) {
         return false;
       }
-      // Match project path (exact or substring)
-      return rule.scope_context.project_path === scopeFilter.current_project ||
-             scopeFilter.current_project.includes(rule.scope_context.project_path) ||
-             rule.scope_context.project_path.includes(scopeFilter.current_project);
+      const rulePath = this.normalizeProjectPath(rule.scope_context.project_path);
+      const currentPath = this.normalizeProjectPath(scopeFilter.current_project);
+      return rulePath === currentPath ||
+        currentPath.startsWith(`${rulePath}/`) ||
+        rulePath.startsWith(`${currentPath}/`);
     }
 
     // For ORGANIZATION scope, match organization context
     if (ruleScope === RuleScope.ORGANIZATION) {
-      if (!scopeFilter.organization_id || !rule.scope_context?.organization_id) {
-        return true; // Allow if no specific org context
+      if (rule.scope_context?.organization_id) {
+        if (!scopeFilter.organization_id || rule.scope_context.organization_id.toLowerCase() !== scopeFilter.organization_id.toLowerCase()) return false;
       }
-      return rule.scope_context.organization_id === scopeFilter.organization_id;
+      if (rule.scope_context?.team_id && rule.scope_context.team_id !== scopeFilter.team_id) return false;
+      if (rule.scope_context?.repository && rule.scope_context.repository !== scopeFilter.repository) return false;
+      if (rule.scope_context?.branch && rule.scope_context.branch !== scopeFilter.branch) return false;
+      return true;
     }
 
     // GLOBAL scope always matches
     return true;
+  }
+
+  private normalizeProjectPath(path: string): string {
+    return path.replace(/\\/g, "/").replace(/\/+$/, "").toLowerCase();
   }
 
   /**
@@ -340,7 +358,7 @@ export class IndexedRuleMatcher {
     // Convert candidates to matches
     const matches: RuleMatch[] = [];
     for (const [ruleId, scoreInfo] of candidateScores.entries()) {
-      const rule = this.indexManager.getRule(ruleId);
+      const rule = this.rulesById.get(ruleId.toLowerCase()) || this.indexManager.getRule(ruleId);
       if (!rule) continue;
 
       // Filter by confidence
@@ -401,7 +419,7 @@ export class IndexedRuleMatcher {
     // Convert to matches
     const matches: RuleMatch[] = [];
     for (const [ruleId, scoreInfo] of candidateScores.entries()) {
-      const rule = this.indexManager.getRule(ruleId);
+      const rule = this.rulesById.get(ruleId.toLowerCase()) || this.indexManager.getRule(ruleId);
       if (!rule) continue;
 
       matches.push({

@@ -14,6 +14,7 @@
 import { readdirSync, statSync } from "fs";
 import { join } from "path";
 import { SessionAnalyzer } from "./session-analyzer.js";
+import { UnifiedSessionParser } from "./unified-session-parser.js";
 import { SessionCacheManager } from "../storage/session-cache.js";
 import { PatternEvolutionManager } from "../storage/pattern-evolution.js";
 import { HybridRuleGenerator, EnhancedRuleOptions } from "./hybrid-rule-generator.js";
@@ -23,8 +24,14 @@ import { RuleContentManager } from "../storage/rule-content.js";
 import { ClaudeIndexExporter } from "../tools/export-rules-to-claude.js";
 import { Pattern, Scene, RuleIndexEntry, RuleContent } from "./models.js";
 import { RuleCleanupService, CleanupReport } from "./rule-cleanup-service.js";
+import { UNIFIED_RULE_MIN_SCORE } from "./rule-quality.js";
 import { logger } from "./logger.js";
 import { homedir } from "os";
+import { RuleDeduplicator } from "./rule-deduplicator.js";
+import { MemoryRepository } from "./memory-models.js";
+import { createDefaultMemoryRepository } from "../storage/memory-sqlite-store.js";
+import { RuleQualityController } from "./rule-quality.js";
+import { MemoryPromotionService } from "./memory-promotion.js";
 
 export interface BatchRebuildOptions {
   /** Clear all caches before rebuild */
@@ -90,6 +97,7 @@ export interface BatchRebuildResult {
 
 export class BatchRebuildEngine {
   private analyzer: SessionAnalyzer;
+  private parser: UnifiedSessionParser;
   private cacheManager: SessionCacheManager;
   private evolutionManager: PatternEvolutionManager;
   private ruleGenerator: HybridRuleGenerator;
@@ -98,9 +106,14 @@ export class BatchRebuildEngine {
   private contentManager: RuleContentManager;
   private exporter: ClaudeIndexExporter;
   private cleanupService: RuleCleanupService;
+  private deduplicator: RuleDeduplicator;
+  private memoryStore: MemoryRepository;
+  private qualityController: RuleQualityController;
+  private memoryPromotion: MemoryPromotionService;
 
   constructor() {
     this.analyzer = new SessionAnalyzer();
+    this.parser = new UnifiedSessionParser();
     this.cacheManager = new SessionCacheManager();
     this.evolutionManager = new PatternEvolutionManager();
     this.ruleGenerator = new HybridRuleGenerator();
@@ -109,6 +122,10 @@ export class BatchRebuildEngine {
     this.contentManager = new RuleContentManager();
     this.exporter = new ClaudeIndexExporter(this.indexManager, this.contentManager);
     this.cleanupService = new RuleCleanupService();
+    this.deduplicator = new RuleDeduplicator();
+    this.memoryStore = createDefaultMemoryRepository();
+    this.qualityController = new RuleQualityController();
+    this.memoryPromotion = new MemoryPromotionService(this.memoryStore);
   }
 
   /**
@@ -180,6 +197,8 @@ export class BatchRebuildEngine {
           forceReanalyze: true,
           useCompactCache: true,
         });
+
+        this.attachProjectPath(patterns, sessionFile);
 
         newPatterns.push(...patterns);
 
@@ -275,6 +294,9 @@ export class BatchRebuildEngine {
 
     let rules: Array<{ indexEntry: RuleIndexEntry; content: RuleContent }>;
 
+    const promotedMemories = await this.memoryPromotion.promoteEligibleWithLLM();
+    if (promotedMemories.length > 0) logger.info("batch-rebuild", `Promoted ${promotedMemories.length} procedural memories`);
+
     if (useBatchLLM) {
       logger.debug("batch-rebuild", `  Using batch LLM optimization (clustering + intelligent merging)...`);
 
@@ -306,15 +328,39 @@ export class BatchRebuildEngine {
       logger.info("batch-rebuild", `✓ Generated ${rules.length} rules`);
     }
 
+    // Attach consolidated memory support before the final quality gate.
+    rules = rules.map(rule => {
+      const support = this.findSupportingMemories(rule);
+      rule.indexEntry.source_memory_ids = support.ids;
+      rule.indexEntry.status = support.ids.length > 0 && support.score >= UNIFIED_RULE_MIN_SCORE ? "active" : "candidate";
+      rule.content.metadata.source_memory_ids = support.ids;
+      rule.content.metadata.memory_support_score = support.score;
+      const unified = this.qualityController.assessUnifiedScore(
+        rule.content,
+        rule.indexEntry,
+        rule.content.metadata?.evidence_confidence ?? rule.indexEntry.confidence,
+        rule.content.metadata?.scope_confidence ?? rule.indexEntry.scope_confidence ?? 0.5,
+        support.score
+      );
+      rule.indexEntry.confidence = unified.overall;
+      rule.content.metadata.quality_score = unified.overall;
+      rule.content.metadata.confidence = unified.overall;
+      return rule;
+    });
+
     // Reject unusable LLM/fallback output before persisting it.
     const generatedBeforeQualityFilter = rules.length;
     rules = rules.filter(rule => {
-      const quality = rule.content.metadata?.quality_score;
-      return quality === undefined || quality >= 0.5;
+      const quality = rule.content.metadata?.quality_score ?? rule.indexEntry.confidence;
+      return quality >= UNIFIED_RULE_MIN_SCORE;
     });
     if (rules.length !== generatedBeforeQualityFilter) {
-      logger.warn("batch-rebuild", `Skipped ${generatedBeforeQualityFilter - rules.length} rules with quality score below 0.5`);
+      logger.warn("batch-rebuild", `Skipped ${generatedBeforeQualityFilter - rules.length} rules with unified score below ${UNIFIED_RULE_MIN_SCORE}`);
     }
+
+    // Deduplicate rules produced in the same rebuild, not only against the
+    // previous database state. This is especially important in non-LLM mode.
+    rules = this.deduplicateGeneratedRules(rules);
 
     // Save rules and update evolution with rule IDs. Replace the previous
     // generated set only after all generation/quality checks have completed.
@@ -327,6 +373,7 @@ export class BatchRebuildEngine {
       this.indexManager.addRule(rule.indexEntry, rule.content);
       // Also save to content manager for backward compatibility with JSON storage
       this.contentManager.saveContent(rule.content);
+      this.linkRuleToMemories(rule);
 
       // Find corresponding pattern and update evolution
       const pattern = qualifiedPatterns.find(
@@ -340,14 +387,14 @@ export class BatchRebuildEngine {
       }
     }
 
-    // Step 8: Auto-cleanup (optional)
-    // Skip if batch LLM already performed deduplication
+    // Step 8: Auto-cleanup (optional). Batch LLM clustering does not replace
+    // quality/conflict cleanup, so cleanup is no longer skipped automatically.
     let cleanupPerformed = false;
     let mergedCount = 0;
     let optimizedCount = 0;
     let deletedCount = 0;
 
-    const skipCleanup = useBatchLLM && !options.forceCleanup;
+    const skipCleanup = false;
 
     if (options.autoCleanup && !skipCleanup) {
       logger.debug("batch-rebuild", "\n[8/8] Running auto-cleanup...");
@@ -435,6 +482,79 @@ export class BatchRebuildEngine {
       rules_optimized: optimizedCount,
       rules_deleted: deletedCount,
     };
+  }
+
+  private findSupportingMemories(rule: { indexEntry: RuleIndexEntry; content: RuleContent }): { ids: string[]; score: number } {
+    const query = rule.content.description || rule.content.content || rule.indexEntry.description || "";
+    if (!query.trim()) return { ids: [], score: 0.5 };
+    const filters = {
+      projectPath: rule.indexEntry.scope_context?.project_path,
+      organizationId: rule.indexEntry.scope_context?.organization_id,
+      repository: rule.indexEntry.scope_context?.repository,
+      branch: rule.indexEntry.scope_context?.branch
+    };
+    const results = this.memoryStore.searchScored
+      ? this.memoryStore.searchScored(query, 8, filters)
+      : this.memoryStore.search(query, 8, filters)
+        .map(memory => ({ memory, score: 0.5, reasons: ["legacy-search"] }));
+    const organizationId = rule.indexEntry.scope_context?.organization_id?.toLowerCase();
+    const memories = results.filter(result => result.memory.kind !== "episodic"
+      && result.score >= 0.25
+      && (!organizationId || !result.memory.namespace?.organization_id || result.memory.namespace.organization_id.toLowerCase() === organizationId)
+    ).slice(0, 5).map(result => result.memory);
+    if (memories.length === 0) return { ids: [], score: 0.5 };
+    const score = memories.reduce((sum, memory) => sum + memory.confidence * 0.35 + Math.min(1, memory.strength / 5) * 0.3 + memory.importance * 0.15 + (memory.outcome?.status === "success" ? 0.2 : 0.1), 0) / memories.length;
+    return { ids: memories.map(memory => memory.id), score };
+  }
+
+  private linkRuleToMemories(rule: { indexEntry: RuleIndexEntry; content: RuleContent }): void {
+    if (!this.memoryStore.linkRule) return;
+    const now = new Date().toISOString();
+    for (const memoryId of rule.indexEntry.source_memory_ids || []) {
+      const memory = this.memoryStore.list({ activeOnly: false }).find(item => item.id === memoryId);
+      this.memoryStore.linkRule({
+        memory_id: memoryId,
+        rule_id: rule.indexEntry.id,
+        relation: "supports",
+        support_score: memory ? memory.confidence : 0.5,
+        created_at: now,
+        updated_at: now
+      });
+    }
+  }
+
+  private deduplicateGeneratedRules(
+    rules: Array<{ indexEntry: RuleIndexEntry; content: RuleContent }>
+  ): Array<{ indexEntry: RuleIndexEntry; content: RuleContent }> {
+    const kept: Array<{ indexEntry: RuleIndexEntry; content: RuleContent }> = [];
+    for (const candidate of rules) {
+      const similarities = this.deduplicator.findSimilarRules(
+        candidate.indexEntry,
+        kept.map(rule => rule.indexEntry),
+        new Map(kept.map(rule => [rule.indexEntry.id, rule.content]))
+      );
+      const top = similarities[0];
+      if (!top || top.action === "keep-separate") {
+        kept.push(candidate);
+        continue;
+      }
+      const targetIndex = kept.findIndex(rule => rule.indexEntry.id === top.existingRuleId);
+      if (targetIndex < 0) {
+        kept.push(candidate);
+        continue;
+      }
+      const merged = this.deduplicator.mergeRules(
+        kept[targetIndex].indexEntry,
+        candidate.indexEntry,
+        kept[targetIndex].content,
+        candidate.content
+      );
+      kept[targetIndex] = {
+        indexEntry: merged.indexEntry,
+        content: merged.content || kept[targetIndex].content
+      };
+    }
+    return kept;
   }
 
   /**
@@ -532,11 +652,26 @@ export class BatchRebuildEngine {
       const cached = this.cacheManager.getCached(sessionId);
 
       if (cached && cached.cached_patterns) {
+        this.attachProjectPath(cached.cached_patterns, sessionFile);
         patterns.push(...cached.cached_patterns);
       }
     }
 
     return patterns;
+  }
+
+  private attachProjectPath(patterns: Pattern[], sessionFile: string): void {
+    try {
+      const projectPath = this.parser.parseFile(sessionFile).project_path;
+      if (!projectPath) return;
+      for (const pattern of patterns) {
+        pattern.project_paths = Array.from(new Set([...(pattern.project_paths || []), projectPath]));
+      }
+    } catch (error) {
+      logger.debug("batch-rebuild", `Unable to attach project scope context for ${sessionFile}`, {
+        error: error instanceof Error ? error.message : String(error)
+      });
+    }
   }
 
   /**

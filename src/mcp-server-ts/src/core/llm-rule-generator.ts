@@ -14,6 +14,7 @@ import { LLMConfigManager } from "./llm-config-manager.js";
 import { appendFileSync } from "fs";
 import { homedir } from "os";
 import { join } from "path";
+import { RuleQualityController } from "./rule-quality.js";
 
 // Log file path
 const LLM_LOG_FILE = join(homedir(), ".autoimprove", "llm-calls.log");
@@ -24,6 +25,8 @@ export interface GeneratedRule {
   description: string;
   rationale: string;
   scope: "global" | "organization" | "project";  // Rule applicability scope
+  scope_confidence?: number;
+  scope_reason?: string;
   how_to_apply: string[];
   examples?: {
     bad?: string;
@@ -142,6 +145,8 @@ export class LLMRuleGenerator {
         description: parsed.description,
         rationale: parsed.rationale,
         scope: parsed.scope,
+        scope_confidence: parsed.scope_confidence,
+        scope_reason: parsed.scope_reason,
         how_to_apply: parsed.how_to_apply,
         examples: parsed.examples,
         when_to_use: parsed.when_to_use,
@@ -218,6 +223,8 @@ export class LLMRuleGenerator {
     description: string;
     rationale: string;
     scope: "global" | "organization" | "project";
+    scope_confidence?: number;
+    scope_reason?: string;
     how_to_apply: string[];
     examples?: { bad?: string; good: string; explanation: string };
     when_to_use: string[];
@@ -294,6 +301,8 @@ export class LLMRuleGenerator {
         description: parsed.description,
         rationale: parsed.rationale,
         scope: scope,
+        scope_confidence: typeof parsed.scope_confidence === "number" ? parsed.scope_confidence : undefined,
+        scope_reason: typeof parsed.scope_reason === "string" ? parsed.scope_reason : undefined,
         how_to_apply: parsed.how_to_apply,
         examples: parsed.examples,
         when_to_use: parsed.when_to_use,
@@ -345,13 +354,16 @@ export class LLMRuleGenerator {
       confidence: rule.confidence,
       scenes: {
         tech: rule.scenes.tech,
-        functional: rule.scenes.business,
-        business: []
+        functional: rule.scenes.functional,
+        business: rule.scenes.business
       },
       keywords: rule.source_signals,
       created_at: rule.created_at,
       updated_at: rule.last_validated,
-      scope: rule.scope as RuleScope  // Convert scope string to RuleScope enum
+      scope: rule.scope as RuleScope,  // Convert scope string to RuleScope enum
+      scope_confidence: rule.scope_confidence || 0.5,
+      scope_reason: rule.scope_reason,
+      description: rule.description
     };
 
     // Build structured content (Phase 4)
@@ -425,9 +437,22 @@ export class LLMRuleGenerator {
         last_seen: rule.last_validated,
         keywords: rule.source_signals,
         source_cluster_id: rule.source_cluster_id,
-        source_sessions: rule.source_sessions
+        source_sessions: rule.source_sessions,
+        scope_confidence: rule.scope_confidence || 0.5,
+        scope_reason: rule.scope_reason
       }
     };
+
+    const unified = new RuleQualityController().assessUnifiedScore(
+      content,
+      indexEntry,
+      rule.confidence,
+      rule.scope_confidence || 0.5
+    );
+    indexEntry.confidence = unified.overall;
+    content.metadata.quality_score = unified.overall;
+    content.metadata.evidence_confidence = unified.evidence_confidence;
+    content.metadata.confidence = unified.overall;
 
     return { indexEntry, content };
   }

@@ -15,6 +15,8 @@ export interface ScopeContext {
   organization_id?: string;
   project_id?: string;
   project_path?: string;
+  confidence?: number;
+  reason?: string;
 }
 
 export class ScopeDetector {
@@ -26,13 +28,18 @@ export class ScopeDetector {
     let scope = RuleScope.GLOBAL;
     let projectPath: string | undefined;
     let projectId: string | undefined;
+    let organizationId: string | undefined;
 
     // Check if pattern comes from a specific project
     if (sessionData?.project_path) {
       projectPath = sessionData.project_path;
 
-      // Determine if this is a project-specific pattern or global pattern
-      if (this.isProjectSpecificPattern(pattern, projectPath)) {
+      // Shared internal systems and team middleware apply across projects and
+      // therefore take precedence over a repository-local hint.
+      organizationId = this.detectOrganizationId(projectPath);
+      if (this.isOrganizationPattern(pattern) && organizationId) {
+        scope = RuleScope.ORGANIZATION;
+      } else if (this.isProjectSpecificPattern(pattern, projectPath)) {
         scope = RuleScope.PROJECT;
         projectId = this.extractProjectId(projectPath);
       }
@@ -40,8 +47,15 @@ export class ScopeDetector {
 
     return {
       scope,
+      organization_id: organizationId,
       project_path: projectPath,
-      project_id: projectId
+      project_id: projectId,
+      confidence: scope === RuleScope.GLOBAL ? 0.65 : 0.55,
+      reason: scope === RuleScope.PROJECT
+        ? "Project-specific context detected by heuristic analysis"
+        : scope === RuleScope.ORGANIZATION
+          ? "Organization path and shared tooling indicators detected"
+          : "No project-only dependency detected; treated as broadly applicable"
     };
   }
 
@@ -87,7 +101,7 @@ export class ScopeDetector {
     // Project-specific indicators
     const projectSpecificIndicators = [
       // Specific file/module references
-      projectPath.split("/").pop() || "",  // Project name
+      projectPath.replace(/\\/g, "/").split("/").pop() || "",  // Project name
 
       // Framework/library combinations unique to this project
       "custom implementation",
@@ -127,12 +141,22 @@ export class ScopeDetector {
     return hasProjectReferences;
   }
 
+  private isOrganizationPattern(pattern: Pattern): boolean {
+    const text = [pattern.description, ...pattern.occurrences.map(o => `${o.user_input || ""} ${o.context || ""}`)]
+      .join(" ").toLowerCase();
+    return [
+      "our team", "company standard", "organization", "org-wide", "internal",
+      "shared middleware", "internal service", "internal system", "company library",
+      "company package", "private package", "internal api", "shared tooling"
+    ].some(indicator => text.includes(indicator));
+  }
+
   /**
    * Extract project identifier from project path
    */
   private extractProjectId(projectPath: string): string {
     // Use the last component of the path as project ID
-    const parts = projectPath.split("/").filter(Boolean);
+    const parts = projectPath.replace(/\\/g, "/").split("/").filter(Boolean);
     return parts[parts.length - 1] || "unknown-project";
   }
 
@@ -145,7 +169,7 @@ export class ScopeDetector {
     // Example: /Users/username/work/mycompany/project -> mycompany
     // Example: /home/dev/github.com/orgname/repo -> orgname
 
-    const parts = projectPath.split("/").filter(Boolean);
+    const parts = projectPath.replace(/\\/g, "/").split("/").filter(Boolean);
 
     // Look for common organization path patterns
     const orgKeywords = ["work", "github.com", "gitlab.com", "company", "org"];
@@ -167,8 +191,8 @@ export class ScopeDetector {
     if (path1 === path2) return true;
 
     // Normalize paths (remove trailing slashes)
-    const normalized1 = path1.replace(/\/+$/, "");
-    const normalized2 = path2.replace(/\/+$/, "");
+    const normalized1 = path1.replace(/\\/g, "/").replace(/\/+$/, "");
+    const normalized2 = path2.replace(/\\/g, "/").replace(/\/+$/, "");
 
     if (normalized1 === normalized2) return true;
 

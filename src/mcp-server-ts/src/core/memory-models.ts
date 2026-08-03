@@ -2,7 +2,17 @@ import { Pattern, PatternType, Scene, createScene } from "./models.js";
 
 export type MemoryKind = "semantic" | "episodic" | "procedural";
 export type MemoryStatus = "active" | "superseded" | "archived";
-export type MemoryDecision = "ADD" | "UPDATE" | "SUPERSEDE" | "NOOP";
+export type MemoryState = "candidate" | "observed" | "supported" | "validated" | "promoted" | "deprecated";
+export type MemoryDecision = "ADD" | "UPDATE" | "SUPERSEDE" | "CONFLICT" | "NOOP";
+
+export interface MemoryRuleLink {
+  memory_id: string;
+  rule_id: string;
+  relation: "supports" | "derived_from" | "supersedes" | "contradicts";
+  support_score: number;
+  created_at: string;
+  updated_at: string;
+}
 
 export interface MemoryNamespace {
   user_id?: string;
@@ -61,6 +71,13 @@ export interface MemoryRecord {
   valid_from: string;
   valid_to?: string;
   status: MemoryStatus;
+  state?: MemoryState;
+  support_count?: number;
+  independent_session_count?: number;
+  independent_project_count?: number;
+  validation_count?: number;
+  contradiction_count?: number;
+  last_validated_at?: string;
   supersedes?: string;
   metadata?: Record<string, unknown>;
   namespace?: MemoryNamespace;
@@ -81,12 +98,23 @@ export interface MemorySearchResult {
   reasons: string[];
 }
 
+export interface MemorySearchFilters {
+  projectPath?: string;
+  organizationId?: string;
+  repository?: string;
+  branch?: string;
+  kind?: MemoryRecord["kind"];
+}
+
 export interface MemoryRepository {
-  list(options?: { activeOnly?: boolean; kind?: MemoryRecord["kind"]; projectPath?: string }): MemoryRecord[];
-  search(query: string, limit?: number, filters?: { projectPath?: string; kind?: MemoryRecord["kind"] }): MemoryRecord[];
-  searchScored?(query: string, limit?: number, filters?: { projectPath?: string; kind?: MemoryRecord["kind"] }): MemorySearchResult[];
+  list(options?: { activeOnly?: boolean; kind?: MemoryRecord["kind"]; projectPath?: string; organizationId?: string; repository?: string; branch?: string }): MemoryRecord[];
+  search(query: string, limit?: number, filters?: MemorySearchFilters): MemoryRecord[];
+  searchScored?(query: string, limit?: number, filters?: MemorySearchFilters): MemorySearchResult[];
   apply(mutation: MemoryMutation): MemoryRecord;
   recordUsage?(memoryId: string, event: MemoryUsageEvent): void;
+  linkRule?(link: MemoryRuleLink): void;
+  getRulesForMemory?(memoryId: string): MemoryRuleLink[];
+  getMemoriesForRule?(ruleId: string): MemoryRuleLink[];
   compact?(): void;
   close?(): void;
 }
@@ -119,8 +147,15 @@ export function memoryFromPattern(
     updated_at: now,
     valid_from: pattern.first_seen || now,
     status: "active",
+    state: "observed",
+    support_count: 1,
+    independent_session_count: new Set(evidence.map(e => e.session_id)).size,
+    independent_project_count: pattern.project_paths?.length || 0,
+    validation_count: 0,
+    contradiction_count: 0,
     metadata: {
       occurrence_count: pattern.occurrences.length,
+      project_paths: pattern.project_paths || [],
       source: "session_analyzer"
     },
     namespace: { session_id: evidence[0]?.session_id },
@@ -153,6 +188,12 @@ export function memoryFromOccurrence(
     updated_at: now,
     valid_from: occurrence.timestamp || now,
     status: "active",
+    state: "candidate",
+    support_count: 1,
+    independent_session_count: 1,
+    independent_project_count: pattern.project_paths?.length || 0,
+    validation_count: 0,
+    contradiction_count: 0,
     metadata: { source: "session_analyzer", action: occurrence.user_action, context: occurrence.context },
     namespace: { session_id: evidence.session_id },
     entities: [],

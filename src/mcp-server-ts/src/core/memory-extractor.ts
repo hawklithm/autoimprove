@@ -118,7 +118,13 @@ Detected patterns:\n${patterns.map(pattern => `${pattern.type}: ${pattern.descri
     const relation: MemoryRelation | undefined = candidate.subject && candidate.predicate && candidate.object
       ? { subject: candidate.subject, predicate: candidate.predicate, object: candidate.object, valid_from: now }
       : undefined;
-    const namespace: MemoryNamespace = { project_path: session.project_path, session_id: session.session_id };
+    const namespace: MemoryNamespace = {
+      project_path: session.project_path,
+      organization_id: session.organization_id || session.metadata?.organization_id || process.env.AUTOIMPROVE_ORGANIZATION_ID,
+      repository: session.metadata?.repository,
+      branch: session.metadata?.branch,
+      session_id: session.session_id
+    };
     return {
       id: createMemoryId(),
       kind: candidate.kind,
@@ -134,11 +140,17 @@ Detected patterns:\n${patterns.map(pattern => `${pattern.type}: ${pattern.descri
       updated_at: now,
       valid_from: now,
       status: "active",
+      state: candidate.kind === "procedural" ? "observed" : "candidate",
+      support_count: 1,
+      independent_session_count: 1,
+      independent_project_count: session.project_path ? 1 : 0,
+      validation_count: 0,
+      contradiction_count: 0,
       namespace,
       entities: candidate.entities || [],
       relations: relation ? [relation] : [],
       outcome: candidate.outcome,
-      metadata: { source: "session_memory_extractor", context: candidate.context }
+      metadata: { source: "session_memory_extractor", context: candidate.context, project_paths: session.project_path ? [session.project_path] : [] }
     };
   }
 }

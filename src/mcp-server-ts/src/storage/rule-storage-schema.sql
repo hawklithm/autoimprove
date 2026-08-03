@@ -21,6 +21,13 @@ CREATE TABLE IF NOT EXISTS rules (
     type TEXT NOT NULL,
     priority TEXT NOT NULL CHECK(priority IN ('critical', 'high', 'medium', 'low')),
     confidence REAL NOT NULL CHECK(confidence >= 0 AND confidence <= 1),
+    status TEXT NOT NULL DEFAULT 'active',
+    last_validated_at TEXT,
+    last_applied_at TEXT,
+    usage_count INTEGER NOT NULL DEFAULT 0,
+    acceptance_count INTEGER NOT NULL DEFAULT 0,
+    correction_count INTEGER NOT NULL DEFAULT 0,
+    contradiction_count INTEGER NOT NULL DEFAULT 0,
 
     -- Scene fields (JSON arrays)
     tech_scene TEXT NOT NULL DEFAULT '[]',
@@ -30,10 +37,18 @@ CREATE TABLE IF NOT EXISTS rules (
     -- Scope fields
     scope TEXT NOT NULL DEFAULT 'global' CHECK(scope IN ('global', 'organization', 'project')),
     scope_project_path TEXT,
+    scope_project_id TEXT,
     scope_organization_id TEXT,
+    scope_team_id TEXT,
+    scope_repository TEXT,
+    scope_branch TEXT,
+    scope_confidence REAL,
+    scope_reason TEXT,
+    source_memory_ids TEXT NOT NULL DEFAULT '[]',
 
     -- Metadata
     keywords TEXT NOT NULL DEFAULT '[]', -- JSON array
+    description TEXT,
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL,
 

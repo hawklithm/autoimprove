@@ -11,9 +11,11 @@ import { join } from "path";
 describe("Undefined/Null Handling", () => {
   const testStorageRoot = join(process.cwd(), "test-storage-undefined");
   const originalEnv = process.env.AUTOIMPROVE_STORAGE_ROOT;
+  let activeManager: RuleIndexManager | undefined;
 
   beforeEach(() => {
     process.env.AUTOIMPROVE_STORAGE_ROOT = testStorageRoot;
+    activeManager?.close();
     if (existsSync(testStorageRoot)) {
       rmSync(testStorageRoot, { recursive: true });
     }
@@ -21,6 +23,7 @@ describe("Undefined/Null Handling", () => {
   });
 
   afterEach(() => {
+    activeManager?.close();
     if (existsSync(testStorageRoot)) {
       rmSync(testStorageRoot, { recursive: true });
     }
@@ -32,7 +35,7 @@ describe("Undefined/Null Handling", () => {
   });
 
   it("should handle rule with undefined keywords", () => {
-    const manager = new RuleIndexManager();
+    const manager = activeManager = new RuleIndexManager();
 
     const ruleWithUndefinedKeywords: any = {
       id: "rule-001",
@@ -53,7 +56,7 @@ describe("Undefined/Null Handling", () => {
   });
 
   it("should handle rule with null keywords", () => {
-    const manager = new RuleIndexManager();
+    const manager = activeManager = new RuleIndexManager();
 
     const ruleWithNullKeywords: any = {
       id: "rule-002",
@@ -74,7 +77,7 @@ describe("Undefined/Null Handling", () => {
   });
 
   it("should handle rule with missing scenes fields", () => {
-    const manager = new RuleIndexManager();
+    const manager = activeManager = new RuleIndexManager();
 
     const ruleWithPartialScenes: any = {
       id: "rule-003",
@@ -132,7 +135,7 @@ describe("Undefined/Null Handling", () => {
       JSON.stringify(corruptedIndex, null, 2)
     );
 
-    const manager = new RuleIndexManager();
+    const manager = activeManager = new RuleIndexManager();
     const index = manager.loadIndex();
 
     // Should filter out null entries and normalize the rest
@@ -149,7 +152,7 @@ describe("Undefined/Null Handling", () => {
 
     writeFileSync(join(rulesDir, "index.json"), "{ invalid json");
 
-    const manager = new RuleIndexManager();
+    const manager = activeManager = new RuleIndexManager();
     const index = manager.loadIndex();
 
     // Should return empty index on parse error
@@ -170,7 +173,7 @@ describe("Undefined/Null Handling", () => {
       JSON.stringify(indexWithoutRules, null, 2)
     );
 
-    const manager = new RuleIndexManager();
+    const manager = activeManager = new RuleIndexManager();
     const index = manager.loadIndex();
 
     // Should normalize to empty rules array
@@ -178,7 +181,7 @@ describe("Undefined/Null Handling", () => {
   });
 
   it("should handle adding completely undefined entry", () => {
-    const manager = new RuleIndexManager();
+    const manager = activeManager = new RuleIndexManager();
 
     expect(() => manager.addRule(undefined as any)).toThrow(
       "Failed to normalize rule entry"
@@ -186,7 +189,7 @@ describe("Undefined/Null Handling", () => {
   });
 
   it("should handle adding null entry", () => {
-    const manager = new RuleIndexManager();
+    const manager = activeManager = new RuleIndexManager();
 
     expect(() => manager.addRule(null as any)).toThrow(
       "Failed to normalize rule entry"

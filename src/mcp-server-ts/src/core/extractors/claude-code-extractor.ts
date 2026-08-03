@@ -4,6 +4,7 @@
  */
 
 import { readFileSync } from "fs";
+import { basename } from "path";
 import { SessionExtractor, Message, ToolCall } from "./session-extractor.interface.js";
 import { logger } from "../logger.js";
 
@@ -13,7 +14,7 @@ export class ClaudeCodeSessionExtractor extends SessionExtractor {
   }
 
   protected extractSessionId(filePath: string): string {
-    return filePath.split("/").pop()?.replace(".jsonl", "") || "unknown";
+    return basename(filePath).replace(/\.jsonl$/, "") || "unknown";
   }
 
   protected parseLines(content: string): string[] {

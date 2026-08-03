@@ -14,13 +14,15 @@
  */
 
 import OpenAI from "openai";
-import { Pattern, RuleIndexEntry, RuleContent, Scene, Priority } from "./models.js";
+import { Pattern, RuleIndexEntry, RuleContent, Scene, Priority, RuleScope } from "./models.js";
 import { PatternSimilarityClusterer, PatternClusterGroup } from "./pattern-similarity-clusterer.js";
 import { RuleGenerator } from "./rule-generator.js";
 import { logger } from "./logger.js";
 import { LLMPromptBuilder, PromptEvidence } from "./llm-prompt-builder.js";
 import { JSONExtractor } from "./json-extractor.js";
 import { LLMConfigManager } from "./llm-config-manager.js";
+import { RuleQualityController } from "./rule-quality.js";
+import { ScopeDetector } from "./scope-detector.js";
 import { appendFileSync } from "fs";
 import { homedir } from "os";
 import { join } from "path";
@@ -55,6 +57,8 @@ export class BatchLLMRuleGenerator {
   private clusterer: PatternSimilarityClusterer;
   private basicGenerator: RuleGenerator;
   private llmManager: LLMConfigManager;
+  private qualityController: RuleQualityController;
+  private scopeDetector: ScopeDetector;
 
   /** 通过截断重试估算出的模型实际能返回的最大 completion token 数（初始未知） */
   private estimatedMaxCompletionTokens: number | null = null;
@@ -65,6 +69,8 @@ export class BatchLLMRuleGenerator {
     this.clusterer = new PatternSimilarityClusterer();
     this.basicGenerator = new RuleGenerator();
     this.llmManager = new LLMConfigManager();
+    this.qualityController = new RuleQualityController();
+    this.scopeDetector = new ScopeDetector();
   }
 
   /**
@@ -218,6 +224,29 @@ export class BatchLLMRuleGenerator {
       return cluster.patterns.map((p, idx) => {
         const id = idx === 0 ? ruleId : `${ruleId}-${idx}`;
         const basic = this.basicGenerator.generateRule(p, id, scene);
+        const scopeContext = p.project_paths?.length === 1
+          ? this.scopeDetector.detectScope(p, { project_path: p.project_paths[0] } as any)
+          : undefined;
+        if (scopeContext) {
+          basic.indexEntry.scope = scopeContext.scope;
+          basic.indexEntry.scope_context = {
+            project_path: scopeContext.project_path,
+            project_id: scopeContext.project_id,
+            organization_id: scopeContext.organization_id
+          };
+          basic.indexEntry.scope_confidence = scopeContext.confidence;
+          basic.indexEntry.scope_reason = scopeContext.reason;
+        }
+        const unified = this.qualityController.assessUnifiedScore(
+          basic.content,
+          basic.indexEntry,
+          basic.indexEntry.confidence,
+          basic.indexEntry.scope_confidence || 0.5
+        );
+        basic.indexEntry.confidence = unified.overall;
+        basic.content.metadata.quality_score = unified.overall;
+        basic.content.metadata.evidence_confidence = unified.evidence_confidence;
+        basic.content.metadata.confidence = unified.overall;
         return {
           indexEntry: basic.indexEntry,
           content: basic.content,
@@ -459,6 +488,10 @@ export class BatchLLMRuleGenerator {
     how_to_apply: string[];
     when_to_use: string[];
     exceptions?: string[];
+    scope: RuleScope;
+    scope_confidence: number;
+    scope_reason?: string;
+    scope_context?: { organization_id?: string; project_id?: string; project_path?: string };
     source_patterns: string[];
     merged_count: number;
   }> {
@@ -579,6 +612,12 @@ export class BatchLLMRuleGenerator {
           how_to_apply: rule.how_to_apply || [],
           when_to_use: rule.when_to_use || [],
           exceptions: rule.exceptions,
+          scope: [RuleScope.GLOBAL, RuleScope.ORGANIZATION, RuleScope.PROJECT].includes(rule.scope)
+            ? rule.scope
+            : RuleScope.GLOBAL,
+          scope_confidence: Math.max(0, Math.min(1, Number(rule.scope_confidence) || 0.5)),
+          scope_reason: rule.scope_reason,
+          scope_context: rule.scope_context,
           source_patterns: rule.source_patterns || [cluster.representative_description],
           merged_count: rule.merged_count || 1
         };
@@ -711,7 +750,14 @@ export class BatchLLMRuleGenerator {
       scenes: scene || { tech: [], functional: [], business: [] },
       keywords: cluster.common_keywords,
       created_at: new Date().toISOString(),
-      updated_at: new Date().toISOString()
+      updated_at: new Date().toISOString(),
+      description: parsed.description,
+      scope: [RuleScope.GLOBAL, RuleScope.ORGANIZATION, RuleScope.PROJECT].includes(parsed.scope)
+        ? parsed.scope
+        : RuleScope.GLOBAL,
+      scope_context: parsed.scope_context,
+      scope_confidence: parsed.scope_confidence,
+      scope_reason: parsed.scope_reason
     };
 
     const content: RuleContent = {
@@ -733,9 +779,23 @@ export class BatchLLMRuleGenerator {
         last_seen: new Date().toISOString(),
         keywords: cluster.common_keywords,
         source_patterns: parsed.source_patterns,
-        merged_pattern_count: parsed.merged_count
+        merged_pattern_count: parsed.merged_count,
+        scope_confidence: parsed.scope_confidence,
+        scope_reason: parsed.scope_reason
       }
     };
+
+    const unified = this.qualityController.assessUnifiedScore(
+      content,
+      indexEntry,
+      cluster.avg_confidence,
+      parsed.scope_confidence
+    );
+    indexEntry.confidence = unified.overall;
+    content.metadata.quality_score = unified.overall;
+    content.metadata.evidence_confidence = unified.evidence_confidence;
+    content.metadata.scope_confidence = unified.scope_confidence;
+    content.metadata.confidence = unified.overall;
 
     return { indexEntry, content };
   }

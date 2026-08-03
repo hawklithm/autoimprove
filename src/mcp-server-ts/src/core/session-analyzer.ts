@@ -151,7 +151,13 @@ export class SessionAnalyzer {
         };
       });
       const procedural = memoryFromPattern(pattern, evidence, scene, "procedural");
-      procedural.namespace = { project_path: sessionData.project_path, session_id: sessionData.session_id };
+      procedural.namespace = {
+        project_path: sessionData.project_path,
+        organization_id: sessionData.organization_id || sessionData.metadata?.organization_id || process.env.AUTOIMPROVE_ORGANIZATION_ID,
+        repository: sessionData.metadata?.repository,
+        branch: sessionData.metadata?.branch,
+        session_id: sessionData.session_id
+      };
       this.memoryConsolidator.persist(procedural);
 
       for (const occurrence of pattern.occurrences) {
@@ -162,7 +168,13 @@ export class SessionAnalyzer {
           tool_names: toolNames,
           source_excerpt: (occurrence.user_input || pattern.description).slice(0, 500)
         }, scene);
-        episodic.namespace = { project_path: sessionData.project_path, session_id: sessionData.session_id };
+        episodic.namespace = {
+          project_path: sessionData.project_path,
+          organization_id: sessionData.organization_id || sessionData.metadata?.organization_id || process.env.AUTOIMPROVE_ORGANIZATION_ID,
+          repository: sessionData.metadata?.repository,
+          branch: sessionData.metadata?.branch,
+          session_id: sessionData.session_id
+        };
         this.memoryConsolidator.persist(episodic);
       }
     }
@@ -178,6 +190,13 @@ export class SessionAnalyzer {
       functional: ["testing", "database", "authentication", "api", "performance", "security"].filter(term => text.includes(term)),
       business: []
     };
+  }
+
+  private attachSessionContext(patterns: Pattern[], sessionData: SessionData): void {
+    if (!sessionData.project_path) return;
+    for (const pattern of patterns) {
+      pattern.project_paths = Array.from(new Set([...(pattern.project_paths || []), sessionData.project_path]));
+    }
   }
 
   /**
@@ -225,6 +244,7 @@ export class SessionAnalyzer {
     for (const pattern of patterns) {
       pattern.confidence = this.confidenceCalc.calculateConfidence(pattern);
     }
+    this.attachSessionContext(patterns, sessionData);
 
     await this.persistSessionMemories(sessionData, patterns);
 
@@ -291,6 +311,7 @@ export class SessionAnalyzer {
     for (const pattern of newPatterns) {
       pattern.confidence = this.confidenceCalc.calculateConfidence(pattern);
     }
+    this.attachSessionContext(newPatterns, partialSessionData);
 
     await this.persistSessionMemories(partialSessionData, newPatterns);
 

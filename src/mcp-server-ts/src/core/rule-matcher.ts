@@ -67,6 +67,9 @@ export class RuleMatcher {
       scopes?: RuleScope[];
       current_project?: string;
       organization_id?: string;
+      team_id?: string;
+      repository?: string;
+      branch?: string;
     }
   ): RuleMatch[] {
     this.ensureInitialized();
@@ -183,10 +186,17 @@ export class RuleMatcher {
       scopes?: RuleScope[];
       current_project?: string;
       organization_id?: string;
+      team_id?: string;
+      repository?: string;
+      branch?: string;
     }
   ): boolean {
     // If no scope specified, default to GLOBAL
     const ruleScope = rule.scope || RuleScope.GLOBAL;
+
+    if (rule.status && rule.status !== "active") {
+      return false;
+    }
 
     // If no scopes filter provided, allow all
     if (!scopeFilter.scopes || scopeFilter.scopes.length === 0) {
@@ -203,22 +213,28 @@ export class RuleMatcher {
       if (!scopeFilter.current_project || !rule.scope_context?.project_path) {
         return false;
       }
-      // Match project path (exact or substring)
-      return rule.scope_context.project_path === scopeFilter.current_project ||
-             scopeFilter.current_project.includes(rule.scope_context.project_path) ||
-             rule.scope_context.project_path.includes(scopeFilter.current_project);
+      const rulePath = this.normalizeProjectPath(rule.scope_context.project_path);
+      const currentPath = this.normalizeProjectPath(scopeFilter.current_project);
+      return rulePath === currentPath || currentPath.startsWith(`${rulePath}/`) || rulePath.startsWith(`${currentPath}/`);
     }
 
     // For ORGANIZATION scope, match organization context
     if (ruleScope === RuleScope.ORGANIZATION) {
-      if (!scopeFilter.organization_id || !rule.scope_context?.organization_id) {
-        return true; // Allow if no specific org context
-      }
-      return rule.scope_context.organization_id === scopeFilter.organization_id;
+      const context = rule.scope_context;
+      if (context?.organization_id && context.organization_id !== scopeFilter.organization_id) return false;
+      if (context?.organization_id && !scopeFilter.organization_id) return false;
+      if (context?.team_id && context.team_id !== scopeFilter.team_id) return false;
+      if (context?.repository && context.repository !== scopeFilter.repository) return false;
+      if (context?.branch && context.branch !== scopeFilter.branch) return false;
+      return true;
     }
 
     // GLOBAL scope always matches
     return true;
+  }
+
+  private normalizeProjectPath(path: string): string {
+    return path.replace(/\\/g, "/").replace(/\/+$/, "").toLowerCase();
   }
 
   private calculateRelevance(

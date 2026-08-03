@@ -3,6 +3,8 @@
  */
 
 import { describe, it, expect, beforeEach } from "vitest";
+import { tmpdir } from "os";
+import { join } from "path";
 import { RuleQualityController } from "../src/core/rule-quality.js";
 import { RuleVersionControl } from "../src/storage/rule-version.js";
 import { AdaptiveConfidenceCalculator } from "../src/core/adaptive-confidence.js";
@@ -10,6 +12,13 @@ import { EnhancedSceneDetector } from "../src/core/enhanced-scene-detector.js";
 import { IndexedRuleMatcher } from "../src/core/indexed-rule-matcher.js";
 import { RuleIndexManager } from "../src/storage/rule-index.js";
 import { createRuleContent, createRuleIndexEntry, createPattern, PatternType } from "../src/core/models.js";
+
+// These components intentionally persist state. Give every test a fresh
+// storage root so historical data cannot affect version numbers or feedback
+// counters, and so the tests do not touch the user's profile.
+beforeEach(() => {
+  process.env.AUTOIMPROVE_STORAGE_ROOT = join(tmpdir(), `autoimprove-optimization-${Date.now()}-${Math.random()}`);
+});
 
 describe("Rule Quality Controller", () => {
   let qualityController: RuleQualityController;

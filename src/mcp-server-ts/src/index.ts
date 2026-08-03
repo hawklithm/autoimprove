@@ -24,7 +24,7 @@ import { RuleGenerator } from "./core/rule-generator.js";
 import { HybridRuleGenerator } from "./core/hybrid-rule-generator.js";
 import { TemplateBasedRuleGenerator } from "./core/template-based-rule-generator.js";
 import { RuleMatcher } from "./core/rule-matcher.js";
-import { RuleQualityController } from "./core/rule-quality.js";
+import { RuleQualityController, UNIFIED_RULE_MIN_SCORE } from "./core/rule-quality.js";
 import { AdaptiveConfidenceCalculator } from "./core/adaptive-confidence.js";
 import { EnhancedSceneDetector } from "./core/enhanced-scene-detector.js";
 import { ClaudeIndexExporter } from "./tools/export-rules-to-claude.js";
@@ -49,6 +49,9 @@ import { BatchRebuildEngine } from "./core/batch-rebuild.js";
 import { PatternEvolutionManager } from "./storage/pattern-evolution.js";
 import { MemoryRepository } from "./core/memory-models.js";
 import { createDefaultMemoryRepository } from "./storage/memory-sqlite-store.js";
+import { MemoryPromotionService } from "./core/memory-promotion.js";
+import { RuleEvolutionService, RuleFeedbackKind } from "./core/rule-evolution.js";
+import { KnowledgeHealthAnalyzer } from "./core/knowledge-health.js";
 
 // ============================================================================
 // Initialization
@@ -72,8 +75,11 @@ function parseCommaSeparated(input: string | undefined): string[] | undefined {
 function parseScopeFilter(
   scopesStr: string | undefined,
   currentProject: string | undefined,
-  organizationId: string | undefined
-): { scopes: RuleScope[]; current_project?: string; organization_id?: string } | undefined {
+  organizationId: string | undefined,
+  teamId?: string,
+  repository?: string,
+  branch?: string
+): { scopes: RuleScope[]; current_project?: string; organization_id?: string; team_id?: string; repository?: string; branch?: string } | undefined {
   // Auto-detect current project if not provided
   const projectPath = currentProject || process.cwd();
 
@@ -103,7 +109,10 @@ function parseScopeFilter(
   return {
     scopes,
     current_project: projectPath,
-    organization_id: organizationId
+    organization_id: organizationId,
+    team_id: teamId,
+    repository,
+    branch
   };
 }
 
@@ -127,6 +136,9 @@ let statsAnalyzer: RuleUsageStatsAnalyzer;
 let batchRebuildEngine: BatchRebuildEngine;
 let patternEvolution: PatternEvolutionManager;
 let memoryStore: MemoryRepository;
+let memoryPromotion: MemoryPromotionService;
+let ruleEvolution: RuleEvolutionService;
+let knowledgeHealth: KnowledgeHealthAnalyzer;
 // Adaptive pattern recognition components (initialized but reserved for future use)
 // Reserved for future adaptive pattern recognition features
 let _signalDB: SignalDictionaryDB;
@@ -146,6 +158,7 @@ async function ensureInitialized() {
 
     indexManager = new RuleIndexManager();
     memoryStore = createDefaultMemoryRepository();
+    memoryPromotion = new MemoryPromotionService(memoryStore);
 
     // Trigger migration if needed (JSON → SQLite)
     const migrationStatus = indexManager.getMigrationStatus();
@@ -172,6 +185,8 @@ async function ensureInitialized() {
     cleanupService = new RuleCleanupService();
     matcher = new RuleMatcher(indexManager, config.rule_matching.max_results, config.rule_matching.min_confidence);
     qualityController = new RuleQualityController();
+    ruleEvolution = new RuleEvolutionService(indexManager, contentManager, memoryStore, qualityController);
+    knowledgeHealth = new KnowledgeHealthAnalyzer(indexManager, memoryStore);
     adaptiveConfidence = new AdaptiveConfidenceCalculator();
     sceneDetector = new EnhancedSceneDetector();
     claudeIndexExporter = new ClaudeIndexExporter(indexManager, contentManager);
@@ -337,6 +352,9 @@ Keywords are matched against rule descriptions, titles, and content. Use specifi
               type: "string",
               description: `Organization identifier for ORGANIZATION scope filtering. Example: "mycompany", "github.com/myorg". If not provided, organization-scoped rules will still match if they have no specific organization_id constraint.`,
             },
+            team_id: { type: "string", description: "Optional team identifier for team-scoped organization rules" },
+            repository: { type: "string", description: "Optional repository identifier" },
+            branch: { type: "string", description: "Optional branch identifier" },
             scopes: {
               type: "string",
               description: `Comma-separated list of scopes to include: "global", "organization", "project". Default: "global,organization,project" (all scopes). Examples:
@@ -365,7 +383,11 @@ Keywords are matched against rule descriptions, titles, and content. Use specifi
             limit: {
               type: "number",
               description: "Maximum number of active memories to return. Default: 8."
-            }
+            },
+            current_project: { type: "string", description: "Optional project path for scope-aware memory retrieval" },
+            organization_id: { type: "string", description: "Optional organization identifier" },
+            repository: { type: "string", description: "Optional repository identifier" },
+            branch: { type: "string", description: "Optional branch identifier" }
           },
           required: ["query"]
         }
@@ -395,6 +417,11 @@ Returns: Rule metadata + full content (title, description, how_to_apply, when_to
           },
           required: ["rule_id"],
         },
+      },
+      {
+        name: "get_knowledge_health",
+        description: "Get health metrics for long-term memory, rule provenance, validation, and evolution.",
+        inputSchema: { type: "object", properties: {} }
       },
       {
         name: "update_rules",
@@ -538,7 +565,7 @@ Returns: Rule metadata + full content (title, description, how_to_apply, when_to
       },
       {
         name: "record_feedback",
-        description: "Record feedback for a rule (used, ignored, corrected, disabled)",
+        description: "Record feedback for a rule and its supporting memories",
         inputSchema: {
           type: "object",
           properties: {
@@ -548,7 +575,7 @@ Returns: Rule metadata + full content (title, description, how_to_apply, when_to
             },
             feedback_type: {
               type: "string",
-              enum: ["used", "ignored", "corrected", "disabled"],
+              enum: ["used", "accepted", "validated", "ignored", "corrected", "contradicted", "disabled"],
               description: "Type of feedback",
             },
             user_rating: {
@@ -558,6 +585,10 @@ Returns: Rule metadata + full content (title, description, how_to_apply, when_to
             context: {
               type: "string",
               description: "Optional context information",
+            },
+            memory_id: {
+              type: "string",
+              description: "Optional source Memory ID; otherwise all memories linked to the rule are updated",
             },
           },
           required: ["rule_id", "feedback_type"],
@@ -1038,6 +1069,9 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       case "search_memory":
         return await handleSearchMemory(request.params.arguments);
 
+      case "get_knowledge_health":
+        return await handleGetKnowledgeHealth();
+
       case "get_rule_details":
         return await handleGetRuleDetails(request.params.arguments);
 
@@ -1190,6 +1224,7 @@ async function handleAnalyzeSession(args: any) {
     category: p.category,
     priority: p.priority,
     keywords: p.keywords,
+    project_paths: p.project_paths,
   }));
 
   const sessionId = sessionFilePath.split("/").pop()?.replace(/\.(jsonl|json)$/, "") || "unknown";
@@ -1235,6 +1270,85 @@ function buildBasicContent(entry: any): any {
       keywords: entry.keywords || [],
     },
   };
+}
+
+function getMemorySupport(sourceMemoryIds: string[] | undefined): { ids: string[]; score: number } {
+  const ids = Array.from(new Set(sourceMemoryIds || []));
+  if (ids.length === 0) return { ids: [], score: 0.5 };
+  const memories = memoryStore.list({ activeOnly: true }).filter(memory => ids.includes(memory.id));
+  if (memories.length === 0) return { ids: [], score: 0.35 };
+  const scores = memories.map(memory => {
+    const outcome = memory.outcome?.status === "success" ? 1 : memory.outcome?.status === "failed" ? 0 : 0.5;
+    return memory.confidence * 0.35
+      + Math.min(1, memory.strength / 5) * 0.3
+      + memory.importance * 0.15
+      + outcome * 0.2;
+  });
+  return { ids: memories.map(memory => memory.id), score: scores.reduce((sum, score) => sum + score, 0) / scores.length };
+}
+
+function findSupportingMemoryIds(rule: { indexEntry: any; content: any }): { ids: string[]; score: number } {
+  const projectPath = rule.indexEntry.scope_context?.project_path;
+  const organizationId = rule.indexEntry.scope_context?.organization_id?.toLowerCase();
+  const repository = rule.indexEntry.scope_context?.repository;
+  const branch = rule.indexEntry.scope_context?.branch;
+  const query = rule.content.description || rule.content.content || rule.indexEntry.description || "";
+  if (!query.trim()) return { ids: [], score: 0.5 };
+  const results = memoryStore.searchScored
+    ? memoryStore.searchScored(query, 8, { projectPath, organizationId, repository, branch })
+    : memoryStore.search(query, 8, { projectPath, organizationId, repository, branch }).map(memory => ({ memory, score: 0.5, reasons: ["legacy-search"] }));
+  const supporting = results.filter(result => result.memory.kind !== "episodic"
+    && result.score >= 0.25
+    && (!organizationId || !result.memory.namespace?.organization_id || result.memory.namespace.organization_id.toLowerCase() === organizationId)
+  ).slice(0, 5);
+  if (supporting.length === 0) return { ids: [], score: 0.5 };
+  const support = getMemorySupport(supporting.map(result => result.memory.id));
+  return { ids: support.ids, score: Math.max(support.score, supporting.reduce((sum, result) => sum + result.score, 0) / supporting.length) };
+}
+
+function refreshRulesSupportedByMemory(memoryId: string): number {
+  const memory = memoryStore.list({ activeOnly: false }).find(item => item.id === memoryId);
+  if (!memory) return 0;
+  let refreshed = 0;
+  for (const entry of indexManager.getAllRules()) {
+    if (!entry.source_memory_ids?.includes(memoryId)) continue;
+    const content = contentManager.loadContent(entry.id);
+    if (!content) continue;
+    const support = getMemorySupport(entry.source_memory_ids);
+    const score = qualityController.assessUnifiedScore(
+      content,
+      entry,
+      content.metadata?.evidence_confidence ?? entry.confidence,
+      content.metadata?.scope_confidence ?? entry.scope_confidence ?? 0.5,
+      support.score
+    );
+    indexManager.replaceRule(entry.id, { ...entry, confidence: score.overall });
+    content.metadata = {
+      ...content.metadata,
+      quality_score: score.overall,
+      confidence: score.overall,
+      memory_support_score: score.memory_support_score
+    };
+    contentManager.saveContent(content);
+    refreshed++;
+  }
+  return refreshed;
+}
+
+function linkRuleToMemories(rule: { indexEntry: any; content?: any }): void {
+  if (!memoryStore.linkRule) return;
+  const now = new Date().toISOString();
+  for (const memoryId of rule.indexEntry.source_memory_ids || rule.content?.metadata?.source_memory_ids || []) {
+    const support = getMemorySupport([memoryId]);
+    memoryStore.linkRule({
+      memory_id: memoryId,
+      rule_id: rule.indexEntry.id,
+      relation: "supports",
+      support_score: support.score,
+      created_at: now,
+      updated_at: now
+    });
+  }
 }
 
 async function handleGenerateRules(args: any) {
@@ -1301,7 +1415,14 @@ async function handleGenerateRules(args: any) {
     category: p.category,
     priority: p.priority,
     keywords: p.keywords || [],
+    project_paths: p.project_paths,
   }));
+
+  const promotedMemories = await memoryPromotion.promoteEligibleWithLLM();
+  if (promotedMemories.length > 0) {
+    logger.info("memory-promotion", `Promoted ${promotedMemories.length} procedural memories before rule generation`);
+    ruleEvolution.reevaluateAll();
+  }
 
   let scene: Scene | undefined;
   if (sceneJson) {
@@ -1403,9 +1524,36 @@ async function handleGenerateRules(args: any) {
     }
   }
 
+  // Normalize every generation mode (basic, template, and hybrid) to the
+  // same evidence/content/scope score before persistence.
+  rules = rules.map(rule => {
+    const memorySupport = findSupportingMemoryIds(rule);
+    rule.indexEntry.source_memory_ids = memorySupport.ids;
+    rule.indexEntry.status = memorySupport.ids.length > 0 && memorySupport.score >= UNIFIED_RULE_MIN_SCORE ? "active" : "candidate";
+    rule.content.metadata.source_memory_ids = memorySupport.ids;
+    rule.content.metadata.memory_support_score = memorySupport.score;
+    const unified = qualityController.assessUnifiedScore(
+      rule.content,
+      rule.indexEntry,
+      rule.content.metadata?.evidence_confidence ?? rule.indexEntry.confidence,
+      rule.content.metadata?.scope_confidence ?? 0.5,
+      memorySupport.score
+    );
+    rule.indexEntry.confidence = unified.overall;
+    rule.content.metadata.quality_score = unified.overall;
+    rule.content.metadata.confidence = unified.overall;
+    return rule;
+  }).filter(rule => rule.indexEntry.confidence >= UNIFIED_RULE_MIN_SCORE);
+
   // ===== DEDUPLICATION PHASE =====
   // Automatically detect and merge similar rules
   const existingRules = indexManager.getAllRules();
+  const rulesForDedup = [...existingRules];
+  const contentByRuleId = new Map<string, any>();
+  for (const existingRule of existingRules) {
+    const existingContent = contentManager.loadContent(existingRule.id);
+    if (existingContent) contentByRuleId.set(existingRule.id, existingContent);
+  }
   const deduplicationResults: DeduplicationResult[] = [];
   const finalRuleIds: string[] = [];
   let addedCount = 0;
@@ -1413,8 +1561,9 @@ async function handleGenerateRules(args: any) {
   let skippedCount = 0;
 
   for (const { indexEntry, content } of rules) {
+    contentByRuleId.set(indexEntry.id, content);
     // Find similar rules in existing database
-    const similarities = deduplicator.findSimilarRules(indexEntry, existingRules);
+    const similarities = deduplicator.findSimilarRules(indexEntry, rulesForDedup, contentByRuleId);
 
     if (similarities.length > 0 && similarities[0].action === "merge") {
       // High similarity detected - merge into existing rule
@@ -1430,9 +1579,13 @@ async function handleGenerateRules(args: any) {
 
       // Update existing rule
       indexManager.replaceRule(topMatch.existingRuleId, merged.indexEntry);
+      const mergeIndex = rulesForDedup.findIndex(rule => rule.id === topMatch.existingRuleId);
+      if (mergeIndex >= 0) rulesForDedup[mergeIndex] = merged.indexEntry;
       if (merged.content) {
         contentManager.saveContent(merged.content);
+        contentByRuleId.set(topMatch.existingRuleId, merged.content);
       }
+      linkRuleToMemories({ indexEntry: merged.indexEntry, content: merged.content });
 
       deduplicationResults.push({
         action: "merged",
@@ -1459,9 +1612,13 @@ async function handleGenerateRules(args: any) {
       );
 
       indexManager.replaceRule(topMatch.existingRuleId, merged.indexEntry);
+      const updateIndex = rulesForDedup.findIndex(rule => rule.id === topMatch.existingRuleId);
+      if (updateIndex >= 0) rulesForDedup[updateIndex] = merged.indexEntry;
       if (merged.content) {
         contentManager.saveContent(merged.content);
+        contentByRuleId.set(topMatch.existingRuleId, merged.content);
       }
+      linkRuleToMemories({ indexEntry: merged.indexEntry, content: merged.content });
 
       deduplicationResults.push({
         action: "updated",
@@ -1482,6 +1639,8 @@ async function handleGenerateRules(args: any) {
       const ruleContent = content || buildBasicContent(indexEntry);
       indexManager.addRule(indexEntry, ruleContent);
       contentManager.saveContent(ruleContent);
+      linkRuleToMemories({ indexEntry, content: ruleContent });
+      rulesForDedup.push(indexEntry);
 
       deduplicationResults.push({
         action: "added",
@@ -1505,7 +1664,7 @@ async function handleGenerateRules(args: any) {
     const exporter = new ClaudeIndexExporter(indexManager, contentManager);
     const exportResult = exporter.export({
       limit: 10,
-      minConfidence: 0.7,
+      minConfidence: UNIFIED_RULE_MIN_SCORE,
       strategy: "category-balanced",
     });
     logger.info("auto-export", `Successfully exported ${exportResult.rulesExported} rules to claude-index.md`);
@@ -1631,9 +1790,15 @@ async function handleSearchMemory(args: any) {
     return { content: [{ type: "text", text: JSON.stringify({ success: false, error: "query is required" }) }] };
   }
 
+  const filters = {
+    projectPath: typeof args?.current_project === "string" ? args.current_project : undefined,
+    organizationId: typeof args?.organization_id === "string" ? args.organization_id : undefined,
+    repository: typeof args?.repository === "string" ? args.repository : undefined,
+    branch: typeof args?.branch === "string" ? args.branch : undefined
+  };
   const scoredMemories = memoryStore.searchScored
-    ? memoryStore.searchScored(query, limit)
-    : memoryStore.search(query, limit).map(memory => ({ memory, score: 0, reasons: ["legacy-search"] }));
+    ? memoryStore.searchScored(query, limit, filters)
+    : memoryStore.search(query, limit, filters).map(memory => ({ memory, score: 0, reasons: ["legacy-search"] }));
   return {
     content: [{
       type: "text",
@@ -1657,11 +1822,23 @@ async function handleSearchMemory(args: any) {
           strength: memory.strength,
           valid_from: memory.valid_from,
           valid_to: memory.valid_to,
-          status: memory.status,
-          evidence: memory.evidence
+           status: memory.status,
+           state: memory.state,
+           support_count: memory.support_count,
+           validation_count: memory.validation_count,
+           evidence: memory.evidence
           }; })()
         }))
       }, null, 2)
+    }]
+  };
+}
+
+async function handleGetKnowledgeHealth() {
+  return {
+    content: [{
+      type: "text",
+      text: JSON.stringify({ success: true, report: knowledgeHealth.getReport() }, null, 2)
     }]
   };
 }
@@ -1673,6 +1850,9 @@ async function handleSearchKnowledge(args: any) {
   const skipFeedback = args.skip_feedback === true;
   const currentProject = args.current_project as string | undefined;
   const organizationId = args.organization_id as string | undefined;
+  const teamId = args.team_id as string | undefined;
+  const repository = args.repository as string | undefined;
+  const branch = args.branch as string | undefined;
   const scopesStr = args.scopes as string | undefined;
   const fullDisplay = args.full_display === true;
 
@@ -1778,7 +1958,7 @@ async function handleSearchKnowledge(args: any) {
   }
 
   // Parse scope filter
-  const scopeFilter = parseScopeFilter(scopesStr, currentProject, organizationId);
+  const scopeFilter = parseScopeFilter(scopesStr, currentProject, organizationId, teamId, repository, branch);
 
   // Search by keywords only (no scene_json provided)
   // FIX: previously keyword-only queries fell through to list-all (returned every rule).
@@ -2685,23 +2865,45 @@ async function handleRollbackRule(args: any) {
 async function handleRecordFeedback(args: any) {
   const ruleId = args.rule_id as string;
   const memoryId = args.memory_id as string | undefined;
-  const feedbackType = args.feedback_type as "used" | "ignored" | "corrected" | "disabled";
+  const feedbackType = args.feedback_type as "used" | "accepted" | "validated" | "ignored" | "corrected" | "contradicted" | "disabled";
   const userRating = args.user_rating as number | undefined;
   const context = args.context as string | undefined;
 
+  const adaptiveFeedbackType: "used" | "ignored" | "corrected" | "disabled" = feedbackType === "accepted" || feedbackType === "validated" ? "used" : feedbackType === "contradicted" ? "corrected" : feedbackType;
   const feedback = {
     rule_id: ruleId,
     timestamp: new Date().toISOString(),
-    feedback_type: feedbackType,
+    feedback_type: adaptiveFeedbackType,
     user_rating: userRating,
     context: context,
   };
 
   adaptiveConfidence.recordFeedback(feedback);
-  if (memoryId && memoryStore.recordUsage) {
-    const event = feedbackType === "used" ? "applied" : feedbackType === "corrected" ? "corrected" : feedbackType === "disabled" ? "rejected" : "recalled";
-    memoryStore.recordUsage(memoryId, event);
+  const linkedMemoryIds = Array.from(new Set(
+    memoryId ? [memoryId] : (indexManager.getRule(ruleId)?.source_memory_ids || [])
+  ));
+  if (memoryStore.recordUsage) {
+    const event = feedbackType === "used" ? "applied"
+      : feedbackType === "accepted" ? "accepted"
+      : feedbackType === "validated" ? "validated"
+      : feedbackType === "corrected" ? "corrected"
+      : feedbackType === "contradicted" ? "contradicted"
+      : feedbackType === "disabled" || feedbackType === "ignored" ? "rejected"
+      : "recalled";
+    for (const linkedId of linkedMemoryIds) {
+      memoryStore.recordUsage(linkedId, event);
+      refreshRulesSupportedByMemory(linkedId);
+    }
   }
+  const evolutionFeedback: RuleFeedbackKind = feedbackType === "used" ? "applied"
+    : feedbackType === "accepted" ? "accepted"
+    : feedbackType === "validated" ? "validated"
+    : feedbackType === "corrected" ? "corrected"
+    : feedbackType === "contradicted" ? "contradicted"
+    : feedbackType === "disabled" ? "disabled"
+    : feedbackType === "ignored" ? "ignored"
+    : "recalled";
+  ruleEvolution.recordFeedback(ruleId, evolutionFeedback);
   logger.info("feedback", `Recorded ${feedbackType} feedback for rule ${ruleId}`, {
     rating: userRating,
   });
@@ -3712,8 +3914,24 @@ async function handleGenerateRulesFromClusters(args: any) {
     for (const rule of generatedRules) {
       // Convert GeneratedRule to storage format
       const converted = _llmRuleGenerator.convertToStorageFormat(rule);
+      const memorySupport = findSupportingMemoryIds(converted);
+      converted.indexEntry.source_memory_ids = memorySupport.ids;
+      converted.indexEntry.status = memorySupport.ids.length > 0 && memorySupport.score >= UNIFIED_RULE_MIN_SCORE ? "active" : "candidate";
+      converted.content.metadata.source_memory_ids = memorySupport.ids;
+      converted.content.metadata.memory_support_score = memorySupport.score;
+      const unified = qualityController.assessUnifiedScore(
+        converted.content,
+        converted.indexEntry,
+        converted.content.metadata.evidence_confidence ?? converted.indexEntry.confidence,
+        converted.content.metadata.scope_confidence ?? converted.indexEntry.scope_confidence ?? 0.5,
+        memorySupport.score
+      );
+      converted.indexEntry.confidence = unified.overall;
+      converted.content.metadata.quality_score = unified.overall;
+      converted.content.metadata.confidence = unified.overall;
+      if (unified.overall < UNIFIED_RULE_MIN_SCORE) continue;
 
-      indexManager.addRule(converted.indexEntry);
+      indexManager.addRule(converted.indexEntry, converted.content);
 
       contentManager.saveContent({
         id: rule.id,
@@ -3721,6 +3939,7 @@ async function handleGenerateRulesFromClusters(args: any) {
         reason: converted.content.reason,
         metadata: converted.content.metadata,
       });
+      linkRuleToMemories({ indexEntry: converted.indexEntry, content: converted.content });
 
       ruleIds.push(rule.id);
     }
@@ -3978,7 +4197,7 @@ async function handleBatchRebuild(args: any) {
     const result = await batchRebuildEngine.rebuild({
       force: args.force === true,
       incremental: !args.force, // Use incremental mode unless force is set
-      minConfidence: args.min_confidence || 0.6,
+      minConfidence: args.min_confidence ?? UNIFIED_RULE_MIN_SCORE,
       sessionLimit: args.session_limit,
       dryRun: args.dry_run === true,
       sessionDir: args.session_dir,
@@ -3986,7 +4205,7 @@ async function handleBatchRebuild(args: any) {
         useLLMEnhancement: !!args.use_llm_enhancement,
         extractCodeExamples: !!args.extract_code_examples,
       },
-      autoCleanup: !!args.auto_cleanup,
+      autoCleanup: args.auto_cleanup !== false,
       // Use sensible defaults for cleanup options (not exposed in schema to reduce parameter count)
       mergeDuplicates: true,
       optimizeLowQuality: true,
@@ -4002,7 +4221,7 @@ async function handleBatchRebuild(args: any) {
         const exporter = new ClaudeIndexExporter(indexManager, contentManager);
         const exportResult = exporter.export({
           limit: 10,
-          minConfidence: 0.7,
+          minConfidence: UNIFIED_RULE_MIN_SCORE,
           strategy: "category-balanced",
         });
         logger.info("auto-export", `Successfully exported ${exportResult.rulesExported} rules to claude-index.md`);

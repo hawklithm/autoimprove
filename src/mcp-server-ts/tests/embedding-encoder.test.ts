@@ -19,19 +19,19 @@ function makeCandidate(text: string, idx: number): MessageCandidate {
 }
 
 describe("EmbeddingEncoder (char n-gram TF-IDF)", () => {
-  it("produces aligned, normalized vectors for a batch", () => {
+  it("produces aligned, normalized vectors for a batch", async () => {
     const enc = new EmbeddingEncoder({ backend: "char-ngram-tfidf" });
-    const a = enc.encode("应该用 useMemo 避免重复渲染");
-    const b = enc.encode("使用 useMemo 防止重复 re-render");
+    const a = await enc.encode("应该用 useMemo 避免重复渲染");
+    const b = await enc.encode("使用 useMemo 防止重复 re-render");
     expect(a.length).toBe(b.length);
     // normalized => magnitude ~1
     const mag = Math.sqrt(Array.from(a).reduce((s, v) => s + v * v, 0));
     expect(mag).toBeCloseTo(1, 2);
   });
 
-  it("semantically similar (cross-lingual) messages score higher than unrelated ones", () => {
+  it("semantically similar (cross-lingual) messages score higher than unrelated ones", async () => {
     const enc = new EmbeddingEncoder({ backend: "char-ngram-tfidf" });
-    const similar = enc.encodeBatch([
+    const similar = await enc.encodeBatch([
       "应该用 useMemo 避免重复渲染",
       "使用 useMemo 防止重复 re-render",
       "今天天气真好我们去吃饭吧",
@@ -43,14 +43,14 @@ describe("EmbeddingEncoder (char n-gram TF-IDF)", () => {
 });
 
 describe("MessageClusterer backward compatibility + semantic mode", () => {
-  it("legacy mode clusters without throwing and preserves counts", () => {
+  it("legacy mode clusters without throwing and preserves counts", async () => {
     const c = new MessageClusterer();
     const candidates = [
       makeCandidate("应该用 useMemo 避免重复渲染", 1),
       makeCandidate("今天天气真好", 2),
       makeCandidate("使用 useMemo 防止重复 re-render", 3),
     ];
-    const clusters = c.clusterMessages(candidates);
+    const clusters = await c.clusterMessages(candidates);
     expect(clusters.length).toBeGreaterThan(0);
   });
 });

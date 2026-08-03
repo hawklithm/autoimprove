@@ -1,6 +1,6 @@
 import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "fs";
 import { dirname, join } from "path";
-import { MemoryMutation, MemoryRecord, MemorySearchResult, MemoryUsageEvent } from "../core/memory-models.js";
+import { MemoryMutation, MemoryRecord, MemorySearchResult, MemoryUsageEvent, MemoryRuleLink, MemorySearchFilters } from "../core/memory-models.js";
 import { STORAGE_ROOT } from "./init.js";
 
 function charNgrams(value: string): Set<string> {
@@ -27,19 +27,22 @@ export class MemoryStore {
     this.load();
   }
 
-  list(options: { activeOnly?: boolean; kind?: MemoryRecord["kind"]; projectPath?: string } = {}): MemoryRecord[] {
+  list(options: { activeOnly?: boolean; kind?: MemoryRecord["kind"]; projectPath?: string; organizationId?: string; repository?: string; branch?: string } = {}): MemoryRecord[] {
     return Array.from(this.records.values()).filter(record =>
       (!options.activeOnly || record.status === "active") &&
       (!options.kind || record.kind === options.kind) &&
-      (!options.projectPath || !record.namespace?.project_path || record.namespace.project_path === options.projectPath)
+      (!options.projectPath || !record.namespace?.project_path || record.namespace.project_path === options.projectPath) &&
+      (!options.organizationId || !record.namespace?.organization_id || record.namespace.organization_id.toLowerCase() === options.organizationId.toLowerCase())
+      && (!options.repository || !record.namespace?.repository || record.namespace.repository === options.repository)
+      && (!options.branch || !record.namespace?.branch || record.namespace.branch === options.branch)
     );
   }
 
-  search(query: string, limit = 8, filters: { projectPath?: string; kind?: MemoryRecord["kind"] } = {}): MemoryRecord[] {
+  search(query: string, limit = 8, filters: MemorySearchFilters = {}): MemoryRecord[] {
     return this.searchScored(query, limit, filters).map(result => result.memory);
   }
 
-  searchScored(query: string, limit = 8, filters: { projectPath?: string; kind?: MemoryRecord["kind"] } = {}): MemorySearchResult[] {
+  searchScored(query: string, limit = 8, filters: MemorySearchFilters = {}): MemorySearchResult[] {
     const queryTokens = new Set(query.toLowerCase().split(/[^\p{L}\p{N}_+#.-]+/u).filter(Boolean));
     return this.list({ activeOnly: true, ...filters })
       .map(memory => {
@@ -50,7 +53,9 @@ export class MemoryStore {
         const semantic = charSimilarity(query, `${memory.content} ${memory.summary}`);
         const recency = Math.max(0, 1 - (Date.now() - Date.parse(memory.updated_at)) / (1000 * 60 * 60 * 24 * 30));
         const outcomeBoost = memory.outcome?.status === "success" || memory.outcome?.tests_passed ? 1 : 0;
-        const score = semantic * 0.25 + lexical * 0.3 + Math.min(1, entityMatches / Math.max(1, queryTokens.size)) * 0.15 + memory.importance * 0.15 + Math.min(1, memory.strength / 5) * 0.1 + recency * 0.03 + outcomeBoost * 0.02;
+        const validationBoost = Math.min(1, (memory.validation_count || 0) / 3);
+        const contradictionPenalty = Math.min(1, (memory.contradiction_count || 0) / 2);
+        const score = semantic * 0.22 + lexical * 0.25 + Math.min(1, entityMatches / Math.max(1, queryTokens.size)) * 0.12 + memory.importance * 0.12 + memory.confidence * 0.12 + Math.min(1, memory.strength / 5) * 0.08 + validationBoost * 0.06 + recency * 0.03 + outcomeBoost * 0.02 - contradictionPenalty * 0.12;
         const reasons: string[] = [];
         if (lexical > 0) reasons.push(`keyword:${lexical.toFixed(2)}`);
         if (entityMatches > 0) reasons.push(`entity:${entityMatches}`);
@@ -86,9 +91,37 @@ export class MemoryStore {
     if (!record) return;
     const delta = event === "rejected" || event === "corrected" || event === "contradicted" ? -0.5 : 0.5;
     record.strength = Math.max(0, record.strength + delta);
+    record.validation_count = (record.validation_count || 0) + (event === "validated" || event === "accepted" ? 1 : 0);
+    record.contradiction_count = (record.contradiction_count || 0) + (event === "contradicted" || event === "corrected" ? 1 : 0);
+    if (event === "validated" || event === "accepted") {
+      record.state = "validated";
+      record.last_validated_at = new Date().toISOString();
+    } else if (event === "contradicted" || event === "corrected") {
+      record.state = "deprecated";
+    }
     record.updated_at = new Date().toISOString();
     record.metadata = { ...(record.metadata || {}), [`usage_${event}`]: Number(record.metadata?.[`usage_${event}`] || 0) + 1 };
     this.append(record);
+  }
+
+  linkRule(link: MemoryRuleLink): void {
+    const record = this.records.get(link.memory_id);
+    if (!record) return;
+    const links = Array.isArray(record.metadata?.linked_rule_links) ? record.metadata.linked_rule_links as MemoryRuleLink[] : [];
+    const next = links.filter(item => item.rule_id !== link.rule_id);
+    next.push(link);
+    record.metadata = { ...(record.metadata || {}), linked_rule_links: next };
+    record.updated_at = link.updated_at;
+    this.append(record);
+  }
+
+  getRulesForMemory(memoryId: string): MemoryRuleLink[] {
+    const record = this.records.get(memoryId);
+    return Array.isArray(record?.metadata?.linked_rule_links) ? record!.metadata!.linked_rule_links as MemoryRuleLink[] : [];
+  }
+
+  getMemoriesForRule(ruleId: string): MemoryRuleLink[] {
+    return this.list().flatMap(record => this.getRulesForMemory(record.id).filter(link => link.rule_id === ruleId));
   }
 
   private load(): void {

@@ -10,6 +10,7 @@
 
 import { RuleIndexEntry, RuleContent } from "./models.js";
 import { RuleDeduplicator, SimilarityResult } from "./rule-deduplicator.js";
+import { UNIFIED_RULE_MIN_SCORE } from "./rule-quality.js";
 
 export interface QualityAssessment {
   ruleId: string;
@@ -63,7 +64,7 @@ export class RuleCleanupService {
   // Quality thresholds
   private readonly MIN_KEYWORDS = 2;
   private readonly MIN_DESCRIPTION_LENGTH = 30;
-  private readonly MIN_CONFIDENCE = 0.5;
+  private readonly MIN_CONFIDENCE = UNIFIED_RULE_MIN_SCORE;
   private readonly DUPLICATE_SIMILARITY_THRESHOLD = 0.75;
 
   constructor() {

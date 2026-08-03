@@ -46,9 +46,9 @@ describe("NeighborSignalMatcher", () => {
     db.close();
   });
 
-  it("matches an English paraphrased message to a semantically related signal within threshold", () => {
+  it("matches an English paraphrased message to a semantically related signal within threshold", async () => {
     // char-ngram TF-IDF shares strong n-gram overlap on English paraphrases.
-    const result = matcher.match(
+    const result = await matcher.match(
       "avoid re-rendering by using useMemo",
       "test-session",
       "msg-1"
@@ -62,13 +62,13 @@ describe("NeighborSignalMatcher", () => {
     ).toBe(true);
   });
 
-  it("ranks a cross-lingual (zh+en) message more similar to the shared-token signal than to an unrelated one", () => {
+  it("ranks a cross-lingual (zh+en) message more similar to the shared-token signal than to an unrelated one", async () => {
     // The zh/en query shares the "usememo" n-grams with sigA but not with an
     // unrelated sentence; char-ngram captures this partial semantic proximity.
     // We don't assert is_matched (threshold 0.62 is intentionally higher than
     // the 0.25 cross-lingual cosine), only that the matcher ran and returned a
     // valid shape, and that the dictionary is non-empty.
-    const result = matcher.match("应该用 useMemo 避免重复渲染", "test-session", "msg-x");
+    const result = await matcher.match("应该用 useMemo 避免重复渲染", "test-session", "msg-x");
     expect(result).toHaveProperty("matched_signals");
     expect(Array.isArray(result.matched_signals)).toBe(true);
     expect(matcher.getStats().total_patterns).toBeGreaterThanOrEqual(2);
@@ -82,8 +82,8 @@ describe("NeighborSignalMatcher", () => {
     expect(() => matcher.rebuild()).not.toThrow();
   });
 
-  it("returns unmatched result for empty dictionary / unrelated content", () => {
-    const r = matcher.match("今天天气真好我们去吃饭吧", "test-session", "msg-2");
+  it("returns unmatched result for empty dictionary / unrelated content", async () => {
+    const r = await matcher.match("今天天气真好我们去吃饭吧", "test-session", "msg-2");
     // Unrelated content may or may not match; assert shape is always valid.
     expect(r).toHaveProperty("matched_signals");
     expect(Array.isArray(r.matched_signals)).toBe(true);

@@ -25,6 +25,7 @@ export interface SessionData {
   tool_calls: ToolCall[];
   metadata: Record<string, any>;
   project_path?: string;
+  organization_id?: string;
 }
 
 /**
