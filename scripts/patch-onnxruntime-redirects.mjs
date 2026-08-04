@@ -9,10 +9,26 @@ if (!packageDir) {
   process.exit(2);
 }
 
-const file = path.join(packageDir, "script", "install-utils.js");
-if (!fs.existsSync(file)) {
-  console.error(`onnxruntime-node install script not found: ${file}`);
-  process.exit(1);
+// The installer layout changed between onnxruntime-node releases. Versions
+// such as 1.17.x use script/install.js directly and do not have the helper
+// used by newer installers. On darwin/x64 that installer is a no-op because
+// the prebuilt binary is already bundled, so there is nothing to patch.
+const file = [
+  path.join(packageDir, "script", "install-utils.js"),
+  path.join(packageDir, "script", "install.js"),
+].find((candidate) => fs.existsSync(candidate));
+
+if (!file) {
+  console.log("onnxruntime-node has no patchable install helper; continuing without redirect patch.");
+  process.exit(0);
+}
+
+// install.js in 1.17.x uses the built-in fetch API only for optional Linux
+// CUDA packages. fetch follows redirects itself, and no redirect patch is
+// required for the supported Intel Mac path.
+if (path.basename(file) === "install.js") {
+  console.log(`No redirect patch needed for ${file}`);
+  process.exit(0);
 }
 
 let source = fs.readFileSync(file, "utf8");
