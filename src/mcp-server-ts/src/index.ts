@@ -39,6 +39,8 @@ import { AdaptiveSessionAnalyzer } from "./core/adaptive-session-analyzer.js";
 import { RuleDeduplicator, DeduplicationResult } from "./core/rule-deduplicator.js";
 import { RuleCleanupService } from "./core/rule-cleanup-service.js";
 import { MemoryDecayService } from "./core/memory-decay.js";
+import { factUpgrader } from "./core/fact-upgrader.js";
+import { MemoryRuleAdapter } from "./core/memory-rule-adapter.js";
 import { infoClassifier } from "./core/info-classifier.js";
 import { logger } from "./core/logger.js";
 import { createScene, PatternType, RuleScope, Scene } from "./core/models.js";
@@ -1751,12 +1753,31 @@ async function handleGenerateRules(args: any) {
     project_paths: p.project_paths,
   }));
 
+  // P3: Global fact upgrade — check all active facts and upgrade qualifying ones
+  // before memory promotion so newly-upgraded experiences can be promoted in the same pass
+  const facts = memoryStore.list({ activeOnly: true }).filter(m => m.info_class === "fact");
+  let upgradedFactCount = 0;
+  for (const fact of facts) {
+    const decision = factUpgrader.evaluate(fact);
+    if (decision.should_upgrade) {
+      const upgraded = factUpgrader.upgrade(fact, decision);
+      memoryStore.apply({ decision: "UPDATE", memory: upgraded, previous_id: fact.id });
+      upgradedFactCount++;
+    }
+  }
+  if (upgradedFactCount > 0) {
+    logger.info("fact-upgrade", `Upgraded ${upgradedFactCount} facts to experience for rule promotion`);
+  }
+
   const promotedMemories = await memoryPromotion.promoteEligibleWithLLM();
   if (promotedMemories.length > 0) {
     logger.info("memory-promotion", `Promoted ${promotedMemories.length} procedural memories before rule generation`);
     ruleEvolution.reevaluateAll();
   }
 
+  let nextIdNum = parseInt(indexManager.getNextRuleId().split("-")[1], 10);
+
+  // Declare scene early for memory-driven path
   let scene: Scene | undefined;
   if (sceneJson) {
     try {
@@ -1776,7 +1797,30 @@ async function handleGenerateRules(args: any) {
     }
   }
 
-  const nextIdNum = parseInt(indexManager.getNextRuleId().split("-")[1], 10);
+  // P2: Memory-driven rule generation — promoted memories become the primary rule source
+  const useMemoryDriven = args.use_memory_driven !== false;  // default true
+  let memoryDrivenRules: Array<{ indexEntry: any; content: any }> = [];
+  if (useMemoryDriven && promotedMemories.length > 0 && useLLMEnhancement !== false) {
+    const memoryInputs = promotedMemories.map(m => MemoryRuleAdapter.fromPromotedMemory(m));
+    logger.info("generate_rules", `Memory-driven: generating rules from ${memoryInputs.length} promoted memories`);
+    for (let i = 0; i < memoryInputs.length; i++) {
+      const ruleId = `rule-${String(nextIdNum + i).padStart(3, "0")}`;
+      const result = await hybridGenerator.generateRuleFromMemory(memoryInputs[i], ruleId, scene, {
+        useLLMEnhancement: true,
+        extractCodeExamples,
+        sessionDir,
+        maxExamples,
+      });
+      if (result) {
+        memoryDrivenRules.push(result);
+      }
+    }
+    if (memoryDrivenRules.length > 0) {
+      logger.info("generate_rules", `Memory-driven: generated ${memoryDrivenRules.length} rules from promoted memories`);
+      // Advance the rule ID counter past memory-driven rules
+      nextIdNum = parseInt(indexManager.getNextRuleId().split("-")[1], 10);
+    }
+  }
 
   // Check if template-based generation is enabled
   const config = loadConfig();
@@ -1855,6 +1899,12 @@ async function handleGenerateRules(args: any) {
       logger.info("generate_rules", "Using basic generation (fast mode)");
       rules = generator.batchGenerateRules(patterns, nextIdNum, scene);
     }
+  }
+
+  // Prepend memory-driven rules (P2) to pattern rules — they carry richer evidence
+  if (memoryDrivenRules.length > 0) {
+    rules = [...memoryDrivenRules, ...rules];
+    logger.info("generate_rules", `Combined ${memoryDrivenRules.length} memory-driven + ${rules.length - memoryDrivenRules.length} pattern-driven rules`);
   }
 
   // Normalize every generation mode (basic, template, and hybrid) to the

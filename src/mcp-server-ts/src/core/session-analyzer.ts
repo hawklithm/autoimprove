@@ -624,7 +624,8 @@ export class SessionAnalyzer {
         occurrences: cluster.candidates.map(c => c.occurrence),
         first_seen: cluster.candidates[0].occurrence.timestamp,
         last_seen: cluster.candidates[cluster.candidates.length - 1].occurrence.timestamp,
-        keywords: cluster.keywords
+        keywords: cluster.keywords,
+        evidence_excerpts: this.extractEvidenceExcerpts(cluster)
       });
       patterns.push(pattern);
     }
@@ -684,7 +685,8 @@ export class SessionAnalyzer {
         occurrences: cluster.candidates.map(c => c.occurrence),
         first_seen: cluster.candidates[0].occurrence.timestamp,
         last_seen: cluster.candidates[cluster.candidates.length - 1].occurrence.timestamp,
-        keywords: cluster.keywords
+        keywords: cluster.keywords,
+        evidence_excerpts: this.extractEvidenceExcerpts(cluster)
       });
       patterns.push(pattern);
     }
@@ -744,7 +746,8 @@ export class SessionAnalyzer {
         occurrences: cluster.candidates.map(c => c.occurrence),
         first_seen: cluster.candidates[0].occurrence.timestamp,
         last_seen: cluster.candidates[cluster.candidates.length - 1].occurrence.timestamp,
-        keywords: cluster.keywords
+        keywords: cluster.keywords,
+        evidence_excerpts: this.extractEvidenceExcerpts(cluster)
       });
       patterns.push(pattern);
     }
@@ -808,7 +811,8 @@ export class SessionAnalyzer {
         occurrences: cluster.candidates.map(c => c.occurrence),
         first_seen: cluster.candidates[0].occurrence.timestamp,
         last_seen: cluster.candidates[cluster.candidates.length - 1].occurrence.timestamp,
-        keywords: cluster.keywords
+        keywords: cluster.keywords,
+        evidence_excerpts: this.extractEvidenceExcerpts(cluster)
       });
       patterns.push(pattern);
     }
@@ -903,7 +907,8 @@ export class SessionAnalyzer {
         occurrences: cluster.candidates.map(c => c.occurrence),
         first_seen: cluster.candidates[0].occurrence.timestamp,
         last_seen: cluster.candidates[cluster.candidates.length - 1].occurrence.timestamp,
-        keywords: cluster.keywords
+        keywords: cluster.keywords,
+        evidence_excerpts: this.extractEvidenceExcerpts(cluster)
       });
       patterns.push(pattern);
     }
@@ -1170,5 +1175,13 @@ export class SessionAnalyzer {
     }
 
     return description;
+  }
+
+  /** 从 cluster 中提取 3-5 条原始消息内容，供规则生成器 LLM 直接引用 */
+  private extractEvidenceExcerpts(cluster: MessageCluster): string[] {
+    return cluster.candidates
+      .slice(0, 5)
+      .map(c => c.message.content.trim())
+      .filter(c => c.length > 10);
   }
 }

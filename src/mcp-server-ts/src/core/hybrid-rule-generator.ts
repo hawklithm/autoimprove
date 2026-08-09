@@ -22,6 +22,8 @@ import { appendFileSync } from "fs";
 import { homedir } from "os";
 import { join } from "path";
 import { RuleQualityController, UNIFIED_RULE_MIN_SCORE } from "./rule-quality.js";
+import { scopeResolver, ScopeResolver } from "./scope-resolver.js";
+import { MemoryRuleInput } from "./memory-rule-adapter.js";
 
 // Log file path
 const LLM_LOG_FILE = join(homedir(), ".autoimprove", "llm-calls.log");
@@ -112,16 +114,34 @@ export class HybridRuleGenerator {
     // Phase 1: Generate basic rule
     const basicRule = this.basicGenerator.generateRule(pattern, ruleId, scene);
 
-    // Phase 1.5: Detect and assign scope
+    // Phase 1.5: Detect heuristic scope
     const scopeSessionData = sessionData || (pattern.project_paths?.length === 1
       ? { project_path: pattern.project_paths[0] } as SessionData
       : undefined);
     const scopeContext = this.scopeDetector.detectScope(pattern, scopeSessionData);
-    let resolvedScopeConfidence = scopeContext.confidence || 0.5;
-    let resolvedScopeReason = scopeContext.reason;
+
+    // Collect scope sources for unified arbitration (Phase 4 direction)
+    const scopeSources: Array<{
+      source: "heuristic" | "llm";
+      scope: import("./scope-resolver.js").ScopeLLMSuggestion | import("./scope-resolver.js").ScopeHeuristicInput;
+    }> = [];
+
+    scopeSources.push({
+      source: "heuristic",
+      scope: {
+        scope: scopeContext.scope,
+        confidence: scopeContext.confidence || 0.5,
+        reason: scopeContext.reason || "ScopeDetector result",
+      },
+    });
+
+    // Set initial scope/context as fallback (resolver will override)
+    let fallbackScope = scopeContext.scope;
+    let fallbackScopeConfidence = scopeContext.confidence || 0.5;
+    let fallbackScopeReason = scopeContext.reason;
     basicRule.indexEntry.scope = scopeContext.scope;
-    basicRule.indexEntry.scope_confidence = resolvedScopeConfidence;
-    basicRule.indexEntry.scope_reason = resolvedScopeReason;
+    basicRule.indexEntry.scope_confidence = fallbackScopeConfidence;
+    basicRule.indexEntry.scope_reason = fallbackScopeReason;
     if (scopeContext.project_path || scopeContext.organization_id || scopeContext.project_id) {
       basicRule.indexEntry.scope_context = {
         organization_id: scopeContext.organization_id,
@@ -131,27 +151,21 @@ export class HybridRuleGenerator {
     }
 
     // Log scope detection result
-    logger.debug("hybrid-generation", `Scope detected for ${ruleId}`, {
-      scope: scopeContext.scope,
-      project_path: scopeContext.project_path,
-      project_id: scopeContext.project_id
-    });
+    logger.debug("hybrid-generation", `Heuristic scope for ${ruleId}: ${scopeContext.scope}`);
 
     // Scope classification is independent from prose enhancement. This keeps
     // organization/project boundaries accurate even in fast batch mode.
     if (useLLMScopeClassification && this.openai && !useLLMEnhancement) {
       const llmScope = await this.classifyScopeWithLLM(pattern, scopeContext);
       if (llmScope) {
-        resolvedScopeConfidence = llmScope.confidence || resolvedScopeConfidence;
-        resolvedScopeReason = llmScope.reason || resolvedScopeReason;
-        basicRule.indexEntry.scope = llmScope.scope;
-        basicRule.indexEntry.scope_confidence = resolvedScopeConfidence;
-        basicRule.indexEntry.scope_reason = resolvedScopeReason;
-        basicRule.indexEntry.scope_context = {
-          organization_id: llmScope.organization_id,
-          project_id: llmScope.project_id,
-          project_path: llmScope.project_path || scopeContext.project_path
-        };
+        scopeSources.push({
+          source: "llm",
+          scope: {
+            scope: llmScope.scope,
+            confidence: llmScope.confidence || 0.6,
+            reason: llmScope.reason || "LLM CC-scope result",
+          },
+        } as any);
       }
     }
 
@@ -180,19 +194,16 @@ export class HybridRuleGenerator {
         };
         enhancedContent = await this.enhanceWithLLM(pattern, basicRule.content, ruleId, preliminaryScope);
 
-        // Phase 2 LLM has final say on scope - override Phase 1 result if LLM provided scope
+        // Collect Phase 2 LLM scope suggestion for unified arbitration
         if (enhancedContent.scope) {
-          basicRule.indexEntry.scope = enhancedContent.scope;
-          basicRule.indexEntry.scope_confidence = enhancedContent.scope_confidence || resolvedScopeConfidence;
-          basicRule.indexEntry.scope_reason = enhancedContent.scope_reason || resolvedScopeReason;
-          logger.info("hybrid-generation", `Scope determined by LLM for ${ruleId}: ${enhancedContent.scope} (confidence: ${enhancedContent.scope_confidence?.toFixed(2) || 'N/A'})`);
-
-          // Update scope_context if LLM provided it
-          if (enhancedContent.scope_context) {
-            basicRule.indexEntry.scope_context = enhancedContent.scope_context;
-          }
-        } else {
-          logger.warn("hybrid-generation", `LLM did not provide scope for ${ruleId}, keeping Phase 1 result: ${basicRule.indexEntry.scope}`);
+          scopeSources.push({
+            source: "llm",
+            scope: {
+              scope: enhancedContent.scope,
+              confidence: enhancedContent.scope_confidence || 0.7,
+              reason: enhancedContent.scope_reason || "LLM Phase 2 scope",
+            },
+          } as any);
         }
 
         // ✅ NEW: Phase 2 LLM has final say on scenes - override Phase 1.6 result if LLM provided scenes
@@ -251,6 +262,32 @@ export class HybridRuleGenerator {
       enhancedContent = basicRule.content;
     }
 
+    // ---- Unified scope arbitration (P4) ----
+    // Collect all scope sources and resolve with weighted voting
+    {
+      const heuristicSource = scopeSources.find(s => s.source === "heuristic");
+      const llmSources = scopeSources.filter(s => s.source === "llm");
+      // Use last LLM suggestion as the primary llm input
+      const lastLLM = llmSources.length > 0 ? llmSources[llmSources.length - 1].scope as any : undefined;
+
+      const result = scopeResolver.resolve({
+        heuristic: heuristicSource?.scope as any,
+        llm_suggestion: lastLLM as any,
+        context: {
+          project_path: scopeContext.project_path || scopeSessionData?.project_path,
+          organization_id: scopeContext.organization_id,
+        },
+      });
+
+      basicRule.indexEntry.scope = result.scope;
+      basicRule.indexEntry.scope_confidence = result.confidence;
+      basicRule.indexEntry.scope_reason = result.reason;
+
+      logger.info("hybrid-generation",
+        `Scope resolved for ${ruleId}: ${result.scope} (confidence ${result.confidence.toFixed(2)}) — ${result.reason}`
+      );
+    }
+
     // Phase 3: Extract code examples (if enabled)
     if (extractCodeExamples && sessionDir) {
       try {
@@ -277,7 +314,7 @@ export class HybridRuleGenerator {
       enhancedContent,
       basicRule.indexEntry,
       evidenceConfidence,
-      enhancedContent.scope_confidence || resolvedScopeConfidence
+      enhancedContent.scope_confidence || basicRule.indexEntry.scope_confidence || 0.5
     );
     let qualityScore = unifiedScore.overall;
 
@@ -299,7 +336,7 @@ export class HybridRuleGenerator {
           enhancedContent,
           basicRule.indexEntry,
           evidenceConfidence,
-          enhancedContent.scope_confidence || resolvedScopeConfidence
+          enhancedContent.scope_confidence || basicRule.indexEntry.scope_confidence || 0.5
         );
         qualityScore = unifiedScore.overall;
         logger.info("hybrid-generation", `Using deterministic fallback for ${ruleId} after low-quality LLM response`, {
@@ -329,16 +366,12 @@ export class HybridRuleGenerator {
     // exporter filters index confidence, so stale metadata is misleading.
     enhancedContent.metadata.confidence = basicRule.indexEntry.confidence;
 
-    // Add scope metadata from LLM if available
-    if (enhancedContent.scope_confidence !== undefined) {
-      enhancedContent.metadata.scope_confidence = enhancedContent.scope_confidence;
-    } else {
-      enhancedContent.metadata.scope_confidence = resolvedScopeConfidence;
+    // Add scope metadata (from resolved scope on index entry)
+    if (basicRule.indexEntry.scope_confidence !== undefined) {
+      enhancedContent.metadata.scope_confidence = basicRule.indexEntry.scope_confidence;
     }
-    if (enhancedContent.scope_reason) {
-      enhancedContent.metadata.scope_reason = enhancedContent.scope_reason;
-    } else if (resolvedScopeReason) {
-      enhancedContent.metadata.scope_reason = resolvedScopeReason;
+    if (basicRule.indexEntry.scope_reason) {
+      enhancedContent.metadata.scope_reason = basicRule.indexEntry.scope_reason;
     }
 
     // ✅ NEW: Sync scenes from indexEntry to metadata (ensure consistency)
@@ -349,6 +382,119 @@ export class HybridRuleGenerator {
       indexEntry: basicRule.indexEntry,
       content: enhancedContent
     };
+  }
+
+  /**
+   * Generate a rule from a promoted memory (P2: memory-driven path).
+   *
+   * Unlike generateEnhancedRule which works on thin Pattern descriptions,
+   * this method has access to full original evidence, cross-session stats,
+   * and pre-computed promotion scope — so the LLM produces much richer rules.
+   */
+  async generateRuleFromMemory(
+    memoryInput: MemoryRuleInput,
+    ruleId: string,
+    scene?: Scene,
+    options: EnhancedRuleOptions = {}
+  ): Promise<{ indexEntry: RuleIndexEntry; content: RuleContent } | null> {
+    const {
+      useLLMEnhancement = true,
+      extractCodeExamples = false,
+      sessionDir,
+      maxExamples = 3,
+    } = options;
+
+    if (!this.openai || !useLLMEnhancement) return null;
+
+    // Build a content-only prompt — scope is pre-computed by promotion
+    const evidenceText = memoryInput.evidence_excerpts
+      .slice(0, 5)
+      .map((excerpt, i) => `  [${i + 1}] ${excerpt.slice(0, 400)}`)
+      .join("\n");
+
+    const prompt = [
+      "You are generating a coding-rule entry from a validated procedural memory.",
+      "",
+      "MEMORY CONTENT:",
+      memoryInput.content,
+      "",
+      "ORIGINAL EVIDENCE (from " + memoryInput.stats.independent_sessions + " sessions):",
+      evidenceText || "(no excerpts)",
+      "",
+      "CROSS-SESSION STATS:",
+      `  sessions = ${memoryInput.stats.independent_sessions}`,
+      `  projects = ${memoryInput.stats.independent_projects}`,
+      `  validations = ${memoryInput.stats.validation_count}`,
+      `  contradictions = ${memoryInput.stats.contradiction_count}`,
+      "",
+      "PRE-COMPUTED SCOPE (do not change):",
+      `  scope = ${memoryInput.promotion.scope}`,
+      `  confidence = ${memoryInput.promotion.confidence.toFixed(2)}`,
+      `  reason = ${memoryInput.promotion.reason}`,
+      "",
+      "Generate a rule with: title, description, reason, how_to_apply (array), examples (array of {bad,good,explanation}), when_to_use (array), exceptions (array).",
+      "Keep scope as-is. Return JSON only:",
+      '{"title":"...","description":"...","reason":"...","how_to_apply":["..."],"examples":[{"bad":"...","good":"...","explanation":"..."}],"when_to_use":["..."],"exceptions":["..."]}',
+    ].join("\n");
+
+    try {
+      const response = await this.openai.chat.completions.create({
+        model: this.model,
+        max_tokens: 2000,
+        messages: [{ role: "user", content: prompt }],
+      });
+
+      const raw = response.choices[0]?.message?.content || "";
+      const parsed = JSON.parse(raw.match(/\{[\s\S]*\}/)?.[0] || raw);
+
+      const now = new Date().toISOString();
+
+      const ruleContent: RuleContent = {
+        id: ruleId,
+        content: parsed.description || memoryInput.content,
+        title: parsed.title || memoryInput.summary.slice(0, 80),
+        description: parsed.description || memoryInput.content,
+        reason: parsed.reason || `Observed across ${memoryInput.stats.independent_sessions} sessions`,
+        how_to_apply: Array.isArray(parsed.how_to_apply) ? parsed.how_to_apply : [],
+        examples: Array.isArray(parsed.examples) ? parsed.examples.slice(0, maxExamples) : [],
+        when_to_use: Array.isArray(parsed.when_to_use) ? parsed.when_to_use : [],
+        exceptions: Array.isArray(parsed.exceptions) ? parsed.exceptions : [],
+        related_rules: [],
+        metadata: {
+          type: memoryInput.pattern_type,
+          priority: memoryInput.promotion.score >= 0.85 ? "high" : "medium",
+          confidence: memoryInput.promotion.score,
+          source: "memory-driven",
+          source_memory_ids: [memoryInput.memory_id],
+          memory_support_score: memoryInput.promotion.score,
+          scope_confidence: memoryInput.promotion.confidence,
+          scope_reason: memoryInput.promotion.reason,
+        },
+      };
+
+      const indexEntry: RuleIndexEntry = {
+        id: ruleId,
+        type: memoryInput.pattern_type,
+        priority: memoryInput.promotion.score >= 0.85 ? "high" as any : "medium" as any,
+        confidence: memoryInput.promotion.score,
+        scenes: scene || { tech: [], functional: [], business: [] },
+        keywords: [],
+        created_at: now,
+        updated_at: now,
+        scope: memoryInput.promotion.scope as RuleScope,
+        scope_confidence: memoryInput.promotion.confidence,
+        scope_reason: memoryInput.promotion.reason,
+        scope_context: memoryInput.scope_context,
+        source_memory_ids: [memoryInput.memory_id],
+        status: "active" as any,
+        info_class: memoryInput.info_class,
+      };
+
+      return { indexEntry, content: ruleContent };
+    } catch (error) {
+      logger.warn("memory-driven", `LLM generation failed for memory rule ${ruleId}: ${error instanceof Error ? error.message : String(error)}`);
+      return null;
+    }
   }
 
   /**
@@ -629,34 +775,38 @@ Return JSON with these fields:
 Be specific and actionable.`;
 
     // Step 2: Extract dynamic pattern data
-    const contextExamples = pattern.occurrences
-      .filter(o => o.user_input && o.user_input.length > 20)
-      .slice(-5)  // Last 5 meaningful occurrences
-      .map((o, i) => {
-        let example = `${i + 1}. User: ${o.user_input}`;
+    // 优先使用 evidence_excerpts（完整原始消息），降级为 occurrences[].user_input（截断版）
+    const evidenceSource: string[] = (pattern.evidence_excerpts?.length ?? 0) > 0
+      ? pattern.evidence_excerpts!
+      : pattern.occurrences.map(o => o.user_input).filter((s): s is string => typeof s === "string");
 
-        // Add context if available
-        if (o.context && o.context !== "unknown") {
-          example += `\n   Context: ${o.context}`;
-        }
+    const contextExamples = evidenceSource
+      .filter(s => s && s.length > 20)
+      .slice(-5)
+      .map((text, i) => {
+        let example = `${i + 1}. User: ${text}`;
 
-        // Add action type
-        const actionMap: Record<string, string> = {
-          "explicit_correction": "Corrected",
-          "accept": "Accepted",
-          "reject": "Rejected",
-          "amend": "Amended",
-          "undo": "Undone"
-        };
-        const actionLabel = actionMap[o.user_action] || o.user_action;
-        example += `\n   Action: ${actionLabel}`;
-
-        // Add metadata hints
-        if (o.security_issue) {
-          example += `\n   Security: ${o.security_issue}`;
-        }
-        if (o.performance_improved) {
-          example += `\n   Performance: Improved`;
+        // Preserve context and metadata from matching occurrence when available
+        const matchingOccurrence = pattern.occurrences.find(o => o.user_input === text);
+        if (matchingOccurrence) {
+          if (matchingOccurrence.context && matchingOccurrence.context !== "unknown") {
+            example += `\n   Context: ${matchingOccurrence.context}`;
+          }
+          const actionMap: Record<string, string> = {
+            "explicit_correction": "Corrected",
+            "accept": "Accepted",
+            "reject": "Rejected",
+            "amend": "Amended",
+            "undo": "Undone"
+          };
+          const actionLabel = actionMap[matchingOccurrence.user_action] || matchingOccurrence.user_action;
+          example += `\n   Action: ${actionLabel}`;
+          if (matchingOccurrence.security_issue) {
+            example += `\n   Security: ${matchingOccurrence.security_issue}`;
+          }
+          if (matchingOccurrence.performance_improved) {
+            example += `\n   Performance: Improved`;
+          }
         }
 
         return example;

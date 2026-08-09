@@ -142,6 +142,15 @@ export class RuleGenerator {
       content += `\n\n**Example context**: ${truncated}`;
     }
 
+    // Add evidence excerpts when available (P1 optimization)
+    if (pattern.evidence_excerpts && pattern.evidence_excerpts.length > 0) {
+      const excerpts = pattern.evidence_excerpts
+        .slice(0, 3)
+        .map((excerpt, i) => `  ${i + 1}. "${excerpt.substring(0, 200)}"`)
+        .join('\n');
+      content += `\n\n**Original evidence**:\n${excerpts}`;
+    }
+
     return content;
   }
 

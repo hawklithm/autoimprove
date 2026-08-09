@@ -1,6 +1,7 @@
 import { MemoryRecord, MemoryRepository } from "./memory-models.js";
 import { MemoryConflictResolver } from "./memory-conflict-resolver.js";
 import { LLMConfigManager } from "./llm-config-manager.js";
+import { factUpgrader } from "./fact-upgrader.js";
 
 export interface PromotionDecision {
   eligible: boolean;
@@ -17,6 +18,14 @@ export class MemoryPromotionService {
   evaluate(memory: MemoryRecord): PromotionDecision {
     // 关卡联动：fact 只作上下文，不成规则；preference/experience 才可能成规则
     if (memory.info_class === "fact") {
+      // P3: Check if fact qualifies for upgrade to experience
+      const upgradeDecision = factUpgrader.evaluate(memory);
+      if (upgradeDecision.should_upgrade) {
+        const upgraded = factUpgrader.upgrade(memory, upgradeDecision);
+        this.store.apply({ decision: "UPDATE", memory: upgraded, previous_id: memory.id });
+        // Re-evaluate with the upgraded memory
+        return this.evaluate(upgraded);
+      }
       return { eligible: false, score: 0, reason: "fact 只作上下文，不成规则" };
     }
     if (memory.kind !== "procedural") return { eligible: false, score: 0, reason: "Only procedural memories can become rules" };

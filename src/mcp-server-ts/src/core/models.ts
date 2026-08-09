@@ -90,6 +90,8 @@ export interface Pattern {
   project_paths?: string[];
   /** 认知类别：偏好/事实/经验（决定该 pattern 能否成规则） */
   info_class?: InfoClass;
+  /** 原始消息摘录（3-5 条完整用户消息），供规则生成器 LLM 直接引用 */
+  evidence_excerpts?: string[];
 }
 
 // ============================================================================
