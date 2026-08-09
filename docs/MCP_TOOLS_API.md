@@ -134,6 +134,120 @@ result = mcp.call_tool("batch_rebuild", {
 - **Incremental mode**: Automatically enabled when `force: false` (uses session cache)
 - **Advanced features**: `useBatchLLM`, `batchLLMOptions`, `forceCleanup` are available in the Engine but not exposed through MCP. Use direct Engine calls for advanced control (see `run_batch_rebuild.ts`).
 
+### decay_memories
+
+Run long-term memory decay/elimination (gate 4 of the memory-quality pipeline). Archives TTL-expired or explicitly-deprecated memories, soft-demotes stale low-recall **experience** memories, and demotes linked rules whose supporting memories were removed.
+
+This is the maintenance entry point for the "衰减淘汰" gate: keep the memory store high-signal so stale or contradicted memories stop polluting recall and rule generation.
+
+**Parameters:**
+- `ttl_fallback_days` (number, optional): Informational fallback TTL in days when a memory has no explicit `ttl_days`/`expires_at`. Default: 365. Note: auto-expiry still requires an explicit TTL (opt-in) — preferences/facts are never auto-expired by the fallback.
+- `stale_days` (number, optional): Experience memories with `recall_count` below threshold and not recalled for this many days get soft-demoted. Default: 180
+- `low_recall_threshold` (number, optional): `recall_count` below this is considered low-frequency. Default: 1
+- `dry_run` (boolean, optional): Preview what would change without writing to storage. Default: false
+
+**Returns:**
+```json
+{
+  "success": true,
+  "dry_run": false,
+  "scanned": 128,
+  "archived": 3,
+  "deprecated": 5,
+  "rules_affected": 7,
+  "rules_demoted": 2,
+  "details": [
+    { "memory_id": "mem-...", "info_class": "experience", "action": "deprecated", "reason": "经验类记忆低频（recall=0）且超过 180 天未召回，软淘汰" }
+  ]
+}
+```
+
+**Example:**
+```python
+# Preview first, then apply
+result = mcp.call_tool("decay_memories", { "dry_run": True })
+result = mcp.call_tool("decay_memories", { "stale_days": 120 })
+```
+
+**Notes:**
+- **TTL is opt-in**: Only memories with an explicit `ttl_days`/`expires_at` are auto-archived by TTL. Without it, a memory is only retired by explicit `deprecated` state, contradiction (`conflict_with`/`deprecated_by`), or frequency decay (experience only).
+- **Stable knowledge is protected**: `preference`/`fact` memories are never auto-demoted by frequency decay; they are removed only via explicit TTL, explicit deprecated state, or contradiction.
+- **Rule linkage**: When a memory is archived/demoted, derived rules are re-scored from remaining supporting memories; those dropping below `UNIFIED_RULE_MIN_SCORE` are demoted to `candidate`.
+
+### list_memories
+
+List and inspect learned memories (user memory control). Filters: `query`, `kind`, `info_class`, `active_only`, `limit`, `include_sensitive`. Because this is an explicit self-management query, sensitive memories are **included by default** (`include_sensitive` defaults to true).
+
+**Parameters:**
+- `query` (string, optional): Natural-language search across memories
+- `kind` (enum, optional): `semantic` | `episodic` | `procedural`
+- `info_class` (enum, optional): `preference` | `fact` | `experience`
+- `active_only` (boolean, optional): Only active memories. Default: true
+- `limit` (number, optional): Max records. Default: 50
+- `include_sensitive` (boolean, optional): Include sensitive memories. Default: true
+
+**Example:**
+```python
+result = mcp.call_tool("list_memories", { "info_class": "experience", "limit": 20 })
+```
+
+### delete_memory
+
+Delete a learned memory by id. The memory is archived (removed from active recall) and any rules that depend **solely** on it are demoted to `candidate`.
+
+**Parameters:**
+- `memory_id` (string, required): ID of the memory to delete
+
+**Example:**
+```python
+result = mcp.call_tool("delete_memory", { "memory_id": "mem-abc123" })
+```
+
+### update_memory
+
+Update fields of a learned memory. When `content` changes, the sensitivity label is recomputed automatically (gate 5).
+
+**Parameters:**
+- `memory_id` (string, required)
+- `content` / `summary` (string, optional)
+- `info_class` (enum, optional): `preference` | `fact` | `experience`
+- `sensitivity` (enum, optional): `public` | `sensitive` (override)
+- `ttl_days` (number, optional): Set TTL; `expires_at` is derived from `created_at + ttl_days`
+- `status` (enum, optional): `active` | `archived`
+
+**Example:**
+```python
+result = mcp.call_tool("update_memory", { "memory_id": "mem-abc123", "ttl_days": 90, "info_class": "preference" })
+```
+
+### get_memory_metrics
+
+Memory quality metrics dashboard (outcomes of the five gates): write volume, recall/hit rate, conflict rate, deletion rate, per-class breakdown, and a recent audit log (from `memory_versions`).
+
+**Parameters:**
+- `audit_limit` (number, optional): Number of recent audit entries. Default: 50
+
+**Returns:**
+```json
+{
+  "success": true,
+  "total": 128,
+  "active": 120,
+  "archived": 5,
+  "deprecated": 2,
+  "sensitive": 1,
+  "by_class": { "preference": 12, "fact": 30, "experience": 80, "unclassified": 6 },
+  "metrics": {
+    "write_volume": 128,
+    "conflict_rate": 0.04,
+    "deletion_rate": 0.039,
+    "hit_rate": 0.55,
+    "note": "hit_rate approximates recall coverage..."
+  },
+  "audit_log": [ { "memory_id": "mem-...", "at": "...", "decision": "UPDATE" } ]
+}
+```
+
 ### search_knowledge
 
 Search rules by scene, keywords, or ID. Automatically records "used" feedback for matched rules.

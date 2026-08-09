@@ -6,7 +6,7 @@
  */
 
 import { UnifiedSessionParser, SessionData, Message } from "./unified-session-parser.js";
-import { Pattern, PatternType, PatternOccurrence, createPattern } from "./models.js";
+import { Pattern, PatternType, PatternOccurrence, createPattern, InfoClass } from "./models.js";
 import { ConfidenceCalculator } from "./confidence.js";
 import { SessionCacheManager } from "../storage/session-cache.js";
 import { CompactCacheManager } from "../storage/compact-cache.js";
@@ -19,6 +19,8 @@ import { logger } from "./logger.js";
 import { memoryFromOccurrence, memoryFromPattern } from "./memory-models.js";
 import { MemoryConsolidator } from "./memory-consolidator.js";
 import { SessionMemoryExtractor } from "./memory-extractor.js";
+import { InfoClassifier } from "./info-classifier.js";
+import { MemoryWriteGate } from "./memory-write-gate.js";
 
 export function isContextContinuationMessage(content: string): boolean {
   const normalized = content.trim().toLowerCase();
@@ -39,6 +41,7 @@ export class SessionAnalyzer {
   private memoryConsolidator: MemoryConsolidator;
   private memoryExtractor: SessionMemoryExtractor;
   private lastPreFilterResult: FilterResult | null = null;
+  private writeGate: MemoryWriteGate;
 
   constructor() {
     this.parser = new UnifiedSessionParser();
@@ -49,6 +52,7 @@ export class SessionAnalyzer {
     this.preFilter = new PreFilter();
     this.memoryConsolidator = new MemoryConsolidator();
     this.memoryExtractor = new SessionMemoryExtractor();
+    this.writeGate = new MemoryWriteGate(new InfoClassifier());
   }
 
   /**
@@ -158,29 +162,50 @@ export class SessionAnalyzer {
         branch: sessionData.metadata?.branch,
         session_id: sessionData.session_id
       };
-      this.memoryConsolidator.persist(procedural);
-
-      for (const occurrence of pattern.occurrences) {
-        const source = userMessages.find(message => message.content === occurrence.user_input);
-        const episodic = memoryFromOccurrence(pattern, occurrence, {
-          session_id: sessionData.session_id,
-          message_lines: source ? [source.line_number] : [],
-          tool_names: toolNames,
-          source_excerpt: (occurrence.user_input || pattern.description).slice(0, 500)
-        }, scene);
-        episodic.namespace = {
-          project_path: sessionData.project_path,
-          organization_id: sessionData.organization_id || sessionData.metadata?.organization_id || process.env.AUTOIMPROVE_ORGANIZATION_ID,
-          repository: sessionData.metadata?.repository,
-          branch: sessionData.metadata?.branch,
-          session_id: sessionData.session_id
-        };
-        this.memoryConsolidator.persist(episodic);
+      // 关卡2：事件驱动触发——仅强信号才新建候选记忆
+      const infoClass = this.writeGate.classifyContent(pattern.description).info_class ?? "experience";
+      pattern.info_class = infoClass;
+      procedural.info_class = infoClass;
+      // 关卡5：写入阶段即打敏感标记，供后续召回/LLM prompt 过滤使用
+      procedural.sensitivity = this.writeGate.classifySensitivity(procedural.content);
+      if (this.isStrongSignal(pattern, infoClass)) {
+        const proceduralDecision = this.writeGate.shouldPersist(procedural);
+        if (proceduralDecision.persist) {
+          this.memoryConsolidator.persist(procedural);
+        }
+      } else {
+        // 非强信号：只并入已存在相似记忆的证据，不新建
+        const mutation = this.memoryConsolidator.consolidate(procedural);
+        if (mutation.decision === "UPDATE" || mutation.decision === "SUPERSEDE") {
+          this.memoryConsolidator.persist(procedural);
+        }
       }
     }
 
     const reflected = await this.memoryExtractor.extract(sessionData, patterns, scene);
-    for (const memory of reflected) this.memoryConsolidator.persist(memory);
+    for (const memory of reflected) {
+      // 关卡5：写入阶段即打敏感标记
+      memory.sensitivity = this.writeGate.classifySensitivity(memory.content);
+      if (this.writeGate.shouldPersist(memory).persist) {
+        this.memoryConsolidator.persist(memory);
+      }
+    }
+  }
+
+  /**
+   * 关卡2·触发时机：判断 pattern 是否满足「强信号」，满足才新建候选记忆。
+   * 强信号：① 明确偏好(preference) 一次即可信；② 经验(experience) 跨会话复发
+   * （independent_session >= min_cross_session）；fact 不成规则。
+   */
+  private isStrongSignal(pattern: Pattern, infoClass: InfoClass): boolean {
+    const cfg = loadConfig().write_gate;
+    const minCross = cfg?.min_cross_session_for_experience ?? 2;
+    if (infoClass === "preference") return true;
+    if (infoClass === "experience") {
+      const sessions = new Set(pattern.occurrences.map(o => o.session_id)).size;
+      return sessions >= minCross;
+    }
+    return false; // fact 只作上下文，不成规则
   }
 
   private inferMemoryScene(sessionData: SessionData) {
@@ -995,7 +1020,11 @@ export class SessionAnalyzer {
       /^(can you|could you|please|help me|would you)/i,
       /^(how do|how to|how can|what should|should i)/i,
       /^(给我|看看|检查|分析一下)/i,
-      /(能不能|可以吗|好吗|行吗)\s*[?？]?\s*$/i
+      /(能不能|可以吗|好吗|行吗)\s*[?？]?\s*$/i,
+      // ↓ 新增：会话残留物，原仅下游 hybrid-rule-generator.ts:864/971 拦截
+      /this session is being continued from/i,
+      /summary below covers the earlier portion/i,
+      /(帮忙梳理|请帮我|帮我看看)/i
     ];
 
     for (const pattern of requestPatterns) {

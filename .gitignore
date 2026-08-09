@@ -46,3 +46,10 @@ codex-settings.json
 *.bak[0-9]
 *.before_fix
 *.original
+
+# Project memory data (not a temp cache; keep out of version control)
+.workbuddy/
+
+# Vitest cache artifacts
+vitest.config.ts.timestamp-*.mjs
+*.timestamp-*.mjs

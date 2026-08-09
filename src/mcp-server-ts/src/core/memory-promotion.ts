@@ -15,6 +15,10 @@ export class MemoryPromotionService {
   constructor(private readonly store: MemoryRepository) {}
 
   evaluate(memory: MemoryRecord): PromotionDecision {
+    // 关卡联动：fact 只作上下文，不成规则；preference/experience 才可能成规则
+    if (memory.info_class === "fact") {
+      return { eligible: false, score: 0, reason: "fact 只作上下文，不成规则" };
+    }
     if (memory.kind !== "procedural") return { eligible: false, score: 0, reason: "Only procedural memories can become rules" };
     const sessions = memory.independent_session_count || new Set(memory.evidence.map(item => item.session_id)).size || 1;
     const projects = Math.max(memory.independent_project_count || 0, Array.isArray(memory.metadata?.project_paths) ? memory.metadata.project_paths.length : 0, memory.namespace?.project_path ? 1 : 0);

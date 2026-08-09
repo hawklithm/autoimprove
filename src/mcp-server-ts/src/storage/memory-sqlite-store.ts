@@ -2,7 +2,7 @@ import Database from "better-sqlite3";
 import { existsSync, mkdirSync, readFileSync } from "fs";
 import { dirname, join } from "path";
 import { fileURLToPath } from "url";
-import { MemoryMutation, MemoryRecord, MemoryRepository, MemorySearchResult, MemoryUsageEvent, MemoryRuleLink, MemoryState, MemorySearchFilters } from "../core/memory-models.js";
+import { MemoryMutation, MemoryRecord, MemoryRepository, MemorySearchResult, MemoryUsageEvent, MemoryRuleLink, MemoryState, MemorySearchFilters, MemoryVersionEntry } from "../core/memory-models.js";
 import { STORAGE_ROOT } from "./init.js";
 import { MemoryStore } from "./memory-store.js";
 
@@ -41,7 +41,13 @@ export class SQLiteMemoryStore implements MemoryRepository {
       independent_project_count: "INTEGER NOT NULL DEFAULT 0",
       validation_count: "INTEGER NOT NULL DEFAULT 0",
       contradiction_count: "INTEGER NOT NULL DEFAULT 0",
-      last_validated_at: "TEXT"
+      last_validated_at: "TEXT",
+      info_class: "TEXT",
+      sensitivity: "TEXT",
+      ttl_days: "INTEGER",
+      expires_at: "TEXT",
+      recall_count: "INTEGER NOT NULL DEFAULT 0",
+      last_recalled_at: "TEXT"
     };
     for (const [name, type] of Object.entries(columns)) {
       if (!existing.has(name)) this.db.exec(`ALTER TABLE memories ADD COLUMN ${name} ${type}`);
@@ -103,7 +109,7 @@ export class SQLiteMemoryStore implements MemoryRepository {
       }
       this.db.prepare(`INSERT INTO memories (id, kind, content, summary, pattern_type, scene_json, keywords_json, evidence_json, confidence, importance, strength, created_at, updated_at, valid_from, valid_to, status, state, support_count, independent_session_count, independent_project_count, validation_count, contradiction_count, last_validated_at, supersedes, namespace_json, outcome_json, metadata_json)
         VALUES (@id,@kind,@content,@summary,@pattern_type,@scene_json,@keywords_json,@evidence_json,@confidence,@importance,@strength,@created_at,@updated_at,@valid_from,@valid_to,@status,@state,@support_count,@independent_session_count,@independent_project_count,@validation_count,@contradiction_count,@last_validated_at,@supersedes,@namespace_json,@outcome_json,@metadata_json)
-        ON CONFLICT(id) DO UPDATE SET kind=excluded.kind, content=excluded.content, summary=excluded.summary, pattern_type=excluded.pattern_type, scene_json=excluded.scene_json, keywords_json=excluded.keywords_json, evidence_json=excluded.evidence_json, confidence=excluded.confidence, importance=excluded.importance, strength=excluded.strength, updated_at=excluded.updated_at, valid_to=excluded.valid_to, status=excluded.status, state=excluded.state, support_count=excluded.support_count, independent_session_count=excluded.independent_session_count, independent_project_count=excluded.independent_project_count, validation_count=excluded.validation_count, contradiction_count=excluded.contradiction_count, last_validated_at=excluded.last_validated_at, supersedes=excluded.supersedes, namespace_json=excluded.namespace_json, outcome_json=excluded.outcome_json, metadata_json=excluded.metadata_json`).run(this.serialize(record));
+        ON CONFLICT(id) DO UPDATE SET kind=excluded.kind, content=excluded.content, summary=excluded.summary, pattern_type=excluded.pattern_type, scene_json=excluded.scene_json, keywords_json=excluded.keywords_json, evidence_json=excluded.evidence_json, confidence=excluded.confidence, importance=excluded.importance, strength=excluded.strength, updated_at=excluded.updated_at, valid_to=excluded.valid_to, status=excluded.status, state=excluded.state, support_count=excluded.support_count, independent_session_count=excluded.independent_session_count, independent_project_count=excluded.independent_project_count, validation_count=excluded.validation_count, contradiction_count=excluded.contradiction_count, last_validated_at=excluded.last_validated_at, info_class=excluded.info_class, sensitivity=excluded.sensitivity, ttl_days=excluded.ttl_days, expires_at=excluded.expires_at, recall_count=excluded.recall_count, last_recalled_at=excluded.last_recalled_at, supersedes=excluded.supersedes, namespace_json=excluded.namespace_json, outcome_json=excluded.outcome_json, metadata_json=excluded.metadata_json`).run(this.serialize(record));
       this.db.prepare("INSERT INTO memory_versions (memory_id, versioned_at, decision, snapshot_json) VALUES (?, ?, ?, ?)").run(record.id, record.updated_at, mutation.decision, JSON.stringify(record));
       this.db.prepare("DELETE FROM memory_entities WHERE memory_id = ?").run(record.id);
       for (const entity of record.entities || []) this.db.prepare("INSERT OR REPLACE INTO memory_entities (memory_id, entity_id, name, type) VALUES (?, ?, ?, ?)").run(record.id, entity.id, entity.name, entity.type);
@@ -137,6 +143,18 @@ export class SQLiteMemoryStore implements MemoryRepository {
 
   getMemoriesForRule(ruleId: string): MemoryRuleLink[] {
     return this.db.prepare("SELECT memory_id, rule_id, relation, support_score, created_at, updated_at FROM memory_rule_links WHERE rule_id = ?").all(ruleId) as MemoryRuleLink[];
+  }
+
+  getVersionHistory(limit = 50): MemoryVersionEntry[] {
+    const rows = this.db
+      .prepare("SELECT memory_id, versioned_at, decision, snapshot_json FROM memory_versions ORDER BY versioned_at DESC LIMIT ?")
+      .all(limit) as Array<{ memory_id: string; versioned_at: string; decision: string; snapshot_json: string }>;
+    return rows.map(row => ({
+      memory_id: row.memory_id,
+      versioned_at: row.versioned_at,
+      decision: row.decision,
+      snapshot: JSON.parse(row.snapshot_json || "null"),
+    }));
   }
 
   compact(): void { this.db.pragma("wal_checkpoint(TRUNCATE)"); }
@@ -189,6 +207,12 @@ export class SQLiteMemoryStore implements MemoryRepository {
       validation_count: Number(row.validation_count || 0),
       contradiction_count: Number(row.contradiction_count || 0),
       last_validated_at: row.last_validated_at || undefined,
+      info_class: row.info_class || undefined,
+      sensitivity: row.sensitivity || undefined,
+      ttl_days: row.ttl_days != null ? Number(row.ttl_days) : undefined,
+      expires_at: row.expires_at || undefined,
+      recall_count: Number(row.recall_count || 0),
+      last_recalled_at: row.last_recalled_at || undefined,
       supersedes: row.supersedes || undefined,
       namespace: JSON.parse(row.namespace_json || "{}"),
       outcome: JSON.parse(row.outcome_json || "{}"),

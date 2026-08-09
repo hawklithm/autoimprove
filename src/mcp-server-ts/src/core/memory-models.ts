@@ -1,6 +1,7 @@
 import { Pattern, PatternType, Scene, createScene } from "./models.js";
 
 export type MemoryKind = "semantic" | "episodic" | "procedural";
+export type InfoClass = "preference" | "fact" | "experience";
 export type MemoryStatus = "active" | "superseded" | "archived";
 export type MemoryState = "candidate" | "observed" | "supported" | "validated" | "promoted" | "deprecated";
 export type MemoryDecision = "ADD" | "UPDATE" | "SUPERSEDE" | "CONFLICT" | "NOOP";
@@ -84,6 +85,12 @@ export interface MemoryRecord {
   entities?: MemoryEntity[];
   relations?: MemoryRelation[];
   outcome?: MemoryOutcome;
+  info_class?: InfoClass;            // 认知类别：偏好/事实/经验（决定能否成规则）
+  sensitivity?: "public" | "sensitive";  // 关卡5
+  ttl_days?: number;                // 关卡4
+  expires_at?: string;              // 关卡4
+  recall_count?: number;            // 关卡4
+  last_recalled_at?: string;        // 关卡4
 }
 
 export interface MemoryMutation {
@@ -115,8 +122,17 @@ export interface MemoryRepository {
   linkRule?(link: MemoryRuleLink): void;
   getRulesForMemory?(memoryId: string): MemoryRuleLink[];
   getMemoriesForRule?(ruleId: string): MemoryRuleLink[];
+  /** 审计日志：记忆版本变更历史（关卡指标·审计用）。存储不支持时返回空数组。 */
+  getVersionHistory?(limit?: number): MemoryVersionEntry[];
   compact?(): void;
   close?(): void;
+}
+
+export interface MemoryVersionEntry {
+  memory_id: string;
+  versioned_at: string;
+  decision: string;
+  snapshot?: MemoryRecord;
 }
 
 export function createMemoryId(): string {
@@ -134,6 +150,7 @@ export function memoryFromPattern(
   return {
     id: createMemoryId(),
     kind,
+    info_class: "experience",
     content,
     summary: content.slice(0, 240),
     pattern_type: pattern.type,
@@ -175,6 +192,7 @@ export function memoryFromOccurrence(
   return {
     id: createMemoryId(),
     kind: "episodic",
+    info_class: "experience",
     content,
     summary: content.slice(0, 240),
     pattern_type: pattern.type,

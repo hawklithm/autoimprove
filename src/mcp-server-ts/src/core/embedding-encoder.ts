@@ -127,10 +127,10 @@ export class EmbeddingEncoder {
     this.dim = cfg.hashDim ?? 2048;
     this.cacheDir = cfg.cacheDir || join(homedir(), ".autoimprove", "cache", "embeddings");
 
-    // C3: ensure cache dir exists (used by both backends).
-    if (!existsSync(this.cacheDir)) {
-      mkdirSync(this.cacheDir, { recursive: true });
-    }
+    // The cache directory is created lazily in saveCache(), not here. Many
+    // consumers (e.g. MemoryConsolidator via MemorySimilarity) only ever call
+    // encode/encodeSync and never touch the disk cache, so doing filesystem
+    // work in the constructor charged every instantiation for I/O it did not use.
 
     // Start async ONNX initialisation (or no-op if already done).
     // The first encode/encodeBatch call will await it before proceeding.
@@ -181,6 +181,21 @@ export class EmbeddingEncoder {
     return this.encodeBatchCharNgram(texts);
   }
 
+  /**
+   * Synchronous encode using the char-ngram-tfidf backend.
+   *
+   * ONNX inference is inherently async, so synchronous call sites (e.g.
+   * `MemoryConsolidator.consolidate()`, which is sync and called from sync
+   * analyzer code) cannot use it. This method always takes the char n-gram
+   * path regardless of the configured backend, giving a deterministic
+   * fuzzy-lexical vector without blocking the event loop.
+   *
+   * Prefer `encode()`/`encodeBatch()` wherever `await` is available.
+   */
+  encodeSync(text: string): Float32Array {
+    return this.vectorize(this.toNgrams(text));
+  }
+
   /** Cosine similarity between two already-normalized vectors (== dot product). */
   static cosine(a: Float32Array, b: Float32Array): number {
     const n = Math.min(a.length, b.length);
@@ -215,6 +230,9 @@ export class EmbeddingEncoder {
    */
   saveCache(sessionId: string, vectors: Float32Array[]): void {
     try {
+      if (!existsSync(this.cacheDir)) {
+        mkdirSync(this.cacheDir, { recursive: true });
+      }
       const cache: EmbeddingCache = {
         version: this.version,
         backend: this.backend,

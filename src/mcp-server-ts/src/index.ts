@@ -38,6 +38,8 @@ import { LLMRuleGenerator } from "./core/llm-rule-generator.js";
 import { AdaptiveSessionAnalyzer } from "./core/adaptive-session-analyzer.js";
 import { RuleDeduplicator, DeduplicationResult } from "./core/rule-deduplicator.js";
 import { RuleCleanupService } from "./core/rule-cleanup-service.js";
+import { MemoryDecayService } from "./core/memory-decay.js";
+import { infoClassifier } from "./core/info-classifier.js";
 import { logger } from "./core/logger.js";
 import { createScene, PatternType, RuleScope, Scene } from "./core/models.js";
 import { existsSync, readFileSync } from "fs";
@@ -387,7 +389,11 @@ Keywords are matched against rule descriptions, titles, and content. Use specifi
             current_project: { type: "string", description: "Optional project path for scope-aware memory retrieval" },
             organization_id: { type: "string", description: "Optional organization identifier" },
             repository: { type: "string", description: "Optional repository identifier" },
-            branch: { type: "string", description: "Optional branch identifier" }
+            branch: { type: "string", description: "Optional branch identifier" },
+            include_sensitive: {
+              type: "boolean",
+              description: "Include memories flagged as sensitive (keys/paths/internal addresses). Default false — sensitive memories are hidden from recall to protect privacy."
+            }
           },
           required: ["query"]
         }
@@ -1048,6 +1054,87 @@ Returns: Rule metadata + full content (title, description, how_to_apply, when_to
           required: [],
         },
       },
+      {
+        name: "decay_memories",
+        description: "Run long-term memory decay/elimination (gate 4): archive TTL-expired or explicitly-deprecated memories, soft-demote stale low-recall experience memories, and demote linked rules whose supporting memories were removed. Run with dry_run=true first to preview.",
+        inputSchema: {
+          type: "object",
+          properties: {
+            ttl_fallback_days: {
+              type: "number",
+              description: "Informational fallback TTL in days when a memory has no explicit ttl_days/expires_at. Default 365. Note: auto-expiry still requires an explicit TTL (opt-in).",
+            },
+            stale_days: {
+              type: "number",
+              description: "Experience memories with recall below threshold and not recalled for this many days get soft-demoted. Default 180.",
+            },
+            low_recall_threshold: {
+              type: "number",
+              description: "recall_count below this is considered low-frequency. Default 1.",
+            },
+            dry_run: {
+              type: "boolean",
+              description: "Preview what would change without writing to storage. Default false.",
+            },
+          },
+          required: [],
+        },
+      },
+      {
+        name: "list_memories",
+        description: "List and inspect learned memories (user memory control). Supports filtering by query, kind, info_class, and active/archived status. Self-management query, so sensitive memories are included by default.",
+        inputSchema: {
+          type: "object",
+          properties: {
+            query: { type: "string", description: "Optional natural-language query to search memories" },
+            kind: { type: "string", enum: ["semantic", "episodic", "procedural"], description: "Filter by memory kind" },
+            info_class: { type: "string", enum: ["preference", "fact", "experience"], description: "Filter by cognitive class" },
+            active_only: { type: "boolean", description: "Only return active memories. Default true" },
+            limit: { type: "number", description: "Maximum records to return. Default 50" },
+            include_sensitive: { type: "boolean", description: "Include sensitive memories (keys/paths). Default true for self-management" },
+          },
+          required: [],
+        },
+      },
+      {
+        name: "delete_memory",
+        description: "Delete a learned memory by id. The memory is archived (removed from active recall) and any rules that depend solely on it are demoted to candidate. Use with care.",
+        inputSchema: {
+          type: "object",
+          properties: {
+            memory_id: { type: "string", description: "ID of the memory to delete" },
+          },
+          required: ["memory_id"],
+        },
+      },
+      {
+        name: "update_memory",
+        description: "Update fields of a learned memory (content, summary, info_class, sensitivity, ttl_days, status). Re-classifies sensitivity automatically when content changes.",
+        inputSchema: {
+          type: "object",
+          properties: {
+            memory_id: { type: "string", description: "ID of the memory to update" },
+            content: { type: "string", description: "New content text" },
+            summary: { type: "string", description: "New summary" },
+            info_class: { type: "string", enum: ["preference", "fact", "experience"], description: "New cognitive class" },
+            sensitivity: { type: "string", enum: ["public", "sensitive"], description: "Override sensitivity label" },
+            ttl_days: { type: "number", description: "Set TTL in days (memory auto-archives after expiry)" },
+            status: { type: "string", enum: ["active", "archived"], description: "Set memory status" },
+          },
+          required: ["memory_id"],
+        },
+      },
+      {
+        name: "get_memory_metrics",
+        description: "Memory quality metrics dashboard (gate outcomes): write volume, recall/hit rate, conflict rate, deletion rate, plus a per-class breakdown and recent audit log. Use to monitor long-term memory signal-to-noise over time.",
+        inputSchema: {
+          type: "object",
+          properties: {
+            audit_limit: { type: "number", description: "Number of recent audit-log entries to return. Default 50" },
+          },
+          required: [],
+        },
+      },
     ],
   };
 });
@@ -1170,6 +1257,21 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
       case "batch_rebuild":
         return await handleBatchRebuild(request.params.arguments);
+
+      case "decay_memories":
+        return await handleDecayMemories(request.params.arguments);
+
+      case "list_memories":
+        return await handleListMemories(request.params.arguments);
+
+      case "delete_memory":
+        return await handleDeleteMemory(request.params.arguments);
+
+      case "update_memory":
+        return await handleUpdateMemory(request.params.arguments);
+
+      case "get_memory_metrics":
+        return await handleGetMemoryMetrics(request.params.arguments);
 
       default:
         throw new Error(`Unknown tool: ${request.params.name}`);
@@ -1333,6 +1435,237 @@ function refreshRulesSupportedByMemory(memoryId: string): number {
     refreshed++;
   }
   return refreshed;
+}
+
+/**
+ * 规则联动降级：给定一组记忆 id，重算其派生规则的支撑度，支撑不足的规则降为 candidate。
+ * 供 decay_memories（记忆被淘汰）与 delete_memory（用户删记忆）共用——删除记忆即抽走证据，
+ * 依赖它的规则应同步降级，避免“幽灵规则”继续生效。
+ */
+function demoteRulesForMemories(memoryIds: string[]): number {
+  const ruleIds = new Set<string>();
+  for (const memoryId of memoryIds) {
+    for (const entry of indexManager.getAllRules()) {
+      if ((entry.source_memory_ids || []).includes(memoryId)) ruleIds.add(entry.id);
+    }
+  }
+  let demoted = 0;
+  for (const ruleId of ruleIds) {
+    const entry = indexManager.getRule(ruleId);
+    if (!entry) continue;
+    const content = contentManager.loadContent(ruleId);
+    const support = getMemorySupport(entry.source_memory_ids);
+    const status = support.ids.length > 0 && support.score >= UNIFIED_RULE_MIN_SCORE ? "active" : "candidate";
+    if (content) {
+      const score = qualityController.assessUnifiedScore(
+        content,
+        entry,
+        entry.confidence,
+        entry.scope_confidence ?? 0.5,
+        support.score
+      );
+      indexManager.replaceRule(ruleId, { ...entry, confidence: score.overall, status });
+      content.metadata = {
+        ...content.metadata,
+        quality_score: score.overall,
+        confidence: score.overall,
+        memory_support_score: support.score,
+      };
+      contentManager.saveContent(content);
+    } else {
+      indexManager.replaceRule(ruleId, { ...entry, status });
+    }
+    if (status === "candidate") demoted++;
+  }
+  return demoted;
+}
+
+/**
+ * decay_memories 工具处理器（关卡4 衰减淘汰的维护入口）。
+ * 调用 MemoryDecayService 跑一轮衰减，并对受影响规则做联动降级：
+ * 重新计算其记忆支撑度，支撑不足则降为 candidate。
+ */
+async function handleDecayMemories(args: any) {
+  const options = {
+    ttlFallbackDays: typeof args.ttl_fallback_days === "number" ? args.ttl_fallback_days : 365,
+    staleDays: typeof args.stale_days === "number" ? args.stale_days : 180,
+    lowRecallThreshold: typeof args.low_recall_threshold === "number" ? args.low_recall_threshold : 1,
+    dryRun: args.dry_run === true,
+  };
+
+  // 取某记忆派生/支撑的规则 id 列表（不依赖存储层 getRulesForMemory，直接查索引）
+  const getRuleIdsForMemory = (memoryId: string): string[] =>
+    indexManager
+      .getAllRules()
+      .filter((entry: any) => (entry.source_memory_ids || []).includes(memoryId))
+      .map((entry: any) => entry.id);
+
+  const svc = new MemoryDecayService(memoryStore, getRuleIdsForMemory);
+  const result = svc.runDecay(options);
+
+  const rulesDemoted = result.rules_to_demote.length > 0 ? demoteRulesForMemories(result.rules_to_demote) : 0;
+
+  return {
+    content: [
+      {
+        type: "text",
+        text: JSON.stringify(
+          {
+            success: true,
+            dry_run: options.dryRun,
+            scanned: result.scanned,
+            archived: result.archived,
+            deprecated: result.deprecated,
+            rules_affected: result.rules_to_demote.length,
+            rules_demoted: rulesDemoted,
+            details: result.details,
+          },
+          null,
+          2
+        ),
+      },
+    ],
+  };
+}
+
+async function handleListMemories(args: any) {
+  const limit = typeof args.limit === "number" ? Math.max(1, Math.min(200, args.limit)) : 50;
+  const activeOnly = args.active_only !== false;
+  const includeSensitive = args.include_sensitive !== false;
+  const kind = typeof args.kind === "string" ? args.kind : undefined;
+  const infoClass = typeof args.info_class === "string" ? args.info_class : undefined;
+
+  let memories = memoryStore.list({ activeOnly });
+  if (kind) memories = memories.filter(m => m.kind === kind);
+  if (infoClass) memories = memories.filter(m => m.info_class === infoClass);
+  if (!includeSensitive) memories = memories.filter(m => m.sensitivity !== "sensitive");
+
+  if (typeof args.query === "string" && args.query.trim()) {
+    memories = memoryStore
+      .search(args.query, limit, {})
+      .filter(m => memories.some(existing => existing.id === m.id));
+  }
+
+  const items = memories.slice(0, limit).map(m => ({
+    id: m.id,
+    kind: m.kind,
+    info_class: m.info_class,
+    sensitivity: m.sensitivity,
+    content: m.content,
+    summary: m.summary,
+    status: m.status,
+    state: m.state,
+    confidence: m.confidence,
+    recall_count: m.recall_count,
+    ttl_days: m.ttl_days,
+    expires_at: m.expires_at,
+    updated_at: m.updated_at,
+  }));
+
+  return {
+    content: [{ type: "text", text: JSON.stringify({ success: true, count: items.length, memories: items }, null, 2) }],
+  };
+}
+
+async function handleDeleteMemory(args: any) {
+  const memoryId = args.memory_id as string;
+  if (!memoryId) return { content: [{ type: "text", text: JSON.stringify({ success: false, error: "memory_id is required" }) }] };
+
+  const memory = memoryStore.list({ activeOnly: false }).find(m => m.id === memoryId);
+  if (!memory) return { content: [{ type: "text", text: JSON.stringify({ success: false, error: `Memory not found: ${memoryId}` }) }] };
+
+  const nowISO = new Date().toISOString();
+  const archived = { ...memory, status: "archived" as const, valid_to: nowISO, updated_at: nowISO, metadata: { ...(memory.metadata || {}), user_deleted: true, deleted_at: nowISO } };
+  memoryStore.apply({ decision: "UPDATE", memory: archived, previous_id: memoryId });
+
+  const rulesDemoted = demoteRulesForMemories([memoryId]);
+
+  return {
+    content: [{ type: "text", text: JSON.stringify({ success: true, memory_id: memoryId, rules_demoted: rulesDemoted }, null, 2) }],
+  };
+}
+
+async function handleUpdateMemory(args: any) {
+  const memoryId = args.memory_id as string;
+  if (!memoryId) return { content: [{ type: "text", text: JSON.stringify({ success: false, error: "memory_id is required" }) }] };
+
+  const memory = memoryStore.list({ activeOnly: false }).find(m => m.id === memoryId);
+  if (!memory) return { content: [{ type: "text", text: JSON.stringify({ success: false, error: `Memory not found: ${memoryId}` }) }] };
+
+  const nowISO = new Date().toISOString();
+  const next: typeof memory = { ...memory, updated_at: nowISO };
+  if (typeof args.content === "string") next.content = args.content;
+  if (typeof args.summary === "string") next.summary = args.summary;
+  if (typeof args.info_class === "string") next.info_class = args.info_class as any;
+  if (typeof args.sensitivity === "string") next.sensitivity = args.sensitivity as any;
+  if (typeof args.ttl_days === "number") {
+    next.ttl_days = args.ttl_days;
+    next.expires_at = new Date(Date.parse(memory.created_at) + args.ttl_days * 24 * 60 * 60 * 1000).toISOString();
+  }
+  if (typeof args.status === "string") next.status = args.status as any;
+  // 内容变化 → 重新打敏感标记（关卡5）
+  if (typeof args.content === "string") next.sensitivity = infoClassifier.detectSensitivity(next.content);
+
+  memoryStore.apply({ decision: "UPDATE", memory: next, previous_id: memoryId });
+
+  return {
+    content: [{ type: "text", text: JSON.stringify({ success: true, memory_id: memoryId, memory: { id: next.id, info_class: next.info_class, sensitivity: next.sensitivity, status: next.status, ttl_days: next.ttl_days, expires_at: next.expires_at, content: next.content } }, null, 2) }],
+  };
+}
+
+async function handleGetMemoryMetrics(args: any) {
+  const auditLimit = typeof args.audit_limit === "number" ? Math.max(1, Math.min(500, args.audit_limit)) : 50;
+  const all = memoryStore.list({ activeOnly: false });
+
+  const total = all.length;
+  const active = all.filter(m => m.status === "active").length;
+  const archived = all.filter(m => m.status === "archived").length;
+  const deprecated = all.filter(m => m.state === "deprecated").length;
+  const sensitive = all.filter(m => m.sensitivity === "sensitive").length;
+
+  const byClass = { preference: 0, fact: 0, experience: 0, unclassified: 0 };
+  for (const m of all) {
+    if (m.info_class === "preference") byClass.preference++;
+    else if (m.info_class === "fact") byClass.fact++;
+    else if (m.info_class === "experience") byClass.experience++;
+    else byClass.unclassified++;
+  }
+
+  const conflicted = all.filter(m => (m.metadata && (m.metadata as any).conflict_with) || (m.contradiction_count ?? 0) > 0).length;
+  const recalled = all.filter(m => (m.recall_count ?? 0) > 0).length;
+
+  const conflictRate = total > 0 ? conflicted / total : 0;
+  const deletionRate = total > 0 ? archived / total : 0;
+  const hitRate = total > 0 ? recalled / total : 0;
+
+  const auditLog = (memoryStore.getVersionHistory ? memoryStore.getVersionHistory(auditLimit) : []).map(entry => ({
+    memory_id: entry.memory_id,
+    at: entry.versioned_at,
+    decision: entry.decision,
+  }));
+
+  return {
+    content: [{
+      type: "text",
+      text: JSON.stringify({
+        success: true,
+        total,
+        active,
+        archived,
+        deprecated,
+        sensitive,
+        by_class: byClass,
+        metrics: {
+          write_volume: total,
+          conflict_rate: Number(conflictRate.toFixed(4)),
+          deletion_rate: Number(deletionRate.toFixed(4)),
+          hit_rate: Number(hitRate.toFixed(4)),
+          note: "hit_rate approximates recall coverage (fraction of memories ever recalled); full search-hit telemetry requires usage-event logging.",
+        },
+        audit_log: auditLog,
+      }, null, 2),
+    }],
+  };
 }
 
 function linkRuleToMemories(rule: { indexEntry: any; content?: any }): void {
@@ -1799,14 +2132,23 @@ async function handleSearchMemory(args: any) {
   const scoredMemories = memoryStore.searchScored
     ? memoryStore.searchScored(query, limit, filters)
     : memoryStore.search(query, limit, filters).map(memory => ({ memory, score: 0, reasons: ["legacy-search"] }));
+
+  // 关卡5·隐私可控：默认过滤敏感记忆（密钥/路径/内网地址），避免泄露到召回结果
+  const includeSensitive = args.include_sensitive === true;
+  const visible = includeSensitive
+    ? scoredMemories
+    : scoredMemories.filter(result => result.memory.sensitivity !== "sensitive");
+  const filteredOutSensitive = scoredMemories.length - visible.length;
+
   return {
     content: [{
       type: "text",
       text: JSON.stringify({
         success: true,
         query,
-        count: scoredMemories.length,
-        memories: scoredMemories.map(result => ({
+        count: visible.length,
+        filtered_out_sensitive: filteredOutSensitive,
+        memories: visible.map(result => ({
           score: result.score,
           match_reasons: result.reasons,
           ...(() => { const memory = result.memory; return {
@@ -2022,7 +2364,8 @@ async function handleSearchKnowledge(args: any) {
 
       let markdown = `# Found ${matches.length} Matching Rule${matches.length > 1 ? 's' : ''}\n\n`;
 
-      const relatedMemories = memoryStore.search(kwList.join(" "), 5, { projectPath: currentProject });
+      const relatedMemories = memoryStore.search(kwList.join(" "), 5, { projectPath: currentProject })
+        .filter(memory => memory.sensitivity !== "sensitive");
       if (relatedMemories.length > 0) {
         markdown += `## Related Learned Memories\n\n`;
         for (const memory of relatedMemories) {

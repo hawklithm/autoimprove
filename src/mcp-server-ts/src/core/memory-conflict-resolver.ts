@@ -10,7 +10,21 @@ export interface MemoryConflict {
 
 /** Lightweight contradiction detector used before promotion and rule evolution. */
 export class MemoryConflictResolver {
-  private readonly llm = new LLMConfigManager();
+  /**
+   * Created on first LLM use, not in the constructor.
+   *
+   * `LLMConfigManager` builds an `LLMFailureTracker`, which reads and writes
+   * `~/.autoimprove/llm_failure_state.json`. The consolidator constructs a
+   * resolver purely for the deterministic heuristics below and never touches
+   * the LLM, so eager construction was paying disk I/O on every instantiation.
+   */
+  private llmInstance: LLMConfigManager | null = null;
+
+  private get llm(): LLMConfigManager {
+    if (!this.llmInstance) this.llmInstance = new LLMConfigManager();
+    return this.llmInstance;
+  }
+
   findConflicts(memories: MemoryRecord[]): MemoryConflict[] {
     const conflicts: MemoryConflict[] = [];
     for (let i = 0; i < memories.length; i++) {
@@ -45,6 +59,61 @@ export class MemoryConflictResolver {
       }
     }
     return false;
+  }
+
+  /**
+   * [P2-2] Contrastive qualifier pairs: same action, incompatible modifier.
+   *
+   * Deliberately excludes obligation pairs like must/must not, which
+   * `hasOpposingLanguage` already covers and which would self-match here
+   * (a text containing "must not" also contains "must").
+   */
+  private static readonly CONTRASTIVE_PAIRS: Array<[string, string]> = [
+    ["before", "after"],
+    ["always", "never"],
+    ["enable", "disable"],
+    ["enabled", "disabled"],
+    ["include", "exclude"],
+    ["allow", "forbid"],
+    ["sync", "async"],
+    ["之前", "之后"],
+    ["开启", "关闭"],
+    ["启用", "禁用"],
+    ["同步", "异步"]
+  ];
+
+  /**
+   * True when two memories describe the same action but carry opposite
+   * qualifiers — "run tests *before* merging" vs "run tests *after* merging".
+   *
+   * The consolidator uses this to distinguish "the user changed their mind"
+   * (→ SUPERSEDE) from "two complementary memories on one topic" (→ ADD).
+   * Without it, embedding similarity alone would happily supersede
+   * "run the build" with "run the tests", which are not in conflict at all.
+   */
+  hasContrastiveQualifier(a: string, b: string): boolean {
+    return MemoryConflictResolver.CONTRASTIVE_PAIRS.some(([left, right]) =>
+      (this.hasTerm(a, left) && this.hasTerm(b, right)) ||
+      (this.hasTerm(a, right) && this.hasTerm(b, left))
+    );
+  }
+
+  /** Whole-word match for ASCII terms, substring match for CJK. */
+  private hasTerm(text: string, term: string): boolean {
+    const haystack = (text || "").toLowerCase();
+    if (!/^[\x20-\x7F]+$/.test(term)) return haystack.includes(term);
+    const escaped = term.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    return new RegExp(`(^|[^a-z0-9_])${escaped}($|[^a-z0-9_])`, "i").test(haystack);
+  }
+
+  /** Public wrapper so callers outside promotion can reuse the heuristic. */
+  hasOpposingObligation(a: string, b: string): boolean {
+    return this.hasOpposingLanguage(a, b);
+  }
+
+  /** Public wrapper: do these two memories talk about the same subject? */
+  isSameSubject(a: MemoryRecord, b: MemoryRecord): boolean {
+    return this.sameSubject(a, b);
   }
 
   private sameSubject(a: MemoryRecord, b: MemoryRecord): boolean {

@@ -8,6 +8,13 @@
 // Enums
 // ============================================================================
 
+// `InfoClass` is a type, so it must be imported and re-exported with the
+// `type` modifier. A value-style `export { InfoClass }` compiles fine but
+// emits a real ESM re-export at runtime, and Node then throws
+// "does not provide an export named 'InfoClass'" when loading this module.
+import type { InfoClass } from "./memory-models.js";
+export type { InfoClass };
+
 export enum PatternType {
   REPEATED_CORRECTION = "repeated-correction",
   ANTI_PATTERN = "anti-pattern",
@@ -81,6 +88,8 @@ export interface Pattern {
   keywords: string[];
   /** Project roots observed for this pattern during batch analysis. */
   project_paths?: string[];
+  /** 认知类别：偏好/事实/经验（决定该 pattern 能否成规则） */
+  info_class?: InfoClass;
 }
 
 // ============================================================================
@@ -109,6 +118,8 @@ export interface RuleIndexEntry {
   acceptance_count?: number;
   correction_count?: number;
   contradiction_count?: number;
+  info_class?: InfoClass;
+  sensitivity?: "public" | "sensitive";
   scope?: RuleScope;           // Rule applicability scope
   scope_context?: {            // Additional scope metadata
     organization_id?: string;  // e.g., company domain, org identifier

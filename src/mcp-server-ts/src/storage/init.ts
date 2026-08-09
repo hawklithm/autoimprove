@@ -77,6 +77,11 @@ export interface Config {
       rollout: number; // 0..1 fraction of sessions routed to new pipeline
     };
   };
+  write_gate?: {
+    min_cross_session_for_experience: number; // 经验类跨会话复发阈值才成候选
+    fact_becomes_rule: boolean;               // fact 是否成规则（默认 false）
+    episodic_persist: boolean;                // 是否落库一次性 episodic（默认 false）
+  };
 }
 
 const DEFAULT_CONFIG: Config = {
@@ -123,7 +128,12 @@ const DEFAULT_CONFIG: Config = {
     ab_test: {
       rollout: 0, // 0 = all traffic on legacy; gradually raise for A/B
     },
-  }
+  },
+  write_gate: {
+    min_cross_session_for_experience: 2,
+    fact_becomes_rule: false,
+    episodic_persist: false,
+  },
 };
 
 // ============================================================================

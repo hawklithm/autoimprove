@@ -22,14 +22,14 @@ export const PATTERN_STRATEGIES: Record<
 > = {
   [PatternType.REPEATED_CORRECTION]: {
     min_confidence: 0.45,
-    min_occurrences: 1, // Reduced from 2 to allow batch rebuild to generate rules from single-occurrence patterns
+    min_occurrences: 2, // 关卡2·触发时机：单条偶发纠正不成规则，需至少复发一次
     requires_multiple_sessions: false,
     weight_adjustment: 1.0,
     detect_keywords: []
   },
   [PatternType.ANTI_PATTERN]: {
     min_confidence: 0.45,
-    min_occurrences: 1,
+    min_occurrences: 2,
     // Relaxed: test_passed field requires test output parsing (not implemented)
     // Without this, anti-pattern rules would never be generated
     requires_test_validation: false,

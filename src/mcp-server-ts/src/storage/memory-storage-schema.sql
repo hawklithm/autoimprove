@@ -25,7 +25,13 @@ CREATE TABLE IF NOT EXISTS memories (
   supersedes TEXT,
   namespace_json TEXT,
   outcome_json TEXT,
-  metadata_json TEXT
+  metadata_json TEXT,
+  info_class TEXT,
+  sensitivity TEXT,
+  ttl_days INTEGER,
+  expires_at TEXT,
+  recall_count INTEGER,
+  last_recalled_at TEXT
 );
 
 CREATE TABLE IF NOT EXISTS memory_versions (
