@@ -126,6 +126,8 @@ export interface MemoryRepository {
   getVersionHistory?(limit?: number): MemoryVersionEntry[];
   compact?(): void;
   close?(): void;
+  /** 重新加载持久化记忆（JSONL 后端重读文件并刷新内存 Map；SQLite 后端为 no-op，因其每次查询都读实时数据）。可选，调用方用 `reload?.()` 安全调用。 */
+  reload?(): void;
 }
 
 export interface MemoryVersionEntry {
@@ -157,7 +159,7 @@ export function memoryFromPattern(
     scene,
     keywords: pattern.keywords || [],
     evidence,
-    confidence: pattern.confidence,
+    confidence: (typeof pattern.confidence === "number" && Number.isFinite(pattern.confidence)) ? pattern.confidence : 0.5,
     importance: pattern.priority === "critical" || pattern.priority === "high" ? 0.85 : 0.6,
     strength: Math.max(1, new Set(evidence.map(e => e.session_id)).size),
     created_at: now,
@@ -199,7 +201,7 @@ export function memoryFromOccurrence(
     scene,
     keywords: pattern.keywords || [],
     evidence: [evidence],
-    confidence: pattern.confidence,
+    confidence: (typeof pattern.confidence === "number" && Number.isFinite(pattern.confidence)) ? pattern.confidence : 0.5,
     importance: 0.65,
     strength: 1,
     created_at: now,

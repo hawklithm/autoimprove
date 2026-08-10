@@ -16,7 +16,7 @@ import { statSync } from "fs";
 import { loadConfig } from "../storage/init.js";
 import { shouldUseNewPipeline } from "./local-ml-rollout.js";
 import { logger } from "./logger.js";
-import { memoryFromOccurrence, memoryFromPattern } from "./memory-models.js";
+import { memoryFromOccurrence, memoryFromPattern, MemoryRepository } from "./memory-models.js";
 import { MemoryConsolidator } from "./memory-consolidator.js";
 import { SessionMemoryExtractor } from "./memory-extractor.js";
 import { InfoClassifier } from "./info-classifier.js";
@@ -43,14 +43,14 @@ export class SessionAnalyzer {
   private lastPreFilterResult: FilterResult | null = null;
   private writeGate: MemoryWriteGate;
 
-  constructor() {
+  constructor(memoryStore?: MemoryRepository) {
     this.parser = new UnifiedSessionParser();
     this.confidenceCalc = new ConfidenceCalculator();
     this.cacheManager = new SessionCacheManager();
     this.compactCache = new CompactCacheManager();
     this.clusterer = new MessageClusterer();
     this.preFilter = new PreFilter();
-    this.memoryConsolidator = new MemoryConsolidator();
+    this.memoryConsolidator = new MemoryConsolidator(memoryStore);
     this.memoryExtractor = new SessionMemoryExtractor();
     this.writeGate = new MemoryWriteGate(new InfoClassifier());
   }

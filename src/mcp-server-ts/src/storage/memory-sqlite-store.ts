@@ -3,6 +3,7 @@ import { existsSync, mkdirSync, readFileSync } from "fs";
 import { dirname, join } from "path";
 import { fileURLToPath } from "url";
 import { MemoryMutation, MemoryRecord, MemoryRepository, MemorySearchResult, MemoryUsageEvent, MemoryRuleLink, MemoryState, MemorySearchFilters, MemoryVersionEntry } from "../core/memory-models.js";
+import { logger } from "../core/logger.js";
 import { STORAGE_ROOT } from "./init.js";
 import { MemoryStore } from "./memory-store.js";
 
@@ -160,9 +161,20 @@ export class SQLiteMemoryStore implements MemoryRepository {
   compact(): void { this.db.pragma("wal_checkpoint(TRUNCATE)"); }
   close(): void { this.db.close(); }
 
+  /** SQLite 后端每次查询都读取实时数据，无需重加载；实现以满足 MemoryRepository 契约。 */
+  reload(): void { /* no-op for SQLite-backed store */ }
+
   private serialize(record: MemoryRecord): Record<string, unknown> {
+    const now = new Date().toISOString();
     return {
       ...record,
+      confidence: (typeof record.confidence === "number" && Number.isFinite(record.confidence)) ? record.confidence : (typeof record.importance === "number" && Number.isFinite(record.importance) ? record.importance : 0.5),
+      importance: typeof record.importance === "number" ? record.importance : 0.5,
+      strength: typeof record.strength === "number" ? record.strength : 1,
+      created_at: record.created_at || now,
+      updated_at: record.updated_at || now,
+      valid_from: record.valid_from || now,
+      status: record.status || "active",
       state: record.state || "candidate",
       support_count: record.support_count || 1,
       independent_session_count: record.independent_session_count || 1,
@@ -226,10 +238,13 @@ export class SQLiteMemoryStore implements MemoryRepository {
 export function createDefaultMemoryRepository(): MemoryRepository {
   try {
     return new SQLiteMemoryStore();
-  } catch {
+  } catch (error) {
     // Native SQLite binaries can be unavailable in copied/containerized
     // installations. Keep memory learning available through JSONL until the
     // native dependency is repaired.
+    logger.warn("memory", "SQLite memory store unavailable, falling back to JSONL backend", {
+      error: error instanceof Error ? error.message : String(error)
+    });
     return new MemoryStore();
   }
 }

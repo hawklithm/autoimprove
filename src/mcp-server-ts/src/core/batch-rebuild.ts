@@ -33,6 +33,7 @@ import { createDefaultMemoryRepository } from "../storage/memory-sqlite-store.js
 import { RuleQualityController } from "./rule-quality.js";
 import { MemoryPromotionService } from "./memory-promotion.js";
 import { EmbeddingEncoder } from "./embedding-encoder.js";
+import { findRelevantMemoryIds, resolveMemorySupport, FALLBACK_MEMORY_SUPPORT } from "./memory-support.js";
 
 export interface BatchRebuildOptions {
   /** Clear all caches before rebuild */
@@ -97,7 +98,7 @@ export interface BatchRebuildResult {
 }
 
 export class BatchRebuildEngine {
-  private analyzer: SessionAnalyzer;
+  private analyzer!: SessionAnalyzer;
   private parser: UnifiedSessionParser;
   private cacheManager: SessionCacheManager;
   private evolutionManager: PatternEvolutionManager;
@@ -113,20 +114,25 @@ export class BatchRebuildEngine {
   private memoryPromotion: MemoryPromotionService;
 
   constructor() {
-    this.analyzer = new SessionAnalyzer();
     this.parser = new UnifiedSessionParser();
     this.cacheManager = new SessionCacheManager();
     this.evolutionManager = new PatternEvolutionManager();
     this.ruleGenerator = new HybridRuleGenerator();
-    this.batchLLMGenerator = new BatchLLMRuleGenerator();
     this.indexManager = new RuleIndexManager();
     this.contentManager = new RuleContentManager();
     this.exporter = new ClaudeIndexExporter(this.indexManager, this.contentManager);
     this.cleanupService = new RuleCleanupService();
     this.deduplicator = new RuleDeduplicator();
     this.memoryStore = createDefaultMemoryRepository();
+    // Construct the analyzer with the SAME memory repository so memories
+    // written during analysis (Step 4) are visible to the rule-generation
+    // memory-support pass (Step 7) — critical when the JSONL backend keeps
+    // an in-memory Map that is not shared across instances.
+    this.analyzer = new SessionAnalyzer(this.memoryStore);
     this.qualityController = new RuleQualityController();
     this.memoryPromotion = new MemoryPromotionService(this.memoryStore);
+    // Construct after memoryStore so the generator can reuse the same repository.
+    this.batchLLMGenerator = new BatchLLMRuleGenerator(this.memoryStore);
   }
 
   /**
@@ -346,6 +352,9 @@ export class BatchRebuildEngine {
     }
 
     // Attach consolidated memory support before the final quality gate.
+    // Reload the memory store so any memories persisted during analysis
+    // (or by other processes) are visible before we resolve rule↔memory links.
+    this.memoryStore.reload?.();
     rules = rules.map(rule => {
       const support = this.findSupportingMemories(rule);
       rule.indexEntry.source_memory_ids = support.ids;
@@ -503,25 +512,16 @@ export class BatchRebuildEngine {
 
   private findSupportingMemories(rule: { indexEntry: RuleIndexEntry; content: RuleContent }): { ids: string[]; score: number } {
     const query = rule.content.description || rule.content.content || rule.indexEntry.description || "";
-    if (!query.trim()) return { ids: [], score: 0.5 };
+    if (!query.trim()) return { ids: [], score: FALLBACK_MEMORY_SUPPORT };
     const filters = {
       projectPath: rule.indexEntry.scope_context?.project_path,
       organizationId: rule.indexEntry.scope_context?.organization_id,
       repository: rule.indexEntry.scope_context?.repository,
       branch: rule.indexEntry.scope_context?.branch
     };
-    const results = this.memoryStore.searchScored
-      ? this.memoryStore.searchScored(query, 8, filters)
-      : this.memoryStore.search(query, 8, filters)
-        .map(memory => ({ memory, score: 0.5, reasons: ["legacy-search"] }));
-    const organizationId = rule.indexEntry.scope_context?.organization_id?.toLowerCase();
-    const memories = results.filter(result => result.memory.kind !== "episodic"
-      && result.score >= 0.25
-      && (!organizationId || !result.memory.namespace?.organization_id || result.memory.namespace.organization_id.toLowerCase() === organizationId)
-    ).slice(0, 5).map(result => result.memory);
-    if (memories.length === 0) return { ids: [], score: 0.5 };
-    const score = memories.reduce((sum, memory) => sum + memory.confidence * 0.35 + Math.min(1, memory.strength / 5) * 0.3 + memory.importance * 0.15 + (memory.outcome?.status === "success" ? 0.2 : 0.1), 0) / memories.length;
-    return { ids: memories.map(memory => memory.id), score };
+    const ids = findRelevantMemoryIds(this.memoryStore, query, filters);
+    if (ids.length === 0) return { ids: [], score: FALLBACK_MEMORY_SUPPORT };
+    return resolveMemorySupport(this.memoryStore, ids);
   }
 
   private linkRuleToMemories(rule: { indexEntry: RuleIndexEntry; content: RuleContent }): void {

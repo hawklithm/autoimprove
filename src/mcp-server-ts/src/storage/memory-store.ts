@@ -145,4 +145,10 @@ export class MemoryStore {
   compact(): void {
     writeFileSync(this.path, this.list().map(record => JSON.stringify(record)).join("\n") + "\n", "utf8");
   }
+
+  /** 重读持久化文件并刷新内存 Map。用于其他实例/进程已写入记忆后，让本实例看到最新数据。 */
+  reload(): void {
+    this.records.clear();
+    this.load();
+  }
 }
