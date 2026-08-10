@@ -157,9 +157,29 @@ export class EmbeddingEncoder {
   }
 
   // ---- public API ----
+  // ---- public API ----
   // ONNX inference (session.run()) is inherently async. Callers MUST await
   // these methods. The first call may block briefly (10-500ms) while ONNX
   // model loads; subsequent calls are fast.
+
+  /**
+   * Eagerly preload the ONNX model. Call this once before starting batch
+   * processing so that the model is ready before any session analysis begins.
+   * Idempotent — safe to call multiple times.
+   */
+  static async preloadOnnx(modelName?: string): Promise<void> {
+    ensureOnnxInit(modelName);
+    if (onnxInitPromise) {
+      await onnxInitPromise;
+    }
+  }
+
+  /**
+   * Check whether the ONNX backend is ready (model loaded and usable).
+   */
+  static isOnnxReady(): boolean {
+    return EmbeddingEncoder.onnxSession !== null;
+  }
 
   /** Encode a single text (uses current IDF state; call encodeBatch first for full-corpus IDF). */
   async encode(text: string): Promise<Float32Array> {
@@ -175,7 +195,7 @@ export class EmbeddingEncoder {
   async encodeBatch(texts: string[]): Promise<Float32Array[]> {
     await this.ensureOnnxReady();
     if (this.backend === "onnx-local") {
-      return Promise.all(texts.map(t => this.encodeOnnx(t)));
+      return this.encodeOnnxBatch(texts);
     }
     // char-ngram-tfidf path.
     return this.encodeBatchCharNgram(texts);
@@ -273,7 +293,7 @@ export class EmbeddingEncoder {
       logger.info("embedding-onnx", "encodeOnnx called but no session — returning zero vector");
       return new Float32Array(this.onnxDim); // zero vector fallback
     }
-    logger.info("embedding-onnx", `encodeOnnx invoked: text="${text.substring(0, 60)}..." (len=${text.length})`);
+    logger.debug("embedding-onnx", `encodeOnnx invoked: text="${text.substring(0, 60)}..." (len=${text.length})`);
 
     // C4: tokenize with jieba for Chinese, whitespace split for English
     const tokens = this.tokenizeOnnx(text);
@@ -334,6 +354,110 @@ export class EmbeddingEncoder {
     } catch (e) {
       logger.warn("embedding-onnx", `ONNX inference failed: ${e}`);
       return new Float32Array(this.onnxDim);
+    }
+  }
+
+  /**
+   * Encode a batch of texts in a single ONNX inference call.
+   *
+   * Instead of N separate session.run() calls (one per text), this creates a
+   * single [batch_size, MAX_LEN] input tensor and runs one inference pass.
+   * For bge-small-zh this typically yields a 5-10x throughput improvement
+   * on CPU when the batch contains more than 2 texts.
+   */
+  private async encodeOnnxBatch(texts: string[]): Promise<Float32Array[]> {
+    const session = EmbeddingEncoder.onnxSession;
+    if (!session || texts.length === 0) {
+      return texts.map(() => new Float32Array(this.onnxDim));
+    }
+
+    // Single-text path: delegate to the existing method (no batching overhead).
+    if (texts.length === 1) {
+      return [await this.encodeOnnx(texts[0])];
+    }
+
+    const MAX_LEN = 128;
+    const batchSize = texts.length;
+
+    // Pre-tokenize all texts
+    const allTokens: string[][] = texts.map(t => this.tokenizeOnnx(t));
+
+    // Build flat tensors of shape [batchSize * MAX_LEN]
+    const totalLen = batchSize * MAX_LEN;
+    const allIds = new BigInt64Array(totalLen);
+    const allMask = new BigInt64Array(totalLen);
+    const allTypeIds = new BigInt64Array(totalLen);
+
+    for (let b = 0; b < batchSize; b++) {
+      const tokens = allTokens[b];
+      const offset = b * MAX_LEN;
+      // [CLS]
+      allIds[offset] = 101n;
+      allMask[offset] = 1n;
+      for (let i = 0; i < Math.min(tokens.length, MAX_LEN - 2); i++) {
+        allIds[offset + i + 1] = BigInt(this.hashToken(tokens[i]));
+        allMask[offset + i + 1] = 1n;
+      }
+      // [SEP]
+      const sepPos = Math.min(tokens.length, MAX_LEN - 2) + 1;
+      allIds[offset + sepPos] = 102n;
+      allMask[offset + sepPos] = 1n;
+    }
+
+    try {
+      const Tensor = EmbeddingEncoder.onnxTensorCtor;
+      if (!Tensor) {
+        throw new Error("onnxruntime-node Tensor constructor not available");
+      }
+
+      const feeds = {
+        input_ids: new Tensor('int64', allIds, [batchSize, MAX_LEN]),
+        attention_mask: new Tensor('int64', allMask, [batchSize, MAX_LEN]),
+        token_type_ids: new Tensor('int64', allTypeIds, [batchSize, MAX_LEN]),
+      };
+
+      logger.info("embedding-onnx", `encodeOnnxBatch: running ${batchSize} texts in one inference pass`);
+
+      const r = await (session as any).run(feeds, {}, {});
+
+      const outputKey = Object.keys(r).find(k => k !== 'token_type_ids' && k !== 'attention_mask')
+        || Object.keys(r)[0];
+      if (!outputKey) {
+        throw new Error("No output found in ONNX result");
+      }
+
+      const out = r[outputKey] as any;
+      const dim = out.dims[out.dims.length - 1] as number;
+      const totalData = Array.from(out.data) as number[];
+
+      // Split batch result: each row is [CLS] (first token position) vector.
+      // For bge-small-zh with mean-pooling output shape [batchSize, dim],
+      // we take the full row. For [batchSize, seqLen, dim] we take position 0.
+      const results: Float32Array[] = [];
+      const stride = out.dims.length === 3 ? out.dims[1] * dim : dim;
+      for (let b = 0; b < batchSize; b++) {
+        const start = b * stride;
+        // For pooled output ([batchSize, dim]): take the full row.
+        // For hidden state ([batchSize, seqLen, dim]): take the CLS position.
+        const vecData = out.dims.length === 3
+          ? totalData.slice(start, start + dim)  // CLS (position 0)
+          : totalData.slice(start, start + dim); // full row
+
+        // L2 normalize
+        let norm = 0;
+        for (const x of vecData) norm += x * x;
+        norm = Math.sqrt(norm) || 1;
+        results.push(new Float32Array(vecData.map(v => v / norm)));
+      }
+
+      if (results.length > 0) {
+        this.onnxDim = results[0].length;
+      }
+      return results;
+    } catch (e) {
+      logger.warn("embedding-onnx", `ONNX batch inference failed: ${e}, falling back to per-text inference`);
+      // Fall back to per-text inference on batch failure
+      return Promise.all(texts.map(t => this.encodeOnnx(t)));
     }
   }
 

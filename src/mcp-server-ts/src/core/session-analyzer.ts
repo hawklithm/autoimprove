@@ -358,7 +358,7 @@ export class SessionAnalyzer {
           // Outliers that didn't match any centroid — cluster them separately
           let outlierPatterns: Pattern[] = [];
           if (outliers.length > 0) {
-            const outlierClusters = await this.clusterer.clusterMessages(outliers);
+            const outlierClusters = await this.clusterer.clusterMessages(outliers, sessionId);
             outlierPatterns = outlierClusters.map(c => this.clusterToPattern(c, partialSessionData));
           }
 
@@ -373,7 +373,7 @@ export class SessionAnalyzer {
           const mergedPatterns = this.cacheManager.mergePatterns(sessionId, allNew);
 
           // Update centroid cache: re-serialise from merged + outlier clusters
-          const allClusters = [...mergedClusters, ...(await this.clusterer.clusterMessages(outliers))];
+          const allClusters = [...mergedClusters, ...(await this.clusterer.clusterMessages(outliers, sessionId))];
           if (allClusters.length > 0) {
             const newCentroids = await this.clusterer.clustersToCentroids(allClusters);
             this.cacheManager.setClusterCentroids(sessionId, newCentroids);
@@ -402,7 +402,7 @@ export class SessionAnalyzer {
     if (useSemantic) {
       const allCandidates = this.extractCandidatesFromPatterns(mergedPatterns, sessionData);
       if (allCandidates.length > 0) {
-        const fullClusters = await this.clusterer.clusterMessages(allCandidates);
+        const fullClusters = await this.clusterer.clusterMessages(allCandidates, sessionId);
         const centroids = await this.clusterer.clustersToCentroids(fullClusters);
         this.cacheManager.setClusterCentroids(sessionId, centroids);
       }
@@ -612,7 +612,7 @@ export class SessionAnalyzer {
     }
 
     // Cluster similar corrections
-    const clusters = await this.clusterer.clusterMessages(candidates);
+    const clusters = await this.clusterer.clusterMessages(candidates, sessionData.session_id);
 
     logger.info("session-analysis", `Clustered ${corrections.length} corrections into ${clusters.length} patterns`);
 
@@ -673,7 +673,7 @@ export class SessionAnalyzer {
     }
 
     // Cluster similar anti-patterns
-    const clusters = await this.clusterer.clusterMessages(candidates);
+    const clusters = await this.clusterer.clusterMessages(candidates, sessionData.session_id);
 
     logger.info("session-analysis", `Clustered ${antiPatternMessages.length} anti-patterns into ${clusters.length} patterns`);
 
@@ -734,7 +734,7 @@ export class SessionAnalyzer {
     }
 
     // Cluster similar preferences
-    const clusters = await this.clusterer.clusterMessages(candidates);
+    const clusters = await this.clusterer.clusterMessages(candidates, sessionData.session_id);
 
     logger.info("session-analysis", `Clustered ${preferenceMessages.length} preferences into ${clusters.length} patterns`);
 
@@ -799,7 +799,7 @@ export class SessionAnalyzer {
     }
 
     // Cluster similar performance patterns
-    const clusters = await this.clusterer.clusterMessages(candidates);
+    const clusters = await this.clusterer.clusterMessages(candidates, sessionData.session_id);
 
     logger.info("session-analysis", `Clustered ${performanceMessages.length} performance patterns into ${clusters.length} patterns`);
 
@@ -895,7 +895,7 @@ export class SessionAnalyzer {
     }
 
     // Cluster similar security patterns
-    const clusters = await this.clusterer.clusterMessages(candidates);
+    const clusters = await this.clusterer.clusterMessages(candidates, sessionData.session_id);
 
     logger.info("session-analysis", `Clustered ${securityMessages.length} security patterns into ${clusters.length} patterns`);
 

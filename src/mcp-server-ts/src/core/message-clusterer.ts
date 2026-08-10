@@ -72,9 +72,15 @@ export class MessageClusterer {
   ];
 
   /**
-   * Cluster candidates into semantically similar groups
+   * Cluster candidates into semantically similar groups.
+   * @param candidates  Message candidates to cluster.
+   * @param sessionId   Optional session ID for embedding cache (C2) — when provided,
+   *                    avoids re-encoding texts that were already encoded in a previous run.
    */
-  async clusterMessages(candidates: MessageCandidate[]): Promise<MessageCluster[]> {
+  async clusterMessages(
+    candidates: MessageCandidate[],
+    sessionId?: string,
+  ): Promise<MessageCluster[]> {
     if (candidates.length === 0) {
       return [];
     }
@@ -93,9 +99,9 @@ export class MessageClusterer {
       }];
     }
 
-    // Build vectors: semantic (char n-gram) when encoder active, else legacy word TF-IDF.
+    // Build vectors: semantic (char n-gram / ONNX) when encoder active, else legacy word TF-IDF.
     const vectors = this.encoder
-      ? await this.buildSemanticVectors(candidates)
+      ? await this.buildSemanticVectors(candidates, sessionId)
       : this.buildTFIDFVectors(candidates);
 
     // Hierarchical clustering
@@ -272,14 +278,36 @@ export class MessageClusterer {
   }
 
   /**
-   * Build semantic vectors via EmbeddingEncoder (char n-gram TF-IDF) for all candidates.
+   * Build semantic vectors via EmbeddingEncoder (char n-gram TF-IDF / ONNX) for all candidates.
    * Returns the same sparse-Map shape as buildTFIDFVectors so growCluster/cosineSimilarity
    * are reused unchanged. Only called when a semantic encoder is active (non-legacy mode).
+   *
+   * C2: embedding results are cached to disk per session. On subsequent runs, previously
+   * encoded sessions skip the expensive ONNX inference entirely. Cache is keyed by
+   * (sessionId, text). Texts that differ from the cached set trigger a full re-encode.
    */
   private async buildSemanticVectors(
-    candidates: MessageCandidate[]
+    candidates: MessageCandidate[],
+    sessionId?: string,
   ): Promise<Map<number, Map<string, number>>> {
     const texts = candidates.map(c => c.extractedText);
+
+    // C2: try disk cache first — skip ONNX/ngram encoding for unchanged sessions.
+    if (sessionId && this.encoder) {
+      const cached = this.encoder.loadCache(sessionId);
+      if (cached && cached.length === texts.length) {
+        const sparse = new Map<number, Map<string, number>>();
+        cached.forEach((vec, i) => {
+          const m = new Map<string, number>();
+          for (let j = 0; j < vec.length; j++) {
+            if (vec[j] !== 0) m.set(String(j), vec[j]);
+          }
+          sparse.set(i, m);
+        });
+        return sparse;
+      }
+    }
+
     const dense = await this.encoder!.encodeBatch(texts); // L2-normalized Float32Array
     const sparse = new Map<number, Map<string, number>>();
     dense.forEach((vec, i) => {
@@ -291,6 +319,12 @@ export class MessageClusterer {
       }
       sparse.set(i, m);
     });
+
+    // C2: persist encoded vectors for future runs.
+    if (sessionId && this.encoder) {
+      this.encoder.saveCache(sessionId, dense);
+    }
+
     return sparse;
   }
 

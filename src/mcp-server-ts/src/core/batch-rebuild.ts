@@ -32,6 +32,7 @@ import { MemoryRepository } from "./memory-models.js";
 import { createDefaultMemoryRepository } from "../storage/memory-sqlite-store.js";
 import { RuleQualityController } from "./rule-quality.js";
 import { MemoryPromotionService } from "./memory-promotion.js";
+import { EmbeddingEncoder } from "./embedding-encoder.js";
 
 export interface BatchRebuildOptions {
   /** Clear all caches before rebuild */
@@ -180,6 +181,22 @@ export class BatchRebuildEngine {
       ? (cached.length / sessionFiles.length) * 100
       : 0;
     logger.debug("batch-rebuild", `  Cache hit rate: ${cacheHitRate.toFixed(1)}%`);
+
+    // Preload ONNX model eagerly before the analysis loop, so the first
+    // session does not pay the lazy-loading cost and all subsequent sessions
+    // benefit from a ready session. Safe to call even when onnx-local is
+    // not configured — it no-ops silently.
+    if (toAnalyze.length > 0) {
+      logger.info("batch-rebuild", "\n[3.5/7] Preloading ONNX model...");
+      const preloadStart = Date.now();
+      await EmbeddingEncoder.preloadOnnx();
+      const preloadMs = Date.now() - preloadStart;
+      if (EmbeddingEncoder.isOnnxReady()) {
+        logger.info("batch-rebuild", `✓ ONNX model ready (${preloadMs}ms)`);
+      } else {
+        logger.debug("batch-rebuild", `  ONNX not available — using char-ngram-tfidf backend (${preloadMs}ms)`);
+      }
+    }
 
     // Step 4: Analyze new/changed sessions
     logger.info("batch-rebuild", "\n[4/7] Analyzing sessions...");
