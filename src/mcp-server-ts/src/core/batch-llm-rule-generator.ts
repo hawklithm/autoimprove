@@ -288,7 +288,8 @@ export class BatchLLMRuleGenerator {
         totalOccurrences: cluster.total_occurrences,
         sessionCount: cluster.session_count,
         isBatchMode: true,
-        maxContentExamples: 5
+        maxContentExamples: 5,
+        outputLanguage: this.llmManager.getDefaultRuleLanguage()
       });
 
       // 如果估算出了模型最大 completion token 数，用它来限制 max_tokens

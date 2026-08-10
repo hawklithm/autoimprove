@@ -52,7 +52,7 @@
 
 ---
 
-## 缺陷 B：规则语言错配（中文会话 → 英文规则，P1）
+## 缺陷 B：规则语言错配（中文会话 → 英文规则，P1）✅ 已修复
 
 **现象**：源会话是中文，但 47 条规则正文 100% 英文（`ruleLangDist:{zh:0,en:47,mixed:0}`），中文只以散 token 泄漏进 keywords。
 
@@ -60,8 +60,9 @@
 
 **修复方案（P1）**：
 - **B1 证据语言检测 + 输出语言指令**：在 `PromptOptions` 增加 `outputLanguage?`；新增 `detectLanguage(text)`（检测 CJK/中文占比）。`buildPrompt` 在 instructions 段追加："请使用与源对话相同的语言输出规则（检测到中文则用中文撰写标题与说明）"。英文会话保持英文。
-- **B2 配置默认语言**：`LLMConfigManager` 增加 `defaultRuleLanguage`（默认 `auto`），允许用户强制 `zh`/`en`。
-- 落点：`llm-prompt-builder.ts` 的 instructions 段与 `batch-llm-rule-generator.ts:303` 的 `buildPrompt` 调用处。
+- **B2 配置默认语言**：`LLMConfigManager` 增加 `defaultRuleLanguage`（默认 `auto`，从 env `AUTOIMPROVE_RULE_LANGUAGE`/`LLM_RULE_LANGUAGE` 读取），允许用户强制 `zh`/`en`。
+- 落点：`llm-prompt-builder.ts` 的 instructions 段与 `batch-llm-rule-generator.ts:303`、`llm-rule-generator.ts:106` 的 `buildPrompt` 调用处。
+- **验证**：`tests/p1b-language.test.ts`（12 用例）覆盖 detectLanguage、auto/zh/en 指令注入、config 读取。重跑后 `ruleLangDist.zh > 0`。
 
 ---
 
@@ -100,8 +101,8 @@
 
 | 优先级 | 缺陷 | 修复 | 预期效果 |
 |---|---|---|---|
-| **P0** | A + E | A1 注入共享 store / A2 reload；E1 修 better-sqlite3 ABI / E2 后端告警 | 规则真正带上 `source_memory_ids`，`memory_support_score` 变为真实分布 |
-| **P1** | B | B1 语言检测+指令 / B2 默认语言配置 | 中文会话→中文规则 |
+| **P0** | A + E | A1 注入共享 store / A2 reload；E1 修 better-sqlite3 ABI / E2 后端告警 | ✅ 已完成：规则真正带上 `source_memory_ids`，`memory_support_score` 变为真实分布 |
+| **P1** | B | B1 语言检测+指令 / B2 默认语言配置 | ✅ 已完成：中文会话→中文规则 |
 | **P1** | C | C1 patternNoiseFilter / C2 通用性降级 / C3 质量评分纳入 | 去掉"工具学自己/通用废话"类噪声 |
 | **P2** | D | D1 分级门禁 / D2 提示 / D3 自适应 | 少量会话也能产出可用规则，不再静默 0 |
 

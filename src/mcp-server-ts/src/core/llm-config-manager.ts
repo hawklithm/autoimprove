@@ -23,6 +23,8 @@ import OpenAI from "openai";
 import { logger } from "./logger.js";
 import { LLMFailureTracker } from "./llm-failure-tracker.js";
 
+export type RuleLanguage = "auto" | "zh" | "en";
+
 export interface LLMConfig {
   name: string;
   apiKey: string;
@@ -43,12 +45,35 @@ export class LLMConfigManager {
   private clients: Map<string, OpenAI> = new Map();
   private failedConfigs: Set<string> = new Set();
   private failureTracker: LLMFailureTracker;
+  private defaultRuleLanguage: RuleLanguage;
 
   constructor() {
     this.failureTracker = new LLMFailureTracker();
+    this.defaultRuleLanguage = this.loadRuleLanguage();
     this.configs = this.loadConfigurations();
     this.reorderConfigsByHealth();
     this.logConfigurationStatus();
+  }
+
+  /**
+   * Resolve the configured default rule output language.
+   * Env precedence: AUTOIMPROVE_RULE_LANGUAGE > LLM_RULE_LANGUAGE > "auto".
+   * "auto" lets the prompt builder detect language from the source session.
+   */
+  private loadRuleLanguage(): RuleLanguage {
+    const raw = (process.env.AUTOIMPROVE_RULE_LANGUAGE || process.env.LLM_RULE_LANGUAGE || "auto")
+      .toLowerCase()
+      .trim();
+    if (raw === "zh" || raw === "zh-cn" || raw === "chinese" || raw === "中文") return "zh";
+    if (raw === "en" || raw === "english" || raw === "eng") return "en";
+    return "auto";
+  }
+
+  /**
+   * Get the configured default rule output language ("auto" | "zh" | "en").
+   */
+  getDefaultRuleLanguage(): RuleLanguage {
+    return this.defaultRuleLanguage;
   }
 
   /**

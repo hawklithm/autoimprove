@@ -47,6 +47,13 @@ export interface PromptOptions {
   isBatchMode: boolean;
   /** Maximum number of content examples to include (token optimization) */
   maxContentExamples?: number;
+  /**
+   * Output language for the generated rule's natural-language fields.
+   * - "auto" (default): detect from the evidence (CJK-heavy → zh, else en)
+   * - "zh": force Simplified Chinese (JSON keys stay English)
+   * - "en": force English (legacy behavior)
+   */
+  outputLanguage?: "auto" | "zh" | "en";
 }
 
 /**
@@ -74,7 +81,8 @@ export class LLMPromptBuilder {
     const isSinglePattern = evidence.length === 1;
 
     // Build static prefix (cacheable - ~2000-2500 tokens)
-    const staticPrefix = this.buildStaticPrefix(isBatchMode, isSinglePattern);
+    const languageDirective = this.buildLanguageDirective(evidence, options);
+    const staticPrefix = this.buildStaticPrefix(isBatchMode, isSinglePattern, languageDirective);
 
     // Build dynamic data (changes per request - ~500-1000 tokens)
     const jsonContext = this.buildStructuredContext(evidence, options, maxContentExamples);
@@ -95,10 +103,74 @@ ${jsonContext}
   }
 
   /**
+   * Detect the dominant natural-language of a piece of text.
+   * Returns "zh" when CJK ideographs make up a meaningful share of the text,
+   * otherwise "en". Used to align rule output language with the source session.
+   */
+  static detectLanguage(text: string): "zh" | "en" {
+    if (!text || text.length === 0) return "en";
+
+    let cjk = 0;
+    let total = 0;
+    for (const ch of text) {
+      if (/\s/.test(ch)) continue;
+      total++;
+      // CJK Unified Ideographs + Extension A + Compatibility + common CJK punctuation
+      if (/[㐀-䶿一-鿿豈-﫿　-〿]/.test(ch)) {
+        cjk++;
+      }
+    }
+
+    if (total === 0) return "en";
+    const ratio = cjk / total;
+    // A few CJK chars in an otherwise-English text (e.g. a keyword) shouldn't flip it,
+    // but a clearly CJK-heavy source should. 0.12 is a conservative threshold.
+    return ratio >= 0.12 ? "zh" : "en";
+  }
+
+  /**
+   * Build the (optional) language instruction appended to the static prefix.
+   * Returns undefined for English so legacy behavior is preserved unchanged.
+   */
+  private static buildLanguageDirective(
+    evidence: PromptEvidence[],
+    options: PromptOptions
+  ): string | undefined {
+    let lang: "zh" | "en";
+    if (options.outputLanguage && options.outputLanguage !== "auto") {
+      lang = options.outputLanguage;
+    } else {
+      const corpus = evidence
+        .map(e => [
+          e.description,
+          (e.keywords || []).join(" "),
+          (e.contentExamples || []).join(" "),
+          (e.userContext || []).join(" "),
+        ].join(" "))
+        .join(" ");
+      lang = this.detectLanguage(corpus);
+    }
+
+    if (lang === "en") return undefined;
+
+    return `## 输出语言 (Output Language)
+
+检测到源对话内容为**中文**。请用**简体中文**撰写规则的全部自然语言字段（title、description、rationale、how_to_apply、when_to_use、exceptions 等）。
+要求：
+- 技术术语、API 名称、代码标识符（函数名、库名、文件路径）保留英文原文，不要翻译代码本身。
+- 只将自然语言说明部分翻译成中文，保持含义准确、可执行。
+- JSON 的字段名（key）必须是英文双引号字符串，不要中文化 key。`;
+  }
+
+  /**
    * Build static prefix (cacheable section)
    * Contains all instructions, format specs, and quality standards
    */
-  private static buildStaticPrefix(isBatchMode: boolean, isSinglePattern: boolean): string {
+  private static buildStaticPrefix(
+    isBatchMode: boolean,
+    isSinglePattern: boolean,
+    languageDirective?: string
+  ): string {
     const header = isBatchMode && !isSinglePattern
       ? this.buildBatchHeader()
       : this.buildSingleHeader();
@@ -110,13 +182,19 @@ ${jsonContext}
     const outputFormatSection = this.buildOutputFormat(isBatchMode && !isSinglePattern);
     const qualitySection = this.buildQualityStandards();
 
-    return `${header}
+    let prefix = `${header}
 
 ${instructionsSection}
 
 ${outputFormatSection}
 
 ${qualitySection}`;
+
+    if (languageDirective) {
+      prefix += `\n\n${languageDirective}`;
+    }
+
+    return prefix;
   }
 
   /**

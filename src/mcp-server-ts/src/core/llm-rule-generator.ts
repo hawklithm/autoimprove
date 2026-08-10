@@ -84,7 +84,8 @@ export class LLMRuleGenerator {
       totalOccurrences: cluster.total_occurrences,
       sessionCount: cluster.session_count,
       isBatchMode: false,  // Single cluster mode
-      maxContentExamples: 5
+      maxContentExamples: 5,
+      outputLanguage: this.llmManager.getDefaultRuleLanguage()
     });
 
     // Dynamic max_tokens based on complexity
