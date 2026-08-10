@@ -21,6 +21,7 @@ import { MemoryConsolidator } from "./memory-consolidator.js";
 import { SessionMemoryExtractor } from "./memory-extractor.js";
 import { InfoClassifier } from "./info-classifier.js";
 import { MemoryWriteGate } from "./memory-write-gate.js";
+import { checkMetaContent } from "./pattern-noise-filter.js";
 
 export function isContextContinuationMessage(content: string): boolean {
   const normalized = content.trim().toLowerCase();
@@ -186,6 +187,12 @@ export class SessionAnalyzer {
     for (const memory of reflected) {
       // 关卡5：写入阶段即打敏感标记
       memory.sensitivity = this.writeGate.classifySensitivity(memory.content);
+      // P1-C1: do not persist meta / self-reference memories (e.g. discussions about
+      // the assistant/tool itself) — those are noise, not real project knowledge.
+      if (checkMetaContent(memory.content).noise) {
+        logger.debug("session-analyzer", `Skipping meta/self-reference memory: ${memory.content.slice(0, 60)}`);
+        continue;
+      }
       if (this.writeGate.shouldPersist(memory).persist) {
         this.memoryConsolidator.persist(memory);
       }

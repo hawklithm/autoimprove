@@ -34,6 +34,7 @@ import { RuleQualityController } from "./rule-quality.js";
 import { MemoryPromotionService } from "./memory-promotion.js";
 import { EmbeddingEncoder } from "./embedding-encoder.js";
 import { findRelevantMemoryIds, resolveMemorySupport, FALLBACK_MEMORY_SUPPORT } from "./memory-support.js";
+import { filterNoisePatterns, generalityDiscount } from "./pattern-noise-filter.js";
 
 export interface BatchRebuildOptions {
   /** Clear all caches before rebuild */
@@ -276,10 +277,25 @@ export class BatchRebuildEngine {
       enhancedPatterns.push(enhancedPattern);
     }
 
-    // Filter by confidence threshold
-    const qualifiedPatterns = enhancedPatterns.filter(
-      p => p.confidence >= minConfidence
-    );
+    // Filter out meta / self-reference noise patterns before rule generation (P1-C1).
+    // These are discussions about the assistant/tool itself (e.g. "strictly follow
+    // the rules", "avoid hardcoding memory support values") that should never become
+    // learned rules.
+    const noiseResult = filterNoisePatterns(enhancedPatterns);
+    if (noiseResult.removed.length > 0) {
+      logger.info("batch-rebuild", `✓ Filtered ${noiseResult.removed.length} noise pattern(s) (meta/self-reference):`);
+      for (const r of noiseResult.removed) {
+        logger.debug("batch-rebuild", `  - ${r.pattern.description.slice(0, 80)} [${r.reasons.join(", ")}]`);
+      }
+    }
+
+    // Filter by confidence threshold, applying a generality discount to
+    // project-agnostic best-practice patterns (P1-C2): generic global rules must
+    // clear a higher bar to be emitted.
+    const qualifiedPatterns = noiseResult.kept.filter((p) => {
+      const effective = p.confidence * generalityDiscount(p);
+      return effective >= minConfidence;
+    });
 
     logger.info("batch-rebuild", `✓ Enhanced ${enhancedPatterns.length} patterns`);
     logger.debug("batch-rebuild", `  Qualified (>= ${minConfidence}): ${qualifiedPatterns.length}`);

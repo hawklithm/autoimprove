@@ -5,6 +5,7 @@
  */
 
 import { RuleIndexEntry, RuleContent } from "./models.js";
+import { checkMetaContent } from "./pattern-noise-filter.js";
 
 export interface RuleQualityScore {
   overall: number;
@@ -111,7 +112,14 @@ export class RuleQualityController {
     let score = 0.5;
     const content = rule.content.toLowerCase();
 
-    // Check for specific technical terms
+    // P1-C3: meta / self-reference boilerplate (e.g. "strictly follow the rules",
+    // "avoid hardcoding memory support values") is the opposite of a specific,
+    // project-grounded rule — penalize hard so such noise scores low and gets cleaned.
+    if (checkMetaContent(rule.content).noise) {
+      score -= 0.5;
+    }
+
+    // Check for specific technical terms (English + Chinese)
     const technicalTerms = [
       "useeffect",
       "async/await",
