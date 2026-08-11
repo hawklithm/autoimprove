@@ -15,6 +15,13 @@ import { appendFileSync } from "fs";
 import { homedir } from "os";
 import { join } from "path";
 import { RuleQualityController } from "./rule-quality.js";
+import { MemoryRepository } from "./memory-models.js";
+import { createDefaultMemoryRepository } from "../storage/memory-sqlite-store.js";
+import {
+  computeMemorySupportScore,
+  resolveMemorySupport,
+  findRelevantMemoryIds,
+} from "./memory-support.js";
 
 // Log file path
 const LLM_LOG_FILE = join(homedir(), ".autoimprove", "llm-calls.log");
@@ -39,10 +46,13 @@ export interface GeneratedRule {
   source_cluster_id: string;
   source_signals: string[];
   source_sessions: string[];
+  /** Memory ids backing this rule, resolved from the source cluster (passthrough). */
+  source_memory_ids?: string[];
   evidence_count: number;
   scenes: Scene;  // Use standard Scene type (tech, functional, business)
   confidence: number;
   priority: "critical" | "high" | "medium" | "low";
+  patternType: PatternType;
   created_at: string;
   last_validated: string;
 }
@@ -50,10 +60,26 @@ export interface GeneratedRule {
 export class LLMRuleGenerator {
   private db: SignalDictionaryDB;
   private llmManager: LLMConfigManager;
+  private memoryStore?: MemoryRepository;
 
-  constructor() {
+  constructor(memoryStore?: MemoryRepository) {
     this.db = new SignalDictionaryDB();
     this.llmManager = new LLMConfigManager();
+    this.memoryStore = memoryStore;
+  }
+
+  /** Lazily open the memory repository so callers that don't pass one still get real memory support. */
+  private getMemoryRepo(): MemoryRepository | null {
+    if (this.memoryStore) return this.memoryStore;
+    try {
+      this.memoryStore = createDefaultMemoryRepository();
+      return this.memoryStore;
+    } catch (error) {
+      logger.warn("llm-generation", "Memory repository unavailable, falling back to heuristic memory support", {
+        error: error instanceof Error ? error.message : String(error)
+      });
+      return null;
+    }
   }
 
   /**
@@ -114,7 +140,7 @@ export class LLMRuleGenerator {
         });
       }, { fallbackOnError: true });
 
-      const responseText = response.choices[0]?.message?.content || "";
+      let responseText = response.choices[0]?.message?.content || "";
 
       // Log cache performance metrics
       const cacheStats = this.extractCacheStats(response);
@@ -122,6 +148,36 @@ export class LLMRuleGenerator {
         `Cache stats: ${JSON.stringify(cacheStats)}\n`;
       logger.info("llm-generation", responseLog);
       appendFileSync(LLM_LOG_FILE, responseLog, "utf8");
+
+      // Recover from truncated responses instead of discarding the rule.
+      // A single bounded retry with a larger token budget and a continuation
+      // instruction usually yields a complete JSON object.
+      if (JSONExtractor.isTruncated(responseText)) {
+        logger.warn("llm-generation", "Response truncated, retrying with continuation prompt", { ruleId });
+        try {
+          const retryResponse = await this.llmManager.callWithFallback(async (client, model) => {
+            return await client.chat.completions.create({
+              model,
+              max_tokens: Math.max(maxTokens, 2000),
+              messages: [{
+                role: "user",
+                content: prompt + "\n\nIMPORTANT: 你上一次的回复被截断了。请现在直接输出【完整】的规则 JSON 对象，不要重复前面的指令。"
+              }]
+            });
+          }, { fallbackOnError: true });
+          const retryText = retryResponse.choices[0]?.message?.content || "";
+          if (!JSONExtractor.isTruncated(retryText) && retryText.trim().length > responseText.trim().length) {
+            responseText = retryText;
+          } else {
+            logger.warn("llm-generation", "Truncation retry did not improve response, using partial output", { ruleId });
+          }
+        } catch (retryError) {
+          logger.warn("llm-generation", "Truncation retry failed, using partial response", {
+            ruleId,
+            error: retryError instanceof Error ? retryError.message : String(retryError)
+          });
+        }
+      }
 
       const parsed = this.parseRuleResponse(responseText);
 
@@ -140,6 +196,20 @@ export class LLMRuleGenerator {
 
       const now = new Date().toISOString();
 
+      // Resolve the promoted memories backing this cluster so the memory link
+      // can be passed through into rule generation (and drive the real
+      // memory-support score). Prefer ids already attached to the cluster;
+      // otherwise discover them from the cluster's representative text.
+      const repo = this.getMemoryRepo();
+      const sourceMemoryIds = cluster.source_memory_ids && cluster.source_memory_ids.length
+        ? cluster.source_memory_ids
+        : repo
+          ? findRelevantMemoryIds(
+              repo,
+              cluster.representative_description || cluster.common_signals.join(", ")
+            )
+          : [];
+
       return {
         id: ruleId,
         title: parsed.title,
@@ -156,10 +226,12 @@ export class LLMRuleGenerator {
         source_cluster_id: cluster.cluster_id,
         source_signals: cluster.common_signals,
         source_sessions: Array.from(sessionIds),
+        source_memory_ids: sourceMemoryIds,
         evidence_count: cluster.total_occurrences,
         scenes: scenes,
         confidence: cluster.avg_confidence,
         priority: this.determinePriority(cluster),
+        patternType: cluster.pattern_type,
         created_at: now,
         last_validated: now
       };
@@ -170,43 +242,49 @@ export class LLMRuleGenerator {
   }
 
   /**
-   * Batch generate rules from multiple clusters
+   * Batch generate rules from multiple clusters.
+   *
+   * Runs cluster generations in parallel (instead of serial await) to cut
+   * wall-clock time, while preserving output order and isolating per-cluster
+   * failures (a failed cluster returns null and is filtered out).
    */
   async batchGenerateRules(
     clusters: PatternCluster[],
     startRuleId: number
   ): Promise<GeneratedRule[]> {
-    const rules: GeneratedRule[] = [];
+    const results = await Promise.all(
+      clusters.map(async (cluster, i) => {
+        const ruleId = `rule-${String(startRuleId + i).padStart(3, "0")}`;
+        try {
+          const rule = await this.generateRule(cluster, ruleId);
+          logger.info("llm-generation", `✓ Generated rule ${ruleId}: ${rule.title}`);
+          return rule;
+        } catch (error) {
+          logger.error("llm-generation", `✗ Failed to generate rule for cluster ${cluster.cluster_id}`, error instanceof Error ? error : undefined);
+          return null;
+        }
+      })
+    );
 
-    for (let i = 0; i < clusters.length; i++) {
-      const cluster = clusters[i];
-      const ruleId = `rule-${String(startRuleId + i).padStart(3, "0")}`;
-
-      try {
-        const rule = await this.generateRule(cluster, ruleId);
-        rules.push(rule);
-        logger.info("llm-generation", `✓ Generated rule ${ruleId}: ${rule.title}`);
-      } catch (error) {
-        logger.error("llm-generation", `✗ Failed to generate rule for cluster ${cluster.cluster_id}`, error instanceof Error ? error : undefined);
-      }
-    }
-
-    return rules;
+    return results.filter((r): r is GeneratedRule => r !== null);
   }
 
   /**
-   * Load labeled content for cluster
+   * Load labeled content for cluster.
+   *
+   * Loads the full content set for the cluster's pattern type ONCE and builds
+   * an id -> content map, instead of re-querying the database for every single
+   * content id (which was O(N^2) and scaled badly for large clusters).
    */
   private loadClusterContents(cluster: PatternCluster): LabeledContent[] {
+    if (cluster.labeled_content_ids.length === 0) return [];
+
+    const allContent = this.db.getLabeledContentByPatternType(cluster.pattern_type);
+    const byId = new Map(allContent.map((c) => [c.id, c]));
+
     const contents: LabeledContent[] = [];
-
     for (const contentId of cluster.labeled_content_ids) {
-      // Load from database by ID
-      // Since we don't have a direct getById method, we'll need to filter
-      // This is a simplified version - in production, add getById method
-      const allContent = this.db.getLabeledContentByPatternType(cluster.pattern_type);
-      const content = allContent.find(c => c.id === contentId);
-
+      const content = byId.get(contentId);
       if (content) {
         contents.push(content);
       }
@@ -346,11 +424,15 @@ export class LLMRuleGenerator {
    * Convert generated rule to storage format
    */
   convertToStorageFormat(
-    rule: GeneratedRule
+    rule: GeneratedRule,
+    memorySupportScore?: number
   ): { indexEntry: RuleIndexEntry; content: RuleContent } {
     const indexEntry: RuleIndexEntry = {
       id: rule.id,
-      type: (rule.priority === "critical" || rule.priority === "high" ? PatternType.ANTI_PATTERN : PatternType.REPEATED_CORRECTION),
+      // Preserve the original LLM-inferred pattern type instead of collapsing
+      // everything into ANTI_PATTERN / REPEATED_CORRECTION (which broke
+      // cross-type dedup and conflict detection).
+      type: rule.patternType,
       priority: rule.priority as Priority,
       confidence: rule.confidence,
       scenes: {
@@ -439,16 +521,33 @@ export class LLMRuleGenerator {
         keywords: rule.source_signals,
         source_cluster_id: rule.source_cluster_id,
         source_sessions: rule.source_sessions,
+        source_memory_ids: rule.source_memory_ids,
         scope_confidence: rule.scope_confidence || 0.5,
         scope_reason: rule.scope_reason
       }
     };
 
+    // Memory-support score: driven by the real promoted memories backing this
+    // rule (resolved from source_memory_ids) instead of the evidence-count
+    // heuristic. Falls back to the heuristic only when no memory store is
+    // reachable.
+    const repo = this.getMemoryRepo();
+    const support = memorySupportScore !== undefined
+      ? { ids: rule.source_memory_ids ?? [], score: memorySupportScore }
+      : repo
+        ? resolveMemorySupport(repo, rule.source_memory_ids)
+        : { ids: rule.source_memory_ids ?? [], score: deriveMemorySupportScore(rule.evidence_count, rule.scope_confidence || 0.5) };
+
+    indexEntry.source_memory_ids = support.ids;
+    content.metadata.source_memory_ids = support.ids;
+    content.metadata.memory_support_score = support.score;
+
     const unified = new RuleQualityController().assessUnifiedScore(
       content,
       indexEntry,
       rule.confidence,
-      rule.scope_confidence || 0.5
+      rule.scope_confidence || 0.5,
+      support.score
     );
     indexEntry.confidence = unified.overall;
     content.metadata.quality_score = unified.overall;
@@ -564,4 +663,21 @@ export class LLMRuleGenerator {
   close() {
     this.db.close();
   }
+}
+
+/**
+ * Derive a memory-support score from observable evidence when a caller does
+ * not supply a real memory-derived score.
+ *
+ * Replaces the previous hard-coded constant 0.5 so the `memory` dimension of
+ * the unified score actually varies: more corroborating occurrences and a
+ * higher scope confidence yield a stronger memory-support signal. Callers that
+ * have access to promoted-memory data should pass it explicitly via the
+ * `memorySupportScore` parameter instead.
+ */
+function deriveMemorySupportScore(evidenceCount: number, scopeConfidence: number): number {
+  const evidence = Math.min(1, (evidenceCount || 0) / 5); // 5+ occurrences -> 1.0
+  const scope = Math.max(0, Math.min(1, scopeConfidence));
+  const score = 0.3 + 0.4 * evidence + 0.3 * scope;
+  return Math.max(0, Math.min(1, score));
 }

@@ -23,6 +23,9 @@ import { JSONExtractor } from "./json-extractor.js";
 import { LLMConfigManager } from "./llm-config-manager.js";
 import { RuleQualityController } from "./rule-quality.js";
 import { ScopeDetector } from "./scope-detector.js";
+import { MemoryRepository } from "./memory-models.js";
+import { createDefaultMemoryRepository } from "../storage/memory-sqlite-store.js";
+import { resolveMemorySupport, findRelevantMemoryIds } from "./memory-support.js";
 import { appendFileSync } from "fs";
 import { homedir } from "os";
 import { join } from "path";
@@ -59,18 +62,34 @@ export class BatchLLMRuleGenerator {
   private llmManager: LLMConfigManager;
   private qualityController: RuleQualityController;
   private scopeDetector: ScopeDetector;
+  private memoryStore?: MemoryRepository;
 
   /** 通过截断重试估算出的模型实际能返回的最大 completion token 数（初始未知） */
   private estimatedMaxCompletionTokens: number | null = null;
   /** 遇到截断时重试的最大次数 */
   private readonly MAX_RETRY_ON_TRUNCATION = 3;
 
-  constructor() {
+  constructor(memoryStore?: MemoryRepository) {
     this.clusterer = new PatternSimilarityClusterer();
     this.basicGenerator = new RuleGenerator();
     this.llmManager = new LLMConfigManager();
     this.qualityController = new RuleQualityController();
     this.scopeDetector = new ScopeDetector();
+    this.memoryStore = memoryStore;
+  }
+
+  /** Lazily open the memory repository so callers that don't pass one still get real memory support. */
+  private getMemoryRepo(): MemoryRepository | null {
+    if (this.memoryStore) return this.memoryStore;
+    try {
+      this.memoryStore = createDefaultMemoryRepository();
+      return this.memoryStore;
+    } catch (error) {
+      logger.warn("batch-llm", "Memory repository unavailable, falling back to heuristic memory support", {
+        error: error instanceof Error ? error.message : String(error)
+      });
+      return null;
+    }
   }
 
   /**
@@ -786,11 +805,31 @@ export class BatchLLMRuleGenerator {
       }
     };
 
+    // Memory-support score: driven by the real promoted memories backing this
+    // rule (resolved from the cluster's source_memory_ids, or discovered from
+    // the cluster's representative text) instead of the evidence-count
+    // heuristic. Falls back to the heuristic only when no memory store is
+    // reachable.
+    const repo = this.getMemoryRepo();
+    const sourceMemoryIds = cluster.source_memory_ids && cluster.source_memory_ids.length
+      ? cluster.source_memory_ids
+      : repo
+        ? findRelevantMemoryIds(repo, cluster.representative_description || cluster.common_keywords.join(", "))
+        : [];
+    const support = repo
+      ? resolveMemorySupport(repo, sourceMemoryIds)
+      : { ids: sourceMemoryIds, score: Math.max(0, Math.min(1, 0.3 + 0.4 * Math.min(1, (cluster.total_occurrences || 0) / 5) + 0.3 * Math.max(0, Math.min(1, parsed.scope_confidence || 0.5)))) };
+
+    indexEntry.source_memory_ids = support.ids;
+    content.metadata.source_memory_ids = support.ids;
+    content.metadata.memory_support_score = support.score;
+
     const unified = this.qualityController.assessUnifiedScore(
       content,
       indexEntry,
       cluster.avg_confidence,
-      parsed.scope_confidence
+      parsed.scope_confidence,
+      support.score
     );
     indexEntry.confidence = unified.overall;
     content.metadata.quality_score = unified.overall;

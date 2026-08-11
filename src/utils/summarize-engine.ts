@@ -11,7 +11,7 @@
 
 import { existsSync } from 'fs';
 import { join, dirname } from 'path';
-import { fileURLToPath } from 'url';
+import { fileURLToPath, pathToFileURL } from 'url';
 import { cliLogger } from './cli-logger.js';
 
 export interface SummarizeOptions {
@@ -56,11 +56,11 @@ export async function runSummarize(options: SummarizeOptions): Promise<void> {
     { BatchRebuildEngine },
     { ClaudeIndexExporter },
   ] = await Promise.all([
-    import(join(mcpDist, 'storage', 'init.js')),
-    import(join(mcpDist, 'storage', 'rule-index.js')),
-    import(join(mcpDist, 'storage', 'rule-content.js')),
-    import(join(mcpDist, 'core', 'batch-rebuild.js')),
-    import(join(mcpDist, 'tools', 'export-rules-to-claude.js')),
+    import(pathToFileURL(join(mcpDist, 'storage', 'init.js')).href),
+    import(pathToFileURL(join(mcpDist, 'storage', 'rule-index.js')).href),
+    import(pathToFileURL(join(mcpDist, 'storage', 'rule-content.js')).href),
+    import(pathToFileURL(join(mcpDist, 'core', 'batch-rebuild.js')).href),
+    import(pathToFileURL(join(mcpDist, 'tools', 'export-rules-to-claude.js')).href),
   ]);
 
   // 1. Initialize storage

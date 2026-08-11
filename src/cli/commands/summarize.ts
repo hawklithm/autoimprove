@@ -1,7 +1,7 @@
 import { existsSync } from 'fs';
 import { join, dirname } from 'path';
 import { homedir } from 'os';
-import { fileURLToPath } from 'url';
+import { fileURLToPath, pathToFileURL } from 'url';
 import { cliLogger } from '../utils/logger.js';
 
 interface SummarizeOptions {
@@ -60,7 +60,7 @@ export async function summarize(options: SummarizeOptions) {
   cliLogger.print('');
 
   try {
-    const { runSummarize } = await import(enginePath);
+    const { runSummarize } = await import(pathToFileURL(enginePath).href);
 
     await runSummarize({
       force: !!(options.force || options.all),

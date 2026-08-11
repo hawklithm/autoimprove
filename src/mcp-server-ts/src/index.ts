@@ -54,6 +54,11 @@ import { PatternEvolutionManager } from "./storage/pattern-evolution.js";
 import { MemoryRepository } from "./core/memory-models.js";
 import { createDefaultMemoryRepository } from "./storage/memory-sqlite-store.js";
 import { MemoryPromotionService } from "./core/memory-promotion.js";
+import {
+  findRelevantMemoryIds,
+  resolveMemorySupport,
+  FALLBACK_MEMORY_SUPPORT,
+} from "./core/memory-support.js";
 import { RuleEvolutionService, RuleFeedbackKind } from "./core/rule-evolution.js";
 import { KnowledgeHealthAnalyzer } from "./core/knowledge-health.js";
 
@@ -1377,18 +1382,7 @@ function buildBasicContent(entry: any): any {
 }
 
 function getMemorySupport(sourceMemoryIds: string[] | undefined): { ids: string[]; score: number } {
-  const ids = Array.from(new Set(sourceMemoryIds || []));
-  if (ids.length === 0) return { ids: [], score: 0.5 };
-  const memories = memoryStore.list({ activeOnly: true }).filter(memory => ids.includes(memory.id));
-  if (memories.length === 0) return { ids: [], score: 0.35 };
-  const scores = memories.map(memory => {
-    const outcome = memory.outcome?.status === "success" ? 1 : memory.outcome?.status === "failed" ? 0 : 0.5;
-    return memory.confidence * 0.35
-      + Math.min(1, memory.strength / 5) * 0.3
-      + memory.importance * 0.15
-      + outcome * 0.2;
-  });
-  return { ids: memories.map(memory => memory.id), score: scores.reduce((sum, score) => sum + score, 0) / scores.length };
+  return resolveMemorySupport(memoryStore, sourceMemoryIds);
 }
 
 function findSupportingMemoryIds(rule: { indexEntry: any; content: any }): { ids: string[]; score: number } {
@@ -1397,17 +1391,11 @@ function findSupportingMemoryIds(rule: { indexEntry: any; content: any }): { ids
   const repository = rule.indexEntry.scope_context?.repository;
   const branch = rule.indexEntry.scope_context?.branch;
   const query = rule.content.description || rule.content.content || rule.indexEntry.description || "";
-  if (!query.trim()) return { ids: [], score: 0.5 };
-  const results = memoryStore.searchScored
-    ? memoryStore.searchScored(query, 8, { projectPath, organizationId, repository, branch })
-    : memoryStore.search(query, 8, { projectPath, organizationId, repository, branch }).map(memory => ({ memory, score: 0.5, reasons: ["legacy-search"] }));
-  const supporting = results.filter(result => result.memory.kind !== "episodic"
-    && result.score >= 0.25
-    && (!organizationId || !result.memory.namespace?.organization_id || result.memory.namespace.organization_id.toLowerCase() === organizationId)
-  ).slice(0, 5);
-  if (supporting.length === 0) return { ids: [], score: 0.5 };
-  const support = getMemorySupport(supporting.map(result => result.memory.id));
-  return { ids: support.ids, score: Math.max(support.score, supporting.reduce((sum, result) => sum + result.score, 0) / supporting.length) };
+  if (!query.trim()) return { ids: [], score: FALLBACK_MEMORY_SUPPORT };
+  const ids = findRelevantMemoryIds(memoryStore, query, { projectPath, organizationId, repository, branch });
+  if (ids.length === 0) return { ids: [], score: FALLBACK_MEMORY_SUPPORT };
+  const support = resolveMemorySupport(memoryStore, ids);
+  return { ids: support.ids, score: support.score };
 }
 
 function refreshRulesSupportedByMemory(memoryId: string): number {
@@ -4298,20 +4286,32 @@ async function handleGenerateRulesFromClusters(args: any) {
       };
     }
 
+    // Pass memory links through into rule generation: discover the promoted
+    // memories backing each cluster up front so the generator can resolve them
+    // deterministically instead of fuzzy-searching again afterwards.
+    const memoryLinkedClusters = highQualityClusters.map(c => ({
+      ...c,
+      source_memory_ids: c.source_memory_ids && c.source_memory_ids.length
+        ? c.source_memory_ids
+        : findRelevantMemoryIds(memoryStore, c.representative_description || c.common_signals.join(", "))
+    }));
+
     // Generate rules from clusters
     const nextIdNum = parseInt(indexManager.getNextRuleId().split("-")[1], 10);
-    const generatedRules = await _llmRuleGenerator.batchGenerateRules(highQualityClusters, nextIdNum);
+    const generatedRules = await _llmRuleGenerator.batchGenerateRules(memoryLinkedClusters, nextIdNum);
 
     // Save generated rules to index and content
     const ruleIds: string[] = [];
     for (const rule of generatedRules) {
       // Convert GeneratedRule to storage format
       const converted = _llmRuleGenerator.convertToStorageFormat(rule);
-      const memorySupport = findSupportingMemoryIds(converted);
-      converted.indexEntry.source_memory_ids = memorySupport.ids;
+      // Memory support is produced inside the generator from the real promoted
+      // memories backing the cluster, so trust it here (no second search).
+      const memorySupport = {
+        ids: converted.indexEntry.source_memory_ids ?? [],
+        score: converted.content.metadata.memory_support_score ?? FALLBACK_MEMORY_SUPPORT
+      };
       converted.indexEntry.status = memorySupport.ids.length > 0 && memorySupport.score >= UNIFIED_RULE_MIN_SCORE ? "active" : "candidate";
-      converted.content.metadata.source_memory_ids = memorySupport.ids;
-      converted.content.metadata.memory_support_score = memorySupport.score;
       const unified = qualityController.assessUnifiedScore(
         converted.content,
         converted.indexEntry,
