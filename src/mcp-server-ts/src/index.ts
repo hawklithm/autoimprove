@@ -49,7 +49,7 @@ import { SERVER_INSTRUCTIONS_EMPTY } from "./mcp-instructions.js";
 import { selectInstructionsForIndex } from "./instruction-selection.js";
 import { SEARCH_KNOWLEDGE_DESCRIPTION, emptyKnowledgeBaseMessage, noMatchMessage } from "./search-guidance.js";
 import { ProactiveRuleResourceProvider } from "./resources/proactive-rules.js";
-import { BatchRebuildEngine } from "./core/batch-rebuild.js";
+import { BatchRebuildEngine, DEFAULT_REBUILD_MIN_CONFIDENCE } from "./core/batch-rebuild.js";
 import { PatternEvolutionManager } from "./storage/pattern-evolution.js";
 import { MemoryRepository } from "./core/memory-models.js";
 import { createDefaultMemoryRepository } from "./storage/memory-sqlite-store.js";
@@ -4590,7 +4590,7 @@ async function handleBatchRebuild(args: any) {
     const result = await batchRebuildEngine.rebuild({
       force: args.force === true,
       incremental: !args.force, // Use incremental mode unless force is set
-      minConfidence: args.min_confidence ?? UNIFIED_RULE_MIN_SCORE,
+      minConfidence: args.min_confidence ?? DEFAULT_REBUILD_MIN_CONFIDENCE,
       sessionLimit: args.session_limit,
       dryRun: args.dry_run === true,
       sessionDir: args.session_dir,

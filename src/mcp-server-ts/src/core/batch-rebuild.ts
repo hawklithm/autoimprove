@@ -35,6 +35,16 @@ import { MemoryPromotionService } from "./memory-promotion.js";
 import { EmbeddingEncoder } from "./embedding-encoder.js";
 import { findRelevantMemoryIds, resolveMemorySupport, FALLBACK_MEMORY_SUPPORT } from "./memory-support.js";
 import { filterNoisePatterns, generalityDiscount } from "./pattern-noise-filter.js";
+import { RuleClassifier } from "./classifier.js";
+
+/**
+ * Default quality floor for the rebuild rule-generation gate (P2-D).
+ * Lowered from the historical 0.6 so sparse / single-session sessions still
+ * produce rules — when a pattern is below this floor we defer to the per-type
+ * classifier graded gate (e.g. a single PREFERENCE at conf >= 0.3), instead of
+ * silently yielding 0 rules.
+ */
+export const DEFAULT_REBUILD_MIN_CONFIDENCE = 0.3;
 
 export interface BatchRebuildOptions {
   /** Clear all caches before rebuild */
@@ -98,6 +108,28 @@ export interface BatchRebuildResult {
   rules_deleted?: number;
 }
 
+/**
+ * P2-D (defect D): decide whether a pattern is a candidate for rule generation.
+ *
+ * The global `minConfidence` is treated as a *quality floor*, not a sole gate.
+ * When a pattern falls below the global floor we still defer to the per-type
+ * `RuleClassifier` graded gate — otherwise a strict global default (e.g. 0.6)
+ * silently zeroes out sparse / single-session sessions even though the
+ * classifier would accept a single PREFERENCE at conf >= 0.3. This is what made
+ * the default 0.6 produce 0 rules on a handful of independent sessions.
+ */
+export function isPatternQualifiedForRules(
+  pattern: Pattern,
+  minConfidence: number,
+  classifier: RuleClassifier
+): boolean {
+  // Apply the P1-C2 generality discount to the effective confidence.
+  const effective = pattern.confidence * generalityDiscount(pattern);
+  if (effective >= minConfidence) return true;
+  // Defer to the per-type classifier graded gate as a fallback.
+  return classifier.shouldGenerateRule(pattern).shouldGenerate;
+}
+
 export class BatchRebuildEngine {
   private analyzer!: SessionAnalyzer;
   private parser: UnifiedSessionParser;
@@ -145,7 +177,7 @@ export class BatchRebuildEngine {
     const {
       force = false,
       incremental = true,
-      minConfidence = 0.6,
+      minConfidence = DEFAULT_REBUILD_MIN_CONFIDENCE,
       sessionLimit,
       dryRun = false,
       sessionDir = join(homedir(), ".claude", "projects"),
@@ -289,13 +321,24 @@ export class BatchRebuildEngine {
       }
     }
 
-    // Filter by confidence threshold, applying a generality discount to
-    // project-agnostic best-practice patterns (P1-C2): generic global rules must
-    // clear a higher bar to be emitted.
-    const qualifiedPatterns = noiseResult.kept.filter((p) => {
-      const effective = p.confidence * generalityDiscount(p);
-      return effective >= minConfidence;
-    });
+    // Filter by confidence gate (P2-D): global minConfidence is a quality floor,
+    // but a pattern below it still qualifies when the per-type classifier graded
+    // gate accepts it (sparse / single-session patterns like a lone PREFERENCE).
+    const classifier = new RuleClassifier();
+    const qualifiedPatterns = noiseResult.kept.filter((p) =>
+      isPatternQualifiedForRules(p, minConfidence, classifier)
+    );
+
+    // D2: explicit, actionable hint when the gate produces nothing despite patterns
+    // being found — instead of silently emitting 0 rules.
+    if (qualifiedPatterns.length === 0 && allPatterns.length > 0) {
+      logger.warn(
+        "batch-rebuild",
+        `✗ 0 rules qualified: found ${allPatterns.length} pattern(s) but all were filtered ` +
+          `(global minConfidence=${minConfidence.toFixed(2)}, noise removed ${noiseResult.removed.length}). ` +
+          `Suggestion: lower --min-confidence or provide more sessions to cross the per-type threshold.`
+      );
+    }
 
     logger.info("batch-rebuild", `✓ Enhanced ${enhancedPatterns.length} patterns`);
     logger.debug("batch-rebuild", `  Qualified (>= ${minConfidence}): ${qualifiedPatterns.length}`);
