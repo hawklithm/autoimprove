@@ -10,12 +10,14 @@ import { SessionExtractor } from "./session-extractor.interface.js";
 import { ClaudeCodeSessionExtractor } from "./claude-code-extractor.js";
 import { CodexSessionExtractor } from "./codex-extractor.js";
 import { KiroSessionExtractor } from "./kiro-extractor.js";
+import { WorkBuddySessionExtractor } from "./workbuddy-extractor.js";
 import { logger } from "../logger.js";
 
 export enum SessionFormat {
   CLAUDE_CODE = "claude-code",
   CODEX = "codex",
   KIRO = "kiro",
+  WORKBUDDY = "workbuddy",
   UNKNOWN = "unknown"
 }
 
@@ -35,6 +37,8 @@ export class SessionExtractorFactory {
         return new CodexSessionExtractor();
       case SessionFormat.KIRO:
         return new KiroSessionExtractor();
+      case SessionFormat.WORKBUDDY:
+        return new WorkBuddySessionExtractor();
       default:
         // Default to Claude Code for backward compatibility
         logger.warn("session-extractor-factory", `Unknown format for ${filePath}, defaulting to Claude Code`);
@@ -53,6 +57,10 @@ export class SessionExtractorFactory {
     }
     if (normalizedPath.includes("/.codex/sessions/") || normalizedPath.includes("/.codex/archived_sessions/")) {
       return SessionFormat.CODEX;
+    }
+
+    if (normalizedPath.includes("/.workbuddy/projects/") || normalizedPath.includes("/.workbuddy/sessions/")) {
+      return SessionFormat.WORKBUDDY;
     }
 
     if (normalizedPath.includes("/.claude/sessions/") || normalizedPath.includes("/.claude/archived_sessions/")) {
@@ -137,7 +145,7 @@ export class SessionExtractorFactory {
   /**
    * Get default session directories for both formats
    */
-  static getDefaultSessionDirs(): { claudeCode: string[]; codex: string[]; kiro: string[] } {
+  static getDefaultSessionDirs(): { claudeCode: string[]; codex: string[]; kiro: string[]; workbuddy: string[] } {
     const homeDir = process.env.HOME || process.env.USERPROFILE || "";
 
     return {
@@ -149,7 +157,11 @@ export class SessionExtractorFactory {
         `${homeDir}/.codex/sessions`,
         `${homeDir}/.codex/archived_sessions`
       ],
-      kiro: [`${homeDir}/.kiro/sessions`]
+      kiro: [`${homeDir}/.kiro/sessions`],
+      workbuddy: [
+        `${homeDir}/.workbuddy/projects`,
+        `${homeDir}/.workbuddy/sessions`
+      ]
     };
   }
 }
