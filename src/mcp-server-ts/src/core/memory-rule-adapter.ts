@@ -109,7 +109,7 @@ function memoryToPatternType(memory: MemoryRecord): PatternType {
   if (memory.info_class === "experience") {
     // 根据关键词推断具体类型
     const content = (memory.content + " " + (memory.summary || "")).toLowerCase();
-    if (/security|security|注入|vulnerability|xss|csrf/i.test(content))
+    if (/security|注入|injection|vulnerability|exploit|cve|xss|csrf/i.test(content))
       return PatternType.SECURITY;
     if (/performance|性能|slow|optimize|优化|useMemo|useCallback/i.test(content))
       return PatternType.PERFORMANCE;
