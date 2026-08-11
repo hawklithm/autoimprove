@@ -12,6 +12,8 @@ export interface PatternCluster {
   cluster_id: string;
   pattern_type: PatternType;
   labeled_content_ids: number[];
+  /** Memory ids discovered as backing this cluster (passthrough into rule generation). */
+  source_memory_ids?: string[];
   common_signals: string[];
   representative_phrases: string[];
   representative_description?: string;

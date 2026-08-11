@@ -9,6 +9,7 @@
  */
 
 import { RuleIndexEntry, RuleContent, RuleScope } from "./models.js";
+import { tokenizeWithJieba } from "./jieba-utils.js";
 
 export interface SimilarityResult {
   existingRuleId: string;
@@ -143,7 +144,12 @@ export class RuleDeduplicator {
   }
 
   /**
-   * Extract meaningful words from text
+   * Extract meaningful words from text.
+   *
+   * Uses jieba-based tokenization (tokenizeWithJieba) so Chinese text is
+   * segmented into words instead of treated as one giant token. English
+   * stopwords are still filtered out, and tokens shorter than 2 chars are
+   * dropped to reduce noise.
    */
   private extractWords(text: string): string[] {
     const stopWords = new Set([
@@ -190,11 +196,7 @@ export class RuleDeduplicator {
       "those",
     ]);
 
-    return text
-      .toLowerCase()
-      .replace(/[^a-z0-9\s]/g, " ")
-      .split(/\s+/)
-      .filter((w) => w.length > 2 && !stopWords.has(w));
+    return tokenizeWithJieba(text, 1).filter((w) => w.length >= 2 && !stopWords.has(w));
   }
 
   /**

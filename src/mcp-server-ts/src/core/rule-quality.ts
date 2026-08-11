@@ -5,6 +5,7 @@
  */
 
 import { RuleIndexEntry, RuleContent } from "./models.js";
+import { tokenizeWithJieba } from "./jieba-utils.js";
 import { checkMetaContent } from "./pattern-noise-filter.js";
 
 export interface RuleQualityScore {
@@ -74,8 +75,11 @@ export class RuleQualityController {
     let score = 1.0;
     const content = rule.content.toLowerCase();
 
-    // Penalty for vague language
-    const vagueWords = ["maybe", "possibly", "sometimes", "might", "could"];
+    // Penalty for vague language (English + Chinese)
+    const vagueWords = [
+      "maybe", "possibly", "sometimes", "might", "could",
+      "也许", "可能", "或许", "大概", "有时", "尽量",
+    ];
     for (const word of vagueWords) {
       if (content.includes(word)) {
         score -= 0.21;
@@ -93,7 +97,7 @@ export class RuleQualityController {
     }
 
     // Bonus for examples or code
-    if (rule.content.includes("```") || rule.content.includes("Example:")) {
+    if (rule.content.includes("```") || rule.content.includes("Example:") || rule.content.includes("示例") || rule.content.includes("例子")) {
       score += 0.1;
     }
 
@@ -131,6 +135,17 @@ export class RuleQualityController {
       "query",
       "function",
       "class",
+      "组件",
+      "状态",
+      "函数",
+      "类",
+      "数据库",
+      "查询",
+      "接口",
+      "异步",
+      "渲染",
+      "钩子",
+      "模块",
     ];
     const foundTerms = technicalTerms.filter((term) => content.includes(term));
     score += foundTerms.length * 0.05;
@@ -140,8 +155,8 @@ export class RuleQualityController {
       score += 0.1;
     }
 
-    // Penalty for overly general terms
-    const generalTerms = ["always", "never", "everything", "all", "any"];
+    // Penalty for overly general terms (English + Chinese)
+    const generalTerms = ["always", "never", "everything", "all", "any", "总是", "从不", "所有", "任何", "全部", "一切"];
     for (const term of generalTerms) {
       if (content.includes(term)) {
         score -= 0.05;
@@ -158,7 +173,7 @@ export class RuleQualityController {
     let score = 0.5;
     const content = rule.content.toLowerCase();
 
-    // Bonus for imperative verbs
+    // Bonus for imperative verbs (English + Chinese)
     const actionVerbs = [
       "use",
       "avoid",
@@ -170,12 +185,23 @@ export class RuleQualityController {
       "extract",
       "refactor",
       "implement",
+      "使用",
+      "避免",
+      "优先",
+      "确保",
+      "检查",
+      "验证",
+      "封装",
+      "提取",
+      "重构",
+      "实现",
+      "采用",
     ];
     const foundVerbs = actionVerbs.filter((verb) => content.includes(verb));
     score += foundVerbs.length * 0.08;
 
-    // Bonus for "do X instead of Y" pattern
-    if (content.includes("instead of") || content.includes("rather than")) {
+    // Bonus for "do X instead of Y" pattern (English + Chinese)
+    if (content.includes("instead of") || content.includes("rather than") || content.includes("而不是") || content.includes("而非")) {
       score += 0.15;
     }
 
@@ -308,12 +334,16 @@ export class RuleQualityController {
     const content1 = rule1.content.toLowerCase();
     const content2 = rule2.content.toLowerCase();
 
-    // Cover the common "always use X" vs "never use X" form. The older
-    // verb-pair matcher only handled "use X" vs "avoid X" and missed this
-    // semantically equivalent contradiction.
+    // Cover the common "always use X" vs "never use X" form, for both English
+    // ("always use X") and Chinese ("总是使用X"). The older verb-pair matcher
+    // only handled "use X" vs "avoid X" and missed this semantically
+    // equivalent contradiction.
     const polarity = (value: string): { subject: string; negative: boolean } | null => {
-      const match = value.match(/\b(always|never)\s+(?:use|choose|prefer)\s+(.+?)(?:[.,;]|$)/i);
-      return match ? { subject: match[2].trim(), negative: match[1].toLowerCase() === "never" } : null;
+      const en = value.match(/\b(always|never)\s+(?:use|choose|prefer)\s+(.+?)(?:[.,;]|$)/i);
+      if (en) return { subject: en[2].trim(), negative: en[1].toLowerCase() === "never" };
+      const cjk = value.match(/(?:总是|绝不|从不|不要)\s*(?:使用|选择|采用|用|优先)\s*([一-鿿㐀-䶿A-Za-z0-9_]+)/);
+      if (cjk) return { subject: cjk[1], negative: /(?:绝不|从不|不要)/.test(cjk[0]) };
+      return null;
     };
     const polarity1 = polarity(content1);
     const polarity2 = polarity(content2);
@@ -321,19 +351,26 @@ export class RuleQualityController {
       return `Rules have opposite polarity for "${polarity1.subject}"`;
     }
 
-    // Simple heuristic: opposite verbs
+    // Simple heuristic: opposite verbs (English + Chinese), CJK-aware subjects.
     const opposites = [
       ["use", "avoid"],
       ["prefer", "avoid"],
       ["always", "never"],
       ["enable", "disable"],
       ["add", "remove"],
+      ["使用", "避免"],
+      ["优先", "避免"],
+      ["总是", "从不"],
+      ["启用", "禁用"],
+      ["添加", "移除"],
     ];
+
+    const SUBJECT_RE = "[一-鿿㐀-䶿A-Za-z0-9_\\s]+?";
 
     for (const [verb1, verb2] of opposites) {
       // Extract subject after verb
-      const pattern1 = new RegExp(`${verb1}\\s+([\\w\\s]+?)(?:[.,;]|$)`, "i");
-      const pattern2 = new RegExp(`${verb2}\\s+([\\w\\s]+?)(?:[.,;]|$)`, "i");
+      const pattern1 = new RegExp(`${verb1}\\s*(${SUBJECT_RE})(?:[.,;，。]|$)`);
+      const pattern2 = new RegExp(`${verb2}\\s*(${SUBJECT_RE})(?:[.,;，。]|$)`);
 
       const match1 = content1.match(pattern1);
       const match2 = content2.match(pattern2);
@@ -354,11 +391,17 @@ export class RuleQualityController {
   }
 
   /**
-   * Calculate text similarity (Jaccard similarity on words)
+   * Calculate text similarity (Jaccard similarity on tokens).
+   *
+   * Uses jieba-based tokenization so Chinese text is split into words instead
+   * of being treated as a single whitespace-delimited token (which made the
+   * similarity collapse to 0 or 1 for Chinese rules).
    */
   private calculateSimilarity(text1: string, text2: string): number {
-    const words1 = new Set(text1.toLowerCase().split(/\s+/));
-    const words2 = new Set(text2.toLowerCase().split(/\s+/));
+    const words1 = new Set(tokenizeWithJieba(text1));
+    const words2 = new Set(tokenizeWithJieba(text2));
+
+    if (words1.size === 0 && words2.size === 0) return 0;
 
     const intersection = new Set([...words1].filter((w) => words2.has(w)));
     const union = new Set([...words1, ...words2]);
@@ -388,8 +431,13 @@ export class RuleQualityController {
 
     const avgSimilarity = similarities.reduce((a, b) => a + b, 0) / similarities.length;
 
-    // Only suggest merge if average similarity > 0.6
-    if (avgSimilarity < 0.2) {
+    // Only suggest a merge when the rules are on the same topic (>= 0.25
+    // token overlap). This is deliberately looser than the 0.80 auto-merge
+    // threshold in RuleDeduplicator: suggestMerge produces *candidates for
+    // human review*, so it should surface same-topic rules that are similar
+    // but not exact duplicates. Below 0.25 the rules are distinct enough to
+    // keep separate.
+    if (avgSimilarity < 0.25) {
       return null;
     }
 

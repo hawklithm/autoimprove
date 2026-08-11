@@ -131,7 +131,11 @@ export class ConfidenceCalculator {
     // Step 5: Apply keyword bonus
     const finalConfidence = this.applyKeywordBonus(pattern, adjustedConfidence);
 
-    return Math.min(finalConfidence, 1.0);
+    const clamped = Math.min(finalConfidence, 1.0);
+    // Guard against NaN/Infinity (e.g. from a division by zero in a sub-step)
+    // propagating downstream and getting silently dropped by the
+    // `confidence >= minConfidence` filter in the batch rebuild.
+    return Number.isFinite(clamped) ? clamped : 0.5;
   }
 
   /**
@@ -208,7 +212,9 @@ export class ConfidenceCalculator {
     try {
       const first = new Date(pattern.first_seen);
       const last = new Date(pattern.last_seen);
+      if (isNaN(first.getTime()) || isNaN(last.getTime())) return 0.0;
       const days = (last.getTime() - first.getTime()) / (1000 * 60 * 60 * 24);
+      if (!Number.isFinite(days)) return 0.0;
       return Math.min(days / 90, 1.0);
     } catch {
       return 0.0;

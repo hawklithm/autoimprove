@@ -19,6 +19,8 @@ export interface PatternClusterGroup {
   total_occurrences: number;
   representative_description: string;
   session_count?: number;
+  /** Memory ids discovered as backing this cluster (passthrough into rule generation). */
+  source_memory_ids?: string[];
 }
 
 export class PatternSimilarityClusterer {
