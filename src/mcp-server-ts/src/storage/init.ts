@@ -61,6 +61,15 @@ export interface Config {
   rule_generation?: {
     use_template_generation?: boolean; // Enable SOP-style template compiler (Phase 2)
     template_hot_reload?: boolean;      // Watch templates for changes (dev mode)
+    /** Phase 3 / P0: hold generated rules for manual review instead of auto-persisting. */
+    require_manual_review_for?: {
+      empty_scene?: boolean;       // block rules whose scenes are all empty
+      low_quality_score?: number;  // block rules below this unified quality score
+    };
+    /** Phase 3 / P0: where the review queue jsonl is stored. */
+    review_queue?: {
+      path?: string;
+    };
   };
   local_ml?: {
     enabled: boolean;
@@ -118,6 +127,10 @@ const DEFAULT_CONFIG: Config = {
   rule_generation: {
     use_template_generation: true,  // Enable SOP-style template compiler by default
     template_hot_reload: true,      // Enable hot reload in development mode
+    require_manual_review_for: {
+      empty_scene: true,        // P0: hold empty-scene rules for review
+      low_quality_score: 0.5,   // P0: hold low-quality rules for review
+    },
   },
   local_ml: {
     enabled: false, // Master switch: when false, entire local_ml pipeline is bypassed (legacy behavior)

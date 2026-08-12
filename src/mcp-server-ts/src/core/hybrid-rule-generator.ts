@@ -24,9 +24,23 @@ import { join } from "path";
 import { RuleQualityController, UNIFIED_RULE_MIN_SCORE } from "./rule-quality.js";
 import { scopeResolver, ScopeResolver } from "./scope-resolver.js";
 import { MemoryRuleInput } from "./memory-rule-adapter.js";
+import { RuleReviewQueue } from "./rule-review-queue.js";
+import { MemoryRepository } from "./memory-models.js";
 
 // Log file path
 const LLM_LOG_FILE = join(homedir(), ".autoimprove", "llm-calls.log");
+
+/**
+ * Phase 3 / P0: thrown by `parseEnhancedResponse` when the LLM explicitly
+ * rejects non-coding content. The caller turns this into a review-queue entry
+ * instead of persisting the rule.
+ */
+export class LLMContentRejectedError extends Error {
+  constructor(reason: string) {
+    super(reason);
+    this.name = "LLMContentRejectedError";
+  }
+}
 
 export interface EnhancedRuleOptions {
   /** Whether to use LLM for content enhancement (Phase 2) */
@@ -55,12 +69,14 @@ export class HybridRuleGenerator {
   private openai: OpenAI | null;
   private model: string;
   private qualityController: RuleQualityController;
+  private reviewQueue: RuleReviewQueue;
 
   constructor() {
     this.basicGenerator = new RuleGenerator();
     this.exampleExtractor = new CodeExampleExtractor();
     this.scopeDetector = new ScopeDetector();
     this.qualityController = new RuleQualityController();
+    this.reviewQueue = new RuleReviewQueue();
 
     // Support multiple API key sources: ANTHROPIC_API_KEY, ANTHROPIC_AUTH_TOKEN, LLM_API_KEY
     const apiKey = process.env.ANTHROPIC_API_KEY
@@ -100,8 +116,9 @@ export class HybridRuleGenerator {
     pattern: Pattern,
     ruleId: string,
     scene?: Scene,
-    options: EnhancedRuleOptions = {}
-  ): Promise<{ indexEntry: RuleIndexEntry; content: RuleContent }> {
+    options: EnhancedRuleOptions = {},
+    memoryStore?: MemoryRepository
+  ): Promise<{ indexEntry: RuleIndexEntry; content: RuleContent } | null> {
     const {
       useLLMEnhancement = false,
       extractCodeExamples = true,
@@ -255,6 +272,18 @@ export class HybridRuleGenerator {
           }
         }
       } catch (error) {
+        // Phase 3 / P0: LLM explicitly rejected non-coding content → hold for review.
+        if (error instanceof LLMContentRejectedError) {
+          logger.warn("hybrid-generation", `LLM rejected non-coding content for ${ruleId} → review queue`, { reason: error.message });
+          this.reviewQueue.add({
+            rule_id: ruleId,
+            title: pattern.description.slice(0, 80),
+            reason: "llm_rejected",
+            index_entry: basicRule.indexEntry,
+            rule_content: basicRule.content,
+          });
+          return null;
+        }
         logger.warn("hybrid-generation", `LLM enhancement failed for ${ruleId}, using basic content`, { error: error instanceof Error ? error.message : String(error) });
         enhancedContent = basicRule.content;
       }
@@ -378,10 +407,8 @@ export class HybridRuleGenerator {
     enhancedContent.metadata.scenes = basicRule.indexEntry.scenes;
 
     // Phase 5: Return structured rule with rich metadata
-    return {
-      indexEntry: basicRule.indexEntry,
-      content: enhancedContent
-    };
+    // Phase 3 / P0: hold for review if the rule fails quality / scene / memory checks.
+    return this.finalizeRule(basicRule.indexEntry, enhancedContent, memoryStore);
   }
 
   /**
@@ -395,7 +422,8 @@ export class HybridRuleGenerator {
     memoryInput: MemoryRuleInput,
     ruleId: string,
     scene?: Scene,
-    options: EnhancedRuleOptions = {}
+    options: EnhancedRuleOptions = {},
+    memoryStore?: MemoryRepository
   ): Promise<{ indexEntry: RuleIndexEntry; content: RuleContent } | null> {
     const {
       useLLMEnhancement = true,
@@ -447,6 +475,19 @@ export class HybridRuleGenerator {
       const raw = response.choices[0]?.message?.content || "";
       const parsed = JSON.parse(raw.match(/\{[\s\S]*\}/)?.[0] || raw);
 
+      // Phase 3 / P0: LLM explicitly rejected non-coding content → hold for review.
+      if (parsed && parsed.rejected === true) {
+        logger.warn("memory-driven", `LLM rejected non-coding content for memory rule ${ruleId} → review queue`, { reason: parsed.reason });
+        this.reviewQueue.add({
+          rule_id: ruleId,
+          title: (parsed.title as string) || memoryInput.summary.slice(0, 80),
+          reason: "llm_rejected",
+          index_entry: { id: ruleId, type: memoryInput.pattern_type, scenes: scene || { tech: [], functional: [], business: [] } } as RuleIndexEntry,
+          rule_content: { id: ruleId, content: memoryInput.content, reason: "llm_rejected" } as RuleContent,
+        });
+        return null;
+      }
+
       const now = new Date().toISOString();
 
       const ruleContent: RuleContent = {
@@ -490,11 +531,108 @@ export class HybridRuleGenerator {
         info_class: memoryInput.info_class,
       };
 
-      return { indexEntry, content: ruleContent };
+      // Phase 3 / P1: validate memory references — orphaned rules must not be persisted.
+      if (memoryStore) {
+        const ids = (ruleContent.metadata.source_memory_ids || []) as string[];
+        const valid = await this.validMemoryIds(ids, memoryStore);
+        if (ids.length > 0 && valid.length === 0) {
+          logger.warn("memory-driven", `Rule ${ruleId} has no valid memory references → review queue`);
+          this.reviewQueue.add({
+            rule_id: ruleId,
+            title: ruleContent.title,
+            reason: "orphaned_memory",
+            index_entry: indexEntry,
+            rule_content: ruleContent,
+          });
+          return null;
+        }
+        if (valid.length < ids.length) {
+          // Repair: keep only the valid references.
+          ruleContent.metadata.source_memory_ids = valid;
+          indexEntry.source_memory_ids = valid;
+        }
+      }
+
+      // Phase 3 / P0: hold for review if the rule fails quality / scene checks.
+      return this.finalizeRule(indexEntry, ruleContent, memoryStore);
     } catch (error) {
       logger.warn("memory-driven", `LLM generation failed for memory rule ${ruleId}: ${error instanceof Error ? error.message : String(error)}`);
       return null;
     }
+  }
+
+  /**
+   * Phase 3 / P0: final gate before a generated rule is returned for persistence.
+   * Holds the rule for manual review (and returns null) when it fails the
+   * configured quality / scene / memory-reference checks.
+   */
+  private async finalizeRule(
+    indexEntry: RuleIndexEntry,
+    content: RuleContent,
+    memoryStore?: MemoryRepository
+  ): Promise<{ indexEntry: RuleIndexEntry; content: RuleContent } | null> {
+    const cfg = loadConfig().rule_generation;
+    const reviewCfg = cfg?.require_manual_review_for;
+
+    const scenes = indexEntry.scenes;
+    const emptyScene = !scenes || (scenes.tech.length === 0 && scenes.functional.length === 0 && scenes.business.length === 0);
+
+    // (1) Empty scene → review queue.
+    if (reviewCfg?.empty_scene && emptyScene) {
+      logger.warn("hybrid-generation", `Rule ${indexEntry.id} has empty scenes → held for review`);
+      this.reviewQueue.add({
+        rule_id: indexEntry.id,
+        title: content.title,
+        reason: "empty_scene",
+        index_entry: indexEntry,
+        rule_content: content,
+      });
+      return null;
+    }
+
+    // (2) Low quality score → review queue.
+    const qualityScore = typeof content.metadata?.quality_score === "number"
+      ? content.metadata.quality_score
+      : indexEntry.confidence;
+    if (typeof reviewCfg?.low_quality_score === "number" && qualityScore < reviewCfg.low_quality_score) {
+      logger.warn("hybrid-generation", `Rule ${indexEntry.id} quality ${qualityScore.toFixed(2)} < ${reviewCfg.low_quality_score} → held for review`);
+      this.reviewQueue.add({
+        rule_id: indexEntry.id,
+        title: content.title,
+        reason: "low_quality_score",
+        index_entry: indexEntry,
+        rule_content: content,
+      });
+      return null;
+    }
+
+    // (3) Orphaned memory references → review queue.
+    if (memoryStore) {
+      const ids = (content.metadata?.source_memory_ids || []) as string[];
+      if (ids.length > 0) {
+        const valid = await this.validMemoryIds(ids, memoryStore);
+        if (valid.length === 0) {
+          logger.warn("hybrid-generation", `Rule ${indexEntry.id} has no valid memory references → held for review`);
+          this.reviewQueue.add({
+            rule_id: indexEntry.id,
+            title: content.title,
+            reason: "orphaned_memory",
+            index_entry: indexEntry,
+            rule_content: content,
+          });
+          return null;
+        }
+      }
+    }
+
+    return { indexEntry, content };
+  }
+
+  /** Return only the memory ids that still exist and are active. */
+  private async validMemoryIds(ids: string[], memoryStore: MemoryRepository): Promise<string[]> {
+    const active = memoryStore.list({ activeOnly: true });
+    const activeSet = new Set(active.map((m) => m.id));
+    return ids.filter((id) => activeSet.has(id));
   }
 
   /**
@@ -528,6 +666,12 @@ export class HybridRuleGenerator {
       }
 
       const rule = await this.generateEnhancedRule(pattern, ruleId, scene, options);
+      // Phase 3 / P0: null means the rule was held for review (empty scene,
+      // LLM-rejected, low quality, orphaned memory) and must not be persisted.
+      if (!rule) {
+        logger.info("hybrid-generation", `⏸ Rule ${ruleId} held for review (not generated)`);
+        continue;
+      }
       rules.push(rule);
 
       logger.info("hybrid-generation", `✓ Generated enhanced rule ${ruleId}: ${rule.content.title || pattern.description}`);
@@ -703,6 +847,24 @@ Evidence:\n${evidence}`;
   ): string {
     // Step 1: Build static instructions (cacheable)
     const staticInstructions = `# Coding Rule Enhancement System
+
+## CRITICAL CONSTRAINTS
+
+You MUST ONLY produce rules about SOFTWARE ENGINEERING. Acceptable content types:
+- Programming patterns, idioms, and best practices
+- Architecture and design decisions
+- Tooling, build, test, and deployment practices
+- Security vulnerabilities and their fixes (SQL injection, XSS, CSRF, ...)
+
+You MUST REJECT (do not turn into a rule) content that is NOT coding-related, including:
+- Business process / operations (recruiting, hiring, sales, revenue)
+- Product management (roadmaps, requirement docs, user research)
+- Marketing strategy (campaigns, conversion, branding)
+- Generic project management with no technical signal
+
+If the pattern is non-coding content, return exactly:
+{"rejected": true, "reason": "<why this is not coding-related>"}
+and nothing else.
 
 ## Task 1: Scope Determination
 
@@ -887,6 +1049,11 @@ Generate enhanced rule following the format specified above.`;
       }
 
       const parsed = JSON.parse(jsonStr);
+
+      // Phase 3 / P0: LLM explicitly rejected non-coding content.
+      if (parsed.rejected === true) {
+        throw new LLMContentRejectedError(parsed.reason || "llm rejected non-coding content");
+      }
 
       // Validate required fields
       if (!parsed.title || !parsed.description || !parsed.rationale) {

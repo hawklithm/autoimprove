@@ -127,96 +127,96 @@
 
 ### P0 - 空场景拦截与审核队列
 
-- [ ] **创建 `RuleReviewQueue` 类**
-  - [ ] 定义 `RuleReviewItem` 接口
-  - [ ] 实现 `add()` / `list()` / `approve()` / `reject()` 方法
-  - [ ] 队列文件：`~/.autoimprove/review_queue.jsonl`
+- [x] **创建 `RuleReviewQueue` 类**
+  - [x] 定义 `RuleReviewItem` 接口
+  - [x] 实现 `add()` / `list()` / `approve()` / `reject()` 方法
+  - [x] 队列文件：`~/.autoimprove/review_queue.jsonl`
 
-- [ ] **在 `HybridRuleGenerator` 中集成审核队列**
-  - [ ] Phase 4 后检查 `scenes` 是否为空
-  - [ ] 空场景规则添加到审核队列，阻止入库（返回 null）
-  - [ ] 记录到日志（warn 级别）
+- [x] **在 `HybridRuleGenerator` 中集成审核队列**
+  - [x] Phase 4 后检查 `scenes` 是否为空
+  - [x] 空场景规则添加到审核队列，阻止入库（返回 null）
+  - [x] 记录到日志（warn 级别）
 
-- [ ] **配置选项**
-  - [ ] `config.rule_generatioire_manual_review_for.empty_scene: true`
-  - [ ] `config.rule_generation.require_manual_review_for.low_quality_score: 0.5`
+- [x] **配置选项**
+  - [x] `config.rule_generation.require_manual_review_for.empty_scene: true`
+  - [x] `config.rule_generation.require_manual_review_for.low_quality_score: 0.5`
 
-- [ ] **MCP 工具**
-  - [ ] 添加 `list_review_queue` 工具
-  - [ ] 添加 `approve_rule` 工具
-  - [ ] 添加 `reject_rule` 工具
+- [x] **MCP 工具**
+  - [x] 添加 `list_review_queue` 工具
+  - [x] 添加 `approve_rule` 工具
+  - [x] 添加 `reject_rule` 工具
 
-- [ ] **测试**
-  - [ ] 测试空场景规则被正确拦截
-  - [ ] 测试审核队列的 CRUD 操作
+- [x] **测试**
+  - [x] 测试空场景规则被正确拦截
+  - [x] 测试审核队列的 CRUD 操作
 
 ---
 
 ### P0 - LLM Prompt 添加约束
 
-- [ ] **更新 `HybridRuleGenerator.enhanceWithLLM()` Prompt**
-  - [ ] 添加 "CRITICAL CONSTRAINTS" 部分：
-    - [ ] 列出应接受的内容类型（编程、架构、工具）
-    - [ ] 列出应拒绝的内容类型（业务、产品、营销）
-  - [ ] 要求 LLM 拒绝时返回 `{"rejected": true, "reason": "..."}`
+- [x] **更新 `HybridRuleGenerator.buildEnhancementPrompt()` Prompt**
+  - [x] 添加 "CRITICAL CONSTRAINTS" 部分：
+    - [x] 列出应接受的内容类型（编程、架构、工具）
+    - [x] 列出应拒绝的内容类型（业务、产品、营销）
+  - [x] 要求 LLM 拒绝时返回 `{"rejected": true, "reason": "..."}`
 
-- [ ] **响应处理**
-  - [ ] 解析 `rejected` 标记
-  - [ ] 拒绝的规则添加到审核队列
-  - [ ] 阻止入库（返回 null）
+- [x] **响应处理**
+  - [x] 解析 `rejected` 标记（`LLMContentRejectedError`）
+  - [x] 拒绝的规则添加到审核队列
+  - [x] 阻止入库（返回 null）
 
-- [ ] **测试**
-  - [ ] 使用招聘 pattern 测试，验证 LLM 拒绝
-  - [ ] 使用技术 pattern 测试，验证正常生成
+- [x] **测试**
+  - [x] 使用招聘 pattern 测试，验证 LLM 拒绝
+  - [x] 使用技术 pattern 测试，验证正常生成
 
 ---
 
 ### P1 - Memory 引用完整性验证
 
-- [ ] **在 `HybridRuleGenerator` 中添加 Memory 验证**
-  - [ ] Phase 4.5：验证所有 `source_memory_ids` 有效
-  - [ ] 查询 `memoryStore.findById()`
-  - [ ] 过滤掉不存在或 `status != "active"` 的 memories
-  - [ ] 如果全部无效，添加到审核队列，阻止入库
+- [x] **在 `HybridRuleGenerator` 中添加 Memory 验证**
+  - [x] 验证所有 `source_memory_ids` 有效（通过 `memoryStore.list({activeOnly:true})`）
+  - [ ] 查询 `memoryStore.findById()`（注：接口无 findById，改用 list 校验）
+  - [x] 过滤掉不存在或 `status != "active"` 的 memories
+  - [x] 如果全部无效，添加到审核队列，阻止入库
 
-- [ ] **在 `RuleIndexManager.addRule()` 中添加验证**
-  - [ ] 接收 `memoryStore` 参数（可选）
-  - [ ] 验证 `content.metadata.source_memory_ids`
-  - [ ] 如果全部无效，抛出异常
+- [x] **在 `RuleIndexManager.addRule()` 中添加验证**
+  - [x] 接收 `memoryStore` 参数（可选）
+  - [x] 验证 `content.metadata.source_memory_ids`
+  - [x] 如果全部无效，抛出异常（`assertValidMemoryReferences`）
 
-- [ ] **测试**
-  - [ ] 测试孤立引用被正确拦截
-  - [ ] 测试部分有效引用的修复逻辑
+- [x] **测试**
+  - [x] 测试孤立引用被正确拦截
+  - [x] 测试部分有效引用的修复逻辑
 
 ---
 
 1 - 规则质量评分模型优化
 
-- [ ] **扩展 `RuleQualityController.assessUnifiedScore()`**
-  - [ ] 添加 `technicalRelevance` 维度（0-1）
-  - [ ] 添加 `sceneCompleteness` 维度（0-1）
-  - [ ] 调整权重分配：
-    - [ ] `evidenceConfidence: 0.25`
-    - [ ] `clarity: 0.15`
-    - [ ] `specificity: 0.15`
-    - [ ] `actionability: 0.15`
-    - [ ] `scopeConfidence: 0.10`
-    - [ ] `technicalRelevance: 0.15` (新增)
-    - [ ] `sceneCompleteness: 0.05` (新增)
+- [x] **扩展 `RuleQualityController.assessUnifiedScore()`**
+  - [x] 添加 `technicalRelevance` 维度（0-1）
+  - [x] 添加 `sceneCompleteness` 维度（0-1）
+  - [x] 调整权重分配：
+    - [x] `evidenceConfidence: 0.25`
+    - [x] `clarity: 0.15`
+    - [x] `specificity: 0.15`
+    - [x] `actionability: 0.15`
+    - [x] `scopeConfidence: 0.10`
+    - [x] `technicalRelevance: 0.15` (新增)
+    - [x] `sceneCompleteness: 0.05` (新增)
 
-- [ ] **实现 `assessTechnicalRelevance()` 方法**
-  - [ ] 检测代码关键词密度
-  - [ ] 检测技术栈标签
-  - [ ] 返回 0-1 分数
+- [x] **实现 `assessTechnicalRelevance()` 方法**
+  - [x] 检测代码关键词密度
+  - [x] 检测技术栈标签
+  - [x] 返回 0-1 分数
 
-- [ ] **实现 `assessSceneCompleteness()` 方法**
-  - [ ] 检查 `scenes.tech / functional / business` 是否非空
-  - [ ] 空场景返回 0，完整场景返回 1
+- [x] **实现 `assessSceneCompleteness()` 方法**
+  - [x] 检查 `scenes.tech / functional / business` 是否非空
+  - [x] 空场景返回 0，完整场景返回 1
 
-- [ ] **测试**
-  - [ ] 测试业务内容的 `technicalRelevance` < 0.3
-  - [ ] 测试空场景的 `sceneCompleteness` = 0
-  - [ ] 测试低质量规则被正确降级
+- [x] **测试**
+  - [x] 测试业务内容的 `technicalRelevance` < 0.3
+  - [x] 测试空场景的 `sceneCompleteness` = 0
+  - [x] 测试低质量规则被正确降级
 
 ---
 

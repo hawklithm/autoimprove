@@ -21,6 +21,10 @@ export interface UnifiedRuleScore extends RuleQualityScore {
   evidence_confidence: number;
   scope_confidence: number;
   memory_support_score: number;
+  /** Phase 3: how coding-relevant the rule is (0-1) */
+  technical_relevance: number;
+  /** Phase 3: completeness of the rule's scene coverage (0-1) */
+  scene_completeness: number;
 }
 
 /** Single score used for persistence, filtering, and export decisions. */
@@ -49,16 +53,31 @@ export class RuleQualityController {
     indexEntry: RuleIndexEntry,
     evidenceConfidence: number,
     scopeConfidence = 0.5,
-    memorySupportScore = 0.5
+    memorySupportScore = 0.5,
+    technicalRelevance?: number,
+    sceneCompleteness?: number
   ): UnifiedRuleScore {
     const clarity = this.assessClarity(rule);
     const specificity = this.assessSpecificity(rule);
     const actionability = this.assessActionability(rule);
-    const contentQuality = clarity * 0.4 + specificity * 0.3 + actionability * 0.3;
+    const techRel = technicalRelevance ?? this.assessTechnicalRelevance(rule, indexEntry);
+    const sceneComp = sceneCompleteness ?? this.assessSceneCompleteness(indexEntry);
     const evidence = Math.max(0, Math.min(1, evidenceConfidence));
     const scope = Math.max(0, Math.min(1, scopeConfidence));
     const memory = Math.max(0, Math.min(1, memorySupportScore));
-    const overall = evidence * 0.4 + contentQuality * 0.35 + scope * 0.15 + memory * 0.1;
+
+    // Phase 3 weighting (sums to 1.0):
+    // evidence 0.25 | clarity 0.15 | specificity 0.15 | actionability 0.15 |
+    // scope 0.10 | technicalRelevance 0.15 | sceneCompleteness 0.05
+    const overall =
+      evidence * 0.25 +
+      clarity * 0.15 +
+      specificity * 0.15 +
+      actionability * 0.15 +
+      scope * 0.10 +
+      techRel * 0.15 +
+      sceneComp * 0.05;
+
     const base = this.assessQuality(rule, { ...indexEntry, confidence: evidence });
     return {
       ...base,
@@ -66,7 +85,53 @@ export class RuleQualityController {
       evidence_confidence: evidence,
       scope_confidence: scope,
       memory_support_score: memory,
+      technical_relevance: techRel,
+      scene_completeness: sceneComp,
     };
+  }
+
+  /**
+   * Phase 3: technical relevance (0-1). Measures how coding/engineering-specific
+   * the rule is. Business-only rules score low; rules with code keywords, tech
+   * stack labels, or file paths score high.
+   */
+  assessTechnicalRelevance(rule: RuleContent, indexEntry?: RuleIndexEntry): number {
+    const content = (rule.content || "").toLowerCase();
+    let score = 0;
+
+    const codeKeywords = [
+      "function", "class", "method", "api", "endpoint", "component", "hook", "module",
+      "import", "export", "async", "await", "promise", "type", "interface", "query",
+      "database", "test", "build", "deploy", "docker", "kubernetes", "cache", "typescript",
+      "javascript", "python", "react", "vue", "node", "sql", "graphql", "http", "rest",
+    ];
+    const hits = codeKeywords.filter((k) => content.includes(k));
+    score += Math.min(hits.length * 0.1, 0.6); // up to 0.6 from keyword density
+
+    // Tech stack labels in keywords / scenes boost relevance.
+    const techLabels = (indexEntry?.keywords || []).concat(indexEntry?.scenes?.tech || []);
+    const techHit = techLabels.filter((t) => /[a-z0-9+#]/i.test(t) && t.length > 1).length;
+    score += Math.min(techHit * 0.05, 0.25);
+
+    // File-path / code-block signals.
+    if (content.includes("```") || /\.\w{1,4}\b/.test(content) || content.includes("/")) {
+      score += 0.15;
+    }
+
+    return Math.max(0, Math.min(1, score));
+  }
+
+  /**
+   * Phase 3: scene completeness (0-1). Empty scenes → 0; full coverage of
+   * tech / functional / business → 1.
+   */
+  assessSceneCompleteness(indexEntry: RuleIndexEntry): number {
+    const scenes = indexEntry.scenes;
+    if (!scenes) return 0;
+    const dims = [scenes.tech || [], scenes.functional || [], scenes.business || []];
+    const filled = dims.filter((d) => d.length > 0).length;
+    if (filled === 0) return 0;
+    return filled / dims.length;
   }
   /**
    * Assess the clarity of a rule

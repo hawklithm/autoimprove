@@ -22,6 +22,7 @@ import { SessionAnalysisTracker } from "./storage/session-analysis-tracker.js";
 import { SessionAnalyzer } from "./core/session-analyzer.js";
 import { RuleGenerator } from "./core/rule-generator.js";
 import { HybridRuleGenerator } from "./core/hybrid-rule-generator.js";
+import { RuleReviewQueue } from "./core/rule-review-queue.js";
 import { TemplateBasedRuleGenerator } from "./core/template-based-rule-generator.js";
 import { RuleMatcher } from "./core/rule-matcher.js";
 import { RuleQualityController, UNIFIED_RULE_MIN_SCORE } from "./core/rule-quality.js";
@@ -1142,6 +1143,44 @@ Returns: Rule metadata + full content (title, description, how_to_apply, when_to
           required: [],
         },
       },
+      {
+        name: "list_review_queue",
+        description: "Phase 3: List rules held for manual review (empty scene / LLM-rejected / low quality / orphaned memory).",
+        inputSchema: {
+          type: "object",
+          properties: {
+            status: {
+              type: "string",
+              description: "Filter by status: pending | approved | rejected. Default: pending",
+            },
+          },
+          required: [],
+        },
+      },
+      {
+        name: "approve_rule",
+        description: "Phase 3: Approve a rule held in the review queue, allowing it to be persisted.",
+        inputSchema: {
+          type: "object",
+          properties: {
+            rule_id: { type: "string", description: "ID of the rule to approve" },
+            note: { type: "string", description: "Optional reviewer note" },
+          },
+          required: ["rule_id"],
+        },
+      },
+      {
+        name: "reject_rule",
+        description: "Phase 3: Reject a rule held in the review queue (it will not be persisted).",
+        inputSchema: {
+          type: "object",
+          properties: {
+            rule_id: { type: "string", description: "ID of the rule to reject" },
+            note: { type: "string", description: "Optional reviewer note" },
+          },
+          required: ["rule_id"],
+        },
+      },
     ],
   };
 });
@@ -1279,6 +1318,15 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
       case "get_memory_metrics":
         return await handleGetMemoryMetrics(request.params.arguments);
+
+      case "list_review_queue":
+        return await handleListReviewQueue(request.params.arguments);
+
+      case "approve_rule":
+        return await handleApproveRule(request.params.arguments);
+
+      case "reject_rule":
+        return await handleRejectRule(request.params.arguments);
 
       default:
         throw new Error(`Unknown tool: ${request.params.name}`);
@@ -4798,6 +4846,57 @@ server.setRequestHandler(ReadResourceRequestSchema, async (request) => {
 
   throw new Error(`Unknown resource URI: ${uri}`);
 });
+
+// ============================================================================
+// Phase 3: Review Queue tools
+// ============================================================================
+
+const reviewQueue = new RuleReviewQueue();
+
+async function handleListReviewQueue(args: any) {
+  const status = args?.status as "pending" | "approved" | "rejected" | undefined;
+  const items = reviewQueue.list(status);
+  return {
+    content: [
+      {
+        type: "text",
+        text: JSON.stringify({
+          count: items.length,
+          pending: reviewQueue.pendingCount(),
+          items,
+        }, null, 2),
+      },
+    ],
+  };
+}
+
+async function handleApproveRule(args: any) {
+  const ruleId = args?.rule_id as string;
+  if (!ruleId) {
+    return { content: [{ type: "text", text: JSON.stringify({ success: false, error: "rule_id is required" }) }] };
+  }
+  const item = reviewQueue.approve(ruleId, args?.note as string | undefined);
+  if (!item) {
+    return { content: [{ type: "text", text: JSON.stringify({ success: false, error: `Rule ${ruleId} not found in review queue` }) }] };
+  }
+  return {
+    content: [{ type: "text", text: JSON.stringify({ success: true, rule_id: ruleId, status: item.status }) }],
+  };
+}
+
+async function handleRejectRule(args: any) {
+  const ruleId = args?.rule_id as string;
+  if (!ruleId) {
+    return { content: [{ type: "text", text: JSON.stringify({ success: false, error: "rule_id is required" }) }] };
+  }
+  const item = reviewQueue.reject(ruleId, args?.note as string | undefined);
+  if (!item) {
+    return { content: [{ type: "text", text: JSON.stringify({ success: false, error: `Rule ${ruleId} not found in review queue` }) }] };
+  }
+  return {
+    content: [{ type: "text", text: JSON.stringify({ success: true, rule_id: ruleId, status: item.status }) }],
+  };
+}
 
 // ============================================================================
 // Server Entry Point

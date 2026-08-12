@@ -12,6 +12,7 @@ import { logger } from "./../core/logger.js";
 import { RuleStorageSQLite } from "./rule-storage-sqlite.js";
 import { SQLiteMigration } from "./migrate-to-sqlite.js";
 import { RuleContentManager } from "./rule-content.js";
+import { MemoryRepository } from "../core/memory-models.js";
 
 /**
  * Normalize rule entry to ensure all fields are valid.
@@ -181,9 +182,14 @@ export class RuleIndexManager {
     renameSync(tempPath, indexPath);
   }
 
-  addRule(entry: RuleIndexEntry, content?: any): void {
+  addRule(entry: RuleIndexEntry, content?: any, memoryStore?: MemoryRepository): void {
     if (!entry) {
       throw new Error("Failed to normalize rule entry");
+    }
+    // Phase 3 / P1: when a memory store is supplied, reject rules whose every
+    // memory reference is missing or inactive (orphaned reference).
+    if (memoryStore && Array.isArray(entry.source_memory_ids) && entry.source_memory_ids.length > 0) {
+      this.assertValidMemoryReferences(entry.source_memory_ids, memoryStore);
     }
     if (this.useSQLite && this.sqliteStorage) {
       // Check if rule exists
@@ -234,6 +240,19 @@ export class RuleIndexManager {
       this.saveIndex(index);
     } else {
       throw new Error("Failed to normalize rule entry");
+    }
+  }
+
+  /**
+   * Phase 3 / P1: throw if every supplied memory id is missing or not active.
+   * A rule with only orphaned references must not enter the index.
+   */
+  private assertValidMemoryReferences(ids: string[], memoryStore: MemoryRepository): void {
+    const active = memoryStore.list({ activeOnly: true });
+    const activeSet = new Set(active.map((m) => m.id));
+    const validCount = ids.filter((id) => activeSet.has(id)).length;
+    if (validCount === 0) {
+      throw new Error(`Rule references only orphaned/inactive memories: ${ids.join(", ")}`);
     }
   }
 
