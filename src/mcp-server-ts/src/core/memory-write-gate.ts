@@ -19,6 +19,7 @@ import {
   CODE_KEYWORDS,
   BUSINESS_KEYWORDS,
 } from "./pattern-content-filter.js";
+import { qualityMetrics } from "./quality-metrics.js";
 
 export interface WriteDecision {
   persist: boolean;
@@ -68,6 +69,7 @@ export class MemoryWriteGate {
 
     // Q4：编程相关？ 非代码内容（业务/产品/营销）一律拒绝，避免 rule-001 类问题
     if (this.isBusinessContent(candidate.content)) {
+      qualityMetrics.recordMemoryRejection("non-code-content");
       return { persist: false, info_class: cls.info_class, reject_reason: "non-code-content" };
     }
 

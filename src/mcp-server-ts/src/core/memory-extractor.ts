@@ -7,6 +7,7 @@ import { InfoClassifier } from "./info-classifier.js";
 import { PatternContentFilter } from "./pattern-content-filter.js";
 import { loadConfig } from "../storage/init.js";
 import { logger } from "./logger.js";
+import { qualityMetrics } from "./quality-metrics.js";
 
 export interface MemoryCandidate {
   kind: MemoryKind;
@@ -93,8 +94,10 @@ export class SessionMemoryExtractor {
       const result = this.contentFilter.isCodeRelated(text);
       if (!result.allowed) {
         rejected.push(pattern.description.slice(0, 60));
+        qualityMetrics.recordMemoryRejection(result.reason || result.category || "non-code-pattern");
         return false;
       }
+      qualityMetrics.recordMemoryAccepted();
       return true;
     });
     if (rejected.length > 0) {
@@ -135,7 +138,10 @@ export class SessionMemoryExtractor {
 
     for (const message of messages) {
       // Phase 2 / P0: skip pure business content — it is not a coding preference.
-      if (!this.passesContentFilter(message.content)) continue;
+      if (!this.passesContentFilter(message.content)) {
+        qualityMetrics.recordMemoryRejection("non-code-message");
+        continue;
+      }
 
       if (/\b(prefer|always|never|must|should|喜欢|偏好|必须|不要|统一)\b/i.test(message.content)) {
         candidates.push(toCandidate(

@@ -23,6 +23,7 @@ import { InfoClassifier } from "./info-classifier.js";
 import { MemoryWriteGate } from "./memory-write-gate.js";
 import { checkMetaContent } from "./pattern-noise-filter.js";
 import { PatternContentFilter } from "./pattern-content-filter.js";
+import { qualityMetrics } from "./quality-metrics.js";
 
 export function isContextContinuationMessage(content: string): boolean {
   const normalized = content.trim().toLowerCase();
@@ -258,8 +259,10 @@ export class SessionAnalyzer {
       pattern.contentCategory = result.category;
       if (result.allowed) {
         kept.push(pattern);
+        qualityMetrics.recordPatternAccepted();
       } else {
         rejected.push({ description: pattern.description.slice(0, 80), reason: result.reason });
+        qualityMetrics.recordPatternRejection(result.reason || result.category || "non-code");
       }
     }
 

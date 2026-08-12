@@ -25,6 +25,7 @@ import { HybridRuleGenerator } from "./core/hybrid-rule-generator.js";
 import { RuleReviewQueue } from "./core/rule-review-queue.js";
 import { OrphanedRuleCleaner } from "./core/orphaned-rule-cleaner.js";
 import { RuleAuditor } from "./core/rule-auditor.js";
+import { qualityMetrics } from "./core/quality-metrics.js";
 import { TemplateBasedRuleGenerator } from "./core/template-based-rule-generator.js";
 import { RuleMatcher } from "./core/rule-matcher.js";
 import { RuleQualityController, UNIFIED_RULE_MIN_SCORE } from "./core/rule-quality.js";
@@ -1217,6 +1218,27 @@ Returns: Rule metadata + full content (title, description, how_to_apply, when_to
           required: [],
         },
       },
+      {
+        name: "get_quality_metrics",
+        description: "Phase 7/P3: Quality monitoring dashboard. Returns pattern/memory rejection rates, review-queue size, average rule quality, orphaned-rule ratio, and any active alerts. Also persists a snapshot to ~/.autoimprove/quality_metrics.json.",
+        inputSchema: {
+          type: "object",
+          properties: {
+            save_snapshot: { type: "boolean", description: "Persist the snapshot JSON to disk. Default true" },
+            thresholds: {
+              type: "object",
+              description: "Override alert thresholds",
+              properties: {
+                review_queue_size: { type: "number" },
+                orphaned_ratio: { type: "number" },
+                pattern_rejection_rate: { type: "number" },
+                memory_rejection_rate: { type: "number" },
+              },
+            },
+          },
+          required: [],
+        },
+      },
     ],
   };
 });
@@ -1369,6 +1391,9 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
       case "audit_rules":
         return await handleAuditRules(request.params.arguments);
+
+      case "get_quality_metrics":
+        return await handleGetQualityMetrics(request.params.arguments);
 
       default:
         throw new Error(`Unknown tool: ${request.params.name}`);
@@ -5000,6 +5025,71 @@ async function handleAuditRules(args: any) {
             issue_count: report.issues.length,
             report_path: reportPathOut,
             issues: report.issues,
+          },
+          null,
+          2
+        ),
+      },
+    ],
+  };
+}
+
+async function handleGetQualityMetrics(args: any) {
+  const saveSnapshot = args?.save_snapshot !== false; // default true
+  const thresholds = (args?.thresholds as any) || undefined;
+
+  // Review queue size (from the live singleton queue)
+  const reviewQueueSize = reviewQueue.pendingCount();
+
+  // Orphaned-rule ratio (fully-orphaned / total)
+  const orphaned = new OrphanedRuleCleaner(indexManager, memoryStore).audit();
+  const orphanedRatio =
+    orphaned.total_rules > 0 ? orphaned.fully_orphaned / orphaned.total_rules : 0;
+
+  // Average rule quality across the whole set
+  const qualityController = new RuleQualityController();
+  const contentManager = new RuleContentManager();
+  const rules = indexManager.listRules();
+  let totalQuality = 0;
+  let qualityCount = 0;
+  for (const rule of rules) {
+    const content = contentManager.loadContent(rule.id) || {
+      id: rule.id,
+      content: rule.description || "",
+      reason: "",
+      metadata: {},
+    };
+    const score = qualityController.assessUnifiedScore(content as any, rule, rule.confidence ?? 0.5);
+    qualityMetrics.recordQualityScore(score.overall);
+    totalQuality += score.overall;
+    qualityCount++;
+  }
+  const averageQuality = qualityCount > 0 ? totalQuality / qualityCount : 0;
+
+  const snapshot = qualityMetrics.snapshot({
+    reviewQueueSize,
+    totalRules: orphaned.total_rules,
+    orphanedRatio,
+    thresholds,
+  });
+  // ensure the live average is reflected (snapshot computes its own avg from
+  // recorded scores; overlay the freshly computed whole-set average too)
+  (snapshot as any).average_rule_quality = Number(averageQuality.toFixed(3));
+
+  let snapshotPath: string | undefined;
+  if (saveSnapshot) {
+    snapshotPath = qualityMetrics.saveSnapshot(snapshot);
+  }
+
+  return {
+    content: [
+      {
+        type: "text",
+        text: JSON.stringify(
+          {
+            ...snapshot,
+            average_rule_quality: Number(averageQuality.toFixed(3)),
+            snapshot_path: snapshotPath,
           },
           null,
           2

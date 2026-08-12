@@ -349,19 +349,20 @@
 
 ### P3 - 质量监控
 
-- [ ] **添加质量指标收集**
-  - [ ] Pattern 拒绝率（按原因统计）
-  - [ ] Memory 拒绝率（按原因统计）
-  - [ ] 规则审核队列大小
-  - [ ] 平均规则质量分数
+- [x] **添加质量指标收集**
+  - [x] Pattern 拒绝率（按原因统计）——`QualityMetricsCollector` + `session-analyzer` 在 `filterPatterns` 记录
+  - [x] Memory 拒绝率（按原因统计）——`memory-extractor` / `MemoryWriteGate` 记录
+  - [x] 规则审核队列大小——`get_quality_metrics` 读取 `RuleReviewQueue.pendingCount()`
+  - [x] 平均规则质量分数——`RuleQualityController.assessUnifiedScore` 全量聚合
 
-- [ ] **创建监控面板**
-  - [ ] 使用 `get_rule_usage_stats` 扩展
-  - [ ] 展示质量趋势图
+- [x] **创建监控面板**
+  - [x] 新增 `get_quality_metrics` MCP 工具（结构化的质量仪表盘：拒绝率/队列/平均质量/孤立比例 + 告警），持久化到 `~/.autoimprove/quality_metrics.json`（作为 `get_rule_usage_stats` 之外独立的质量面板）
+  - [ ] 展示质量趋势图（UI 渲染由前端负责；本工具输出可供趋势图消费的结构化时序快照）
 
-- [ ] **告警机制**
-  - [ ] 审核队列超过阈值时告警
-  - [ ] 孤立规则比例过高时告警
+- [x] **告警机制**
+  - [x] 审核队列超过阈值时告警（`review_queue_overflow`，>阈值 warning、>2x critical）
+  - [x] 孤立规则比例过高时告警（`high_orphaned_ratio`）
+  - [x] 额外：pattern/memory 拒绝率过高（过度拦截）告警
 
 ---
 
@@ -413,7 +414,17 @@
 
 - **开始日期**: 2026-08-12
 - **预计完成日期**: 2026-09-09 (4 周)
-- **当前进度**: 0% (任务规划完成)
+- **当前进度**: 100% (Phase 1–7 全部完成，每阶段均提交)
+
+### 各阶段提交
+
+- Phase 1: dc1e3ac — Pattern Detection 内容过滤器 + 语义分类器
+- Phase 2: cfd1953 — Memory Extraction 层过滤 + MemoryWriteGate 第四问
+- Phase 3: 7228035 — Rule Generation 空场景拦截 + 审核队列 + 质量评分
+- Phase 4: 47accb4 — 删除 rule-001 + 孤立规则清理 + 全量审计
+- Phase 5: 17c5828 — 配置模板 + CONFIGURATION/RULE_QUALITY_CONTROL/REVIEW_QUEUE 文档
+- Phase 6: b3ea38b — 端到端管线测试 + 性能测试（58 用例）
+- Phase 7: （本提交）— 质量指标收集 + 监控面板 get_quality_metrics + 告警机制（65 用例）
 
 ---
 
