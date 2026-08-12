@@ -22,6 +22,7 @@ import { SessionMemoryExtractor } from "./memory-extractor.js";
 import { InfoClassifier } from "./info-classifier.js";
 import { MemoryWriteGate } from "./memory-write-gate.js";
 import { checkMetaContent } from "./pattern-noise-filter.js";
+import { PatternContentFilter } from "./pattern-content-filter.js";
 
 export function isContextContinuationMessage(content: string): boolean {
   const normalized = content.trim().toLowerCase();
@@ -43,6 +44,7 @@ export class SessionAnalyzer {
   private memoryExtractor: SessionMemoryExtractor;
   private lastPreFilterResult: FilterResult | null = null;
   private writeGate: MemoryWriteGate;
+  private contentFilter: PatternContentFilter;
 
   constructor(memoryStore?: MemoryRepository) {
     this.parser = new UnifiedSessionParser();
@@ -54,6 +56,7 @@ export class SessionAnalyzer {
     this.memoryConsolidator = new MemoryConsolidator(memoryStore);
     this.memoryExtractor = new SessionMemoryExtractor();
     this.writeGate = new MemoryWriteGate(new InfoClassifier());
+    this.contentFilter = new PatternContentFilter();
   }
 
   /**
@@ -232,6 +235,41 @@ export class SessionAnalyzer {
   }
 
   /**
+   * Phase 1 / P0: drop business-dominant patterns before they are returned
+   * (and cached) by analyzeSession. Reads `pattern_detection.enable_content_filter`
+   * from config; when disabled this is a no-op, preserving legacy behavior.
+   *
+   * Rejected patterns are logged at info level so the operator can audit what
+   * was blocked.
+   */
+  private filterPatterns(patterns: Pattern[]): Pattern[] {
+    const cfg = loadConfig().pattern_detection;
+    if (!cfg?.enable_content_filter) return patterns;
+
+    const rejected: { description: string; reason: string }[] = [];
+    const kept: Pattern[] = [];
+    for (const pattern of patterns) {
+      const text = [
+        pattern.description,
+        (pattern.keywords || []).join(" "),
+        (pattern.evidence_excerpts || []).join(" "),
+      ].join(" ");
+      const result = this.contentFilter.isCodeRelated(text);
+      pattern.contentCategory = result.category;
+      if (result.allowed) {
+        kept.push(pattern);
+      } else {
+        rejected.push({ description: pattern.description.slice(0, 80), reason: result.reason });
+      }
+    }
+
+    if (rejected.length > 0) {
+      logger.info("session-analysis", `Content filter rejected ${rejected.length}/${patterns.length} business-dominant pattern(s)`, { rejected });
+    }
+    return kept;
+  }
+
+  /**
    * G1: emit a local_ml metrics summary when local_ml is enabled. Surfaces
    * pre-filter kept-rate and clustering singleton-rate for observability.
    */
@@ -294,7 +332,7 @@ export class SessionAnalyzer {
     // G1: emit local_ml metrics summary (pre-filter kept-rate, clustering stats).
     this.logLocalMlSummary(sessionData.session_id);
 
-    return patterns;
+    return this.filterPatterns(patterns);
   }
 
   /**
@@ -397,7 +435,7 @@ export class SessionAnalyzer {
             mergedPatterns
           );
 
-          return mergedPatterns;
+          return this.filterPatterns(mergedPatterns);
         }
       }
     }
@@ -426,7 +464,7 @@ export class SessionAnalyzer {
       mergedPatterns
     );
 
-    return mergedPatterns;
+    return this.filterPatterns(mergedPatterns);
   }
 
   /**

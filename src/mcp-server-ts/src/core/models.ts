@@ -92,6 +92,8 @@ export interface Pattern {
   info_class?: InfoClass;
   /** 原始消息摘录（3-5 条完整用户消息），供规则生成器 LLM 直接引用 */
   evidence_excerpts?: string[];
+  /** Phase 1 / P1: semantic content classification ("code" | "business" | "mixed" | "general") */
+  contentCategory?: string;
 }
 
 // ============================================================================

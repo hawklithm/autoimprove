@@ -51,6 +51,13 @@ export interface Config {
     min_confidence: number;
   };
   business_domain_mappings: Record<string, string>;
+  /** Phase 1 / P0+P1: Pattern Detection content filtering. */
+  pattern_detection?: {
+    /** Reject non-coding (business-dominant) patterns before they become rules. */
+    enable_content_filter?: boolean;
+    /** Use the optional LLM semantic classifier when the heuristic is uncertain. */
+    use_llm_classification?: boolean;
+  };
   rule_generation?: {
     use_template_generation?: boolean; // Enable SOP-style template compiler (Phase 2)
     template_hot_reload?: boolean;      // Watch templates for changes (dev mode)
@@ -104,6 +111,10 @@ const DEFAULT_CONFIG: Config = {
     min_confidence: 0.3
   },
   business_domain_mappings: {},
+  pattern_detection: {
+    enable_content_filter: true,   // P0: block business-dominant patterns by default
+    use_llm_classification: false, // P1: opt-in LLM semantic classification
+  },
   rule_generation: {
     use_template_generation: true,  // Enable SOP-style template compiler by default
     template_hot_reload: true,      // Enable hot reload in development mode
