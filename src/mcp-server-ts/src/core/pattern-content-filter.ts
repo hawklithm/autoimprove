@@ -34,7 +34,7 @@ export interface ContentFilterResult {
  * Keywords that strongly indicate *programming / engineering* content.
  * Grouped for readability; merged into one set at construction time.
  */
-const CODE_KEYWORDS: string[] = [
+export const CODE_KEYWORDS: string[] = [
   // Languages
   "typescript", "javascript", "python", "java", "golang", "rust", "c++", "c#",
   "php", "ruby", "kotlin", "swift", "scala", "dart", "elixir", "haskell",
@@ -66,7 +66,7 @@ const CODE_KEYWORDS: string[] = [
  * Keywords that strongly indicate *business* content (recruiting / marketing /
  * product / sales). Matched case-insensitively.
  */
-const BUSINESS_KEYWORDS: string[] = [
+export const BUSINESS_KEYWORDS: string[] = [
   // 招聘 recruiting
   "招聘", "简历", "候选人", "面试", "岗位", "招聘需求", "猎头", "录用", "入职",
   "招聘流程", "人才", "offer", "招聘会",

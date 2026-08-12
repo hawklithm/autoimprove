@@ -14,12 +14,25 @@
 
 import { MemoryRecord, InfoClass } from "./memory-models.js";
 import { InfoClassifier, InfoClassResult, Sensitivity } from "./info-classifier.js";
+import {
+  PatternContentFilter,
+  CODE_KEYWORDS,
+  BUSINESS_KEYWORDS,
+} from "./pattern-content-filter.js";
 
 export interface WriteDecision {
   persist: boolean;
   info_class?: InfoClass;
   reject_reason?: string;
 }
+
+/**
+ * Phase 2 / P1: representative keyword sets reused by the fourth gate question
+ * ("编程相关？"). They mirror `CODE_KEYWORDS` / `BUSINESS_KEYWORDS` from
+ * `pattern-content-filter` so the whole system shares one dictionary source.
+ */
+export const CODE_PATTERNS: string[] = CODE_KEYWORDS;
+export const BUSINESS_PATTERNS: string[] = BUSINESS_KEYWORDS;
 
 /** 临时/一次性上下文特征（Q2） */
 const EPHEMERAL_PATTERNS: RegExp[] = [
@@ -33,7 +46,13 @@ function matchesAny(patterns: RegExp[], text: string): boolean {
 }
 
 export class MemoryWriteGate {
-  constructor(private readonly classifier: InfoClassifier) {}
+  private readonly contentFilter: PatternContentFilter;
+  constructor(private readonly classifier: InfoClassifier) {
+    this.contentFilter = new PatternContentFilter({
+      codeKeywords: CODE_PATTERNS,
+      businessKeywords: BUSINESS_PATTERNS,
+    });
+  }
 
   shouldPersist(candidate: MemoryRecord): WriteDecision {
     const cls = this.resolveClass(candidate);
@@ -47,12 +66,22 @@ export class MemoryWriteGate {
       };
     }
 
+    // Q4：编程相关？ 非代码内容（业务/产品/营销）一律拒绝，避免 rule-001 类问题
+    if (this.isBusinessContent(candidate.content)) {
+      return { persist: false, info_class: cls.info_class, reject_reason: "non-code-content" };
+    }
+
     // Q2：跨会话 / 跨任务可复用？
     if (this.isEphemeral(candidate)) {
       return { persist: false, info_class: cls.info_class, reject_reason: "not-reusable" };
     }
 
     return { persist: true, info_class: cls.info_class };
+  }
+
+  /** Q4：内容是否为非编程（业务）内容 —— 由共享的内容过滤器判定 */
+  isBusinessContent(content: string): boolean {
+    return !this.contentFilter.isCodeRelated(content).allowed;
   }
 
   /** 候选已带 info_class 直接用，否则由分类器补判 */

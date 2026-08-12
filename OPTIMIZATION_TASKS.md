@@ -72,54 +72,54 @@
 
 ### P0 - Memory 提取阶段过滤
 
-- [ ] **在 `SessionMemoryExtractor` 中复用 `PatternContentFilter`**
-  - [ ] 在 `extract()` 方法开始时过滤 patterns
-  - [ ] 拒绝非代码相关的 patterns 生成 memory
-  - [ ] 记录被拒绝的原因到日志
+- [x] **在 `SessionMemoryExtractor` 中复用 `PatternContentFilter`**
+  - [x] 在 `extract()` 方法开始时过滤 patterns
+  - [x] 拒绝非代码相关的 patterns 生成 memory
+  - [x] 记录被拒绝的原因到日志
 
-- [ ] **更新 `heuristicCandidates()` 逻辑**
-  - [ ] 从用户消息提取时，过滤明显的业务内容
-  - [ ] 添加代码上下文检测（是否包含文件路径、工具调用）
+- [x] **更新 `heuristicCandidates()` 逻辑**
+  - [x] 从用户消息提取时，过滤明显的业务内容
+  - [x] 添加代码上下文检测（是否包含文件路径、工具调用）
 
-- [ ] **测试验证**
-  - [ ] 确认招聘相关 patterns 不再生成 memory
-  - [ ] 确认技术 memories 提取不受影响
+- [x] **测试验证**
+  - [x] 确认招聘相关 patterns 不再生成 memory
+  - [x] 确认技术 memories 提取不受影响
 
 ---
 
 ### P1 - MemoryWriteGate 增加第四问
 
-- [ ] **扩展 `MemoryWriteGate` 三问机制为四问**
-  - [ ] 添加 Q4: "编程相关？"
-  - [ ] 实现 `isBusinessContent()` 方法
-  - [ ] 定义 `BUSINESS_PATTERNS` 和 `CODE_PATTERNS`
-  - [ ] 拒绝决策返回 `reject_reason: "non-code-content"`
+- [x] **扩展 `MemoryWriteGate` 三问机制为四问**
+  - [x] 添加 Q4: "编程相关？"
+  - [x] 实现 `isBusinessContent()` 方法
+  - [x] 定义 `BUSINESS_PATTERNS` 和 `CODE_PATTERNS`
+  - [x] 拒绝决策返回 `reject_reason: "non-code-content"`
 
-- [ ] **单元测试**
-  - [ ] 测试纯业务内容被拒绝
-  - [ ] 测试混合内容（业务+技术）的边界情况
-  - [ ] 测试纯技术内容通过
+- [x] **单元测试**
+  - [x] 测试纯业务内容被拒绝
+  - [x] 测试混合内容（业务+技术）的边界情况
+  - [x] 测试纯技术内容通过
 
-- [ ] **集成测试**
-  - [ ] 端到端测试：业务内容会话 → 无 memory 生成
-  - [ ] 确认现有技术 memories 不受影响
+- [x] **集成测试**
+  - [x] 端到端测试：业务内容会话 → 无 memory 生成
+  - [x] 确认现有技术 memories 不受影响
 
 ---
 
 ### P1 - LLM Prompt 约束
 
-- [ ] **更新 `SessionMemoryExtractor.buildPrompt()`**
-  - [ ] 添加明确约束："ONLY extract coding-related memories"
-  - [ ] 列出应拒绝的内容类型（业务流程、产品管理、营销策略）
-  - [ ] 要求 LLM 拒绝非代码内容时返回 `{"rejected": true, "reason": "..."}`
+- [x] **更新 `SessionMemoryExtractor.buildPrompt()`**
+  - [x] 添加明确约束："ONLY extract coding-related memories"
+  - [x] 列出应拒绝的内容类型（业务流程、产品管理、营销策略）
+  - [x] 要求 LLM 拒绝非代码内容时返回 `{"rejected": true, "reason": "..."}`
 
-- [ ] **响应处理**
-  - [ ] 解析 LLM 响应，检测 `rejected` 标记
-  - [ ] 记录被 LLM 拒绝的 patterns
+- [x] **响应处理**
+  - [x] 解析 LLM 响应，检测 `rejected` 标记
+  - [x] 记录被 LLM 拒绝的 patterns
 
-- [ ] **测试**
-  - [ ] 使用招聘相关 prompt 测试，验证 LLM 拒绝
-  - [ ] 使用技术 prompt 测试，验证正常提取
+- [x] **测试**
+  - [x] 使用招聘相关 prompt 测试，验证 LLM 拒绝
+  - [x] 使用技术 prompt 测试，验证正常提取
 
 ---
 

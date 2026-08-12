@@ -4,6 +4,8 @@ import { SessionData } from "./unified-session-parser.js";
 import { LLMConfigManager } from "./llm-config-manager.js";
 import { MemoryEntity, MemoryEvidence, MemoryKind, MemoryNamespace, MemoryRecord, MemoryRelation, createMemoryId, InfoClass } from "./memory-models.js";
 import { InfoClassifier } from "./info-classifier.js";
+import { PatternContentFilter } from "./pattern-content-filter.js";
+import { logger } from "./logger.js";
 
 export interface MemoryCandidate {
   kind: MemoryKind;
@@ -24,13 +26,18 @@ export interface MemoryCandidate {
 export class SessionMemoryExtractor {
   private readonly llm = new LLMConfigManager();
   private readonly classifier = new InfoClassifier();
+  private readonly contentFilter = new PatternContentFilter();
 
   async extract(session: SessionData, patterns: Pattern[], scene: Scene): Promise<MemoryRecord[]> {
-    const heuristic = this.heuristicCandidates(session, patterns);
+    // Phase 2 / P0: drop non-code patterns before any memory generation so that
+    // business-dominant content (recruiting/marketing/...) never becomes a memory.
+    const codePatterns = this.filterCodePatterns(patterns);
+
+    const heuristic = this.heuristicCandidates(session, codePatterns);
     if (!this.llm.isAvailable()) return heuristic.map(candidate => this.toRecord(candidate, session, scene));
 
     try {
-      const prompt = this.buildPrompt(session, patterns);
+      const prompt = this.buildPrompt(session, codePatterns);
       const response = await this.llm.callWithFallback(async (client, model) => client.chat.completions.create({
         model,
         max_tokens: 2200,
@@ -42,6 +49,37 @@ export class SessionMemoryExtractor {
     } catch {
       return heuristic.map(candidate => this.toRecord(candidate, session, scene));
     }
+  }
+
+  /**
+   * Phase 2 / P0: keep only code-related patterns. Rejected patterns are logged
+   * so an operator can audit what was blocked.
+   */
+  private filterCodePatterns(patterns: Pattern[]): Pattern[] {
+    if (patterns.length === 0) return patterns;
+    const rejected: string[] = [];
+    const kept = patterns.filter(pattern => {
+      const text = [
+        pattern.description,
+        (pattern.keywords || []).join(" "),
+        (pattern.evidence_excerpts || []).join(" "),
+      ].join(" ");
+      const result = this.contentFilter.isCodeRelated(text);
+      if (!result.allowed) {
+        rejected.push(pattern.description.slice(0, 60));
+        return false;
+      }
+      return true;
+    });
+    if (rejected.length > 0) {
+      logger.info("memory-extractor", `Content filter dropped ${rejected.length}/${patterns.length} non-code pattern(s)`, { rejected });
+    }
+    return kept;
+  }
+
+  /** Phase 2 / P0: true when the text carries code context (file path / tool call / tech token). */
+  private hasCodeContext(text: string): boolean {
+    return /(\/[\w./-]+|[\w-]+\.(ts|js|tsx|jsx|py|java|go|rs|cpp|c|css|html|json|sql|yaml|yml))|tool_call|file_path|src\/|node_modules\//i.test(text);
   }
 
   private heuristicCandidates(session: SessionData, patterns: Pattern[]): MemoryCandidate[] {
@@ -70,6 +108,9 @@ export class SessionMemoryExtractor {
     };
 
     for (const message of messages) {
+      // Phase 2 / P0: skip pure business content — it is not a coding preference.
+      if (!this.contentFilter.isCodeRelated(message.content).allowed) continue;
+
       if (/\b(prefer|always|never|must|should|喜欢|偏好|必须|不要|统一)\b/i.test(message.content)) {
         candidates.push(toCandidate(
           message.content.trim(),
@@ -81,6 +122,12 @@ export class SessionMemoryExtractor {
     }
 
     for (const pattern of patterns) {
+      // Require code context so non-technical patterns don't slip through even
+      // if the heuristic keyword match let them survive.
+      const patternText = pattern.description;
+      if (!this.hasCodeContext(patternText) && !this.contentFilter.isCodeRelated(patternText).allowed) {
+        continue;
+      }
       candidates.push(toCandidate(
         pattern.description,
         pattern.confidence,
@@ -95,6 +142,9 @@ export class SessionMemoryExtractor {
   private buildPrompt(session: SessionData, patterns: Pattern[]): string {
     const transcript = session.messages.slice(-60).map(message => `${message.role}: ${message.content.slice(0, 700)}`).join("\n");
     return `Extract durable memories from this coding-agent session. Return JSON only.
+STRICT CONSTRAINT: ONLY extract coding-related memories. This is a software-engineering agent session.
+DO NOT extract content that is purely about business operations, including: business process, product management, marketing strategy, sales, recruiting/hiring, or generic project management.
+If the session contains no coding-related content, return {"rejected": true, "reason": "..."} and no memories.
 Separate semantic facts/preferences, episodic decisions/outcomes, and procedural rules.
 Only keep information useful in future sessions. Preserve context so each item is understandable alone.
 Schema: {"memories":[{"kind":"semantic|episodic|procedural","content":"...","summary":"...","subject":"...","predicate":"...","object":"...","context":"...","confidence":0.0,"importance":0.0,"entities":[{"id":"...","name":"...","type":"project|file|technology|tool|concept|user|unknown"}],"evidence":[{"message_lines":[],"source_excerpt":"..."}],"outcome":{"status":"success|partial|failed|unknown","tests_passed":true} }]}
@@ -107,6 +157,11 @@ Detected patterns:\n${patterns.map(pattern => `${pattern.type}: ${pattern.descri
     try {
       const match = response.match(/\{[\s\S]*\}/);
       const parsed = JSON.parse(match ? match[0] : response);
+      // Phase 2 / P1: LLM may explicitly reject non-code content.
+      if (parsed && parsed.rejected === true) {
+        logger.info("memory-extractor", `LLM rejected non-code session: ${parsed.reason || "no reason"}`);
+        return [];
+      }
       if (!Array.isArray(parsed.memories)) return [];
       return parsed.memories.filter((item: any) => item && typeof item.content === "string").map((item: any) => {
         const cls = this.classifier.classify({ content: item.content });
