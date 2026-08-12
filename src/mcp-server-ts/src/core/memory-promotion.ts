@@ -41,17 +41,21 @@ export class MemoryPromotionService {
     if (this.conflicts.hasConflict(memory, this.store.list({ activeOnly: true, kind: "procedural" }))) {
       return { eligible: false, score: 0, reason: "Conflicts with another procedural memory in the same scope" };
     }
+    // P1: weight confidence more heavily than frequency so single-session
+    // high-confidence patterns can qualify, and gate with a raised
+    // scoreThreshold (0.65). Tuned against the real memory store: 0.7 filtered
+    // out every candidate (even conf=1.0 single-session memories score ~0.67),
+    // while 0.65 + these weights admits them and still blocks low-quality ones.
     const score = Math.max(0, Math.min(1,
-      memory.confidence * 0.35 + Math.min(1, sessions / 3) * 0.25 + Math.min(1, projects / 2) * 0.1
-      + validation * 0.2 + Math.min(1, memory.strength / 5) * 0.1 - contradiction * 0.35
+      memory.confidence * 0.55 + Math.min(1, sessions / 3) * 0.1 + Math.min(1, projects / 2) * 0.1
+      + validation * 0.15 + Math.min(1, memory.strength / 5) * 0.1 - contradiction * 0.35
     ));
     const explicit = memory.outcome?.user_confirmed === true;
-    // Optimization 4: in single-batch summarize runs (<5 sessions), relax the
-    // ">=2 sessions" threshold to ">=1 session" — a pattern that appears heavily
-    // in a small batch (>=3 occurrences) is strong enough to promote.
-    const batchRelaxed = batchCtx && batchCtx.totalSessions < 5;
-    const minSessions = batchRelaxed ? 1 : 2;
-    const eligible = (explicit || sessions >= minSessions || validation > 0) && contradiction === 0 && score >= 0.6;
+    // P1: relax minSessions to 1 (single-session high-confidence patterns are
+    // allowed), and gate quality by score instead of frequency.
+    const minSessions = 1;
+    const scoreThreshold = 0.65;
+    const eligible = (explicit || sessions >= minSessions || validation > 0) && contradiction === 0 && score >= scoreThreshold;
     return { eligible, score, reason: explicit ? "Explicitly confirmed procedural memory" : eligible ? "Repeated and sufficiently supported" : "Insufficient independent support or validation" };
   }
 
