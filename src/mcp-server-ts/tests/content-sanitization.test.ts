@@ -2,7 +2,7 @@
  * Tests for content sanitization in JSONLParser
  */
 
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, beforeEach } from 'vitest';
 import { JSONLParser } from '../src/core/jsonl-parser.js';
 import { writeFileSync, unlinkSync } from 'fs';
 import { join } from 'path';
