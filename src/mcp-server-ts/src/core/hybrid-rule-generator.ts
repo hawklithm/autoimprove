@@ -476,9 +476,10 @@ export class HybridRuleGenerator {
       `  confidence = ${memoryInput.promotion.confidence.toFixed(2)}`,
       `  reason = ${memoryInput.promotion.reason}`,
       "",
-      "Generate a rule with: title, description, reason, how_to_apply (array), examples (array of {bad,good,explanation}), when_to_use (array), exceptions (array).",
+      "Generate a rule with: title, description, reason, how_to_apply (array), examples (array of {bad,good,explanation}), when_to_use (array), exceptions (array), scenes (object with arrays: tech, functional, business).",
+      "Classify scenes from the memory content: tech = programming languages/frameworks (e.g. typescript, react, python), functional = engineering activities (e.g. testing, database, api, security, performance), business = non-code activities (e.g. recruiting, marketing, finance). Leave business empty for code rules.",
       "Keep scope as-is. Return JSON only:",
-      '{"title":"...","description":"...","reason":"...","how_to_apply":["..."],"examples":[{"bad":"...","good":"...","explanation":"..."}],"when_to_use":["..."],"exceptions":["..."]}',
+      '{"title":"...","description":"...","reason":"...","how_to_apply":["..."],"examples":[{"bad":"...","good":"...","explanation":"..."}],"when_to_use":["..."],"exceptions":["..."],"scenes":{"tech":["..."],"functional":["..."],"business":[]}}',
     ].join("\n");
 
     try {
@@ -529,12 +530,50 @@ export class HybridRuleGenerator {
         },
       };
 
+      // Scenes: prefer the LLM's scenes (方案 A), then fall back to extracting
+      // them from the memory content (方案 B). Never leave scenes empty —
+      // empty_scenes would hold the rule for manual review and drop it here.
+      let ruleScenes: Scene = scene || { tech: [], functional: [], business: [] };
+      const llmScenes = parsed.scenes as Scene | undefined;
+      const hasLlmScenes = llmScenes && (
+        (Array.isArray(llmScenes.tech) && llmScenes.tech.length > 0) ||
+        (Array.isArray(llmScenes.functional) && llmScenes.functional.length > 0) ||
+        (Array.isArray(llmScenes.business) && llmScenes.business.length > 0)
+      );
+      if (hasLlmScenes) {
+        ruleScenes = {
+          tech: Array.isArray(llmScenes.tech) ? llmScenes.tech : [],
+          functional: Array.isArray(llmScenes.functional) ? llmScenes.functional : [],
+          business: Array.isArray(llmScenes.business) ? llmScenes.business : [],
+        };
+      } else {
+        // Fallback: re-derive scenes from the memory content + evidence so the
+        // rule is not dropped by the empty_scenes review gate.
+        const sceneExtractor = SceneExtractor.getInstance();
+        const evidenceText = memoryInput.evidence_excerpts.slice(0, 3).join(" ");
+        const sourceText = [
+          memoryInput.content,
+          memoryInput.summary,
+          evidenceText,
+        ].filter(Boolean).join(" ");
+        const reExtracted = sceneExtractor.extractScene({ text: sourceText });
+        const hasReExtracted =
+          reExtracted.tech.length > 0 ||
+          reExtracted.functional.length > 0 ||
+          reExtracted.business.length > 0;
+        if (hasReExtracted) {
+          ruleScenes = reExtracted;
+        }
+        // If both LLM and extractor produced nothing, keep the caller-provided
+        // scene (possibly empty) — finalizeRule decides whether to hold it.
+      }
+
       const indexEntry: RuleIndexEntry = {
         id: ruleId,
         type: memoryInput.pattern_type,
         priority: memoryInput.promotion.score >= 0.85 ? "high" as any : "medium" as any,
         confidence: memoryInput.promotion.score,
-        scenes: scene || { tech: [], functional: [], business: [] },
+        scenes: ruleScenes,
         keywords: [],
         created_at: now,
         updated_at: now,
