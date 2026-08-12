@@ -24,6 +24,7 @@ import { LLMConfigManager } from "./llm-config-manager.js";
 import { RuleQualityController } from "./rule-quality.js";
 import { ScopeDetector } from "./scope-detector.js";
 import { SceneExtractor } from "./scene-extractor.js";
+import { tokenizeWithJieba } from "./jieba-utils.js";
 import { MemoryRepository } from "./memory-models.js";
 import { createDefaultMemoryRepository } from "../storage/memory-sqlite-store.js";
 import { resolveMemorySupport, findRelevantMemoryIds } from "./memory-support.js";
@@ -775,6 +776,13 @@ export class BatchLLMRuleGenerator {
       // scene (possibly empty) — finalizeRule decides whether to hold it.
     }
 
+    // Keywords: enrich the cluster's common keywords with terms extracted from
+    // the representative description + generated title/description. The cluster
+    // keywords alone tend to be too sparse (e.g. ["create","task","agent"]) for
+    // good search recall — jieba tokenization on the fuller text yields more
+    // distinctive technical terms (e.g. "paperclip", "agent-api", "hire").
+    const enrichedKeywords = this.extractKeywords(cluster, parsed);
+
     // Build formatted content
     let formattedContent = `# ${parsed.title}\n\n`;
     formattedContent += `## Description\n\n${parsed.description}\n\n`;
@@ -810,7 +818,7 @@ export class BatchLLMRuleGenerator {
       priority: this.determinePriority(cluster),
       confidence: cluster.avg_confidence,
       scenes: ruleScenes,
-      keywords: cluster.common_keywords,
+      keywords: enrichedKeywords,
       created_at: new Date().toISOString(),
       updated_at: new Date().toISOString(),
       description: parsed.description,
@@ -839,7 +847,7 @@ export class BatchLLMRuleGenerator {
         pattern_occurrences: cluster.total_occurrences,
         first_seen: new Date().toISOString(),
         last_seen: new Date().toISOString(),
-        keywords: cluster.common_keywords,
+        keywords: enrichedKeywords,
         source_patterns: parsed.source_patterns,
         merged_pattern_count: parsed.merged_count,
         scope_confidence: parsed.scope_confidence,
@@ -880,6 +888,49 @@ export class BatchLLMRuleGenerator {
     content.metadata.confidence = unified.overall;
 
     return { indexEntry, content };
+  }
+
+  /**
+   * Enrich rule keywords: merge the cluster's common keywords with terms
+   * tokenized from the representative description + generated title/description.
+   * Filters stop words / single chars / pure numbers so the result is a
+   * distinctive, search-friendly keyword set rather than sparse generic terms.
+   */
+  private extractKeywords(cluster: PatternClusterGroup, parsed: any): string[] {
+    const sourceText = [
+      cluster.representative_description,
+      parsed.title,
+      parsed.description,
+    ].filter(Boolean).join(" ");
+
+    const stopWords = new Set([
+      "the", "a", "an", "and", "or", "but", "in", "on", "at", "to", "for",
+      "of", "with", "by", "from", "up", "about", "into", "through", "is", "are",
+      "was", "were", "be", "been", "being", "have", "has", "had", "do", "does",
+      "did", "will", "would", "should", "could", "can", "may", "might", "must",
+      "this", "that", "these", "those", "it", "its", "use", "using", "used",
+      "when", "how", "what", "why", "the", "your", "you", "we", "our", "they",
+      "的", "了", "在", "是", "我", "有", "和", "就", "不", "人", "都", "一",
+      "这", "个", "上", "来", "说", "到", "要", "可以", "里", "着", "我们",
+      "他们", "它", "那", "什么", "怎么", "为什么", "这个", "那个", "一个",
+      "没有", "不是", "但是", "如果", "因为", "所以", "而且", "或者", "虽然",
+      "已经", "应该", "需要", "可能", "然后", "之后", "时候", "问题",
+      "方法", "方式", "情况", "结果", "信息", "内容", "东西", "事情",
+    ]);
+
+    const tokens = tokenizeWithJieba(sourceText, 2)
+      .filter(w => w.length >= 2)
+      .filter(w => !stopWords.has(w))
+      .filter(w => !/^\d+$/.test(w))
+      .filter(w => /[a-zA-Z0-9一-鿿㐀-䶿]/.test(w));
+
+    // Deduplicate, keeping cluster keywords first (they're pre-curated).
+    const merged: string[] = [];
+    for (const kw of [...(cluster.common_keywords || []), ...tokens]) {
+      if (kw && kw.trim() && !merged.includes(kw)) merged.push(kw);
+    }
+    // Cap at a sane number to avoid keyword bloat.
+    return merged.slice(0, 20);
   }
 
   /**
