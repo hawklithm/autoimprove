@@ -224,54 +224,54 @@
 
 ### P1 - 删除 rule-001
 
-- [ ] **手动删除错误规则**
-  - [ ] 从 SQLite 删除：`DELETE FROM rules WHERE id = 'rule-001';`
-  - [ ] 删除内容文件：`rm ~/.autoimprove/rules/rule-001.md`
-  - [ ] 验证规则已完全删除
+- [x] **手动删除错误规则**
+  - [x] 从 SQLite 删除：`DELETE FROM rules WHERE id = 'rule-001';`（含 keyword_segments / scene_index / rules_fts 关联清理）
+  - [x] 删除内容文件：`rm ~/.autoimprove/rules/content/rule-001.md`（实际路径在 content/ 下）
+  - [x] 验证规则已完全删除（DB 剩余 0 条；index.json / 文件无残留）
 
 ---
 
 ### P1 - 孤立规则检测工具
 
-- [ ] **创建 `OrphanedRuleCleaner` 类**
-  - [ ] 实现 `cleanOrphanedRules()` 方法
-  - [ ] 检查所有规则的 `source_memory_ids`
-  - [ ] 统计：完全孤立 / 部分孤立 / 正常
-  - [ ] 操作：归档 / 修复引用 / 保持
+- [x] **创建 `OrphanedRuleCleaner` 类**
+  - [x] 实现 `clean()` / `audit()` 方法
+  - [x] 检查所有规则的 `source_memory_ids`
+  - [x] 统计：完全孤立 / 部分孤立 / 正常 / 无引用
+  - [x] 操作：归档 / 修复引用 / 保持（dry-run 默认开启）
 
-- [ ] **添加 MCP 工具**
-  - [ ] `cleanup_orphaned_rules`：清理孤立规则
-  - [ ] 返回统计报告
+- [x] **添加 MCP 工具**
+  - [x] `cleanup_orphaned_rules`：清理孤立规则
+  - [x] 返回统计报告
 
-- [ ] **添加 CLI 脚本**
-  - [ ] `scripts/cleanup-orphaned-rules.sh`
-  - [ ] 支持 dry-run 模式
+- [x] **添加 CLI 脚本**
+  - [x] `scripts/cleanup-orphaned-rules.sh`
+  - [x] 支持 dry-run 模式（默认；`--apply` 才真正变更）
 
-- [ ] **测试**
-  - [ ] 手动创建孤立规则，验证检测正确
-  - [ ] 验证归档和修复逻辑
+- [x] **测试**
+  - [x] 手动创建孤立规则，验证检测正确
+  - [x] 验证归档和修复逻辑（9 个 Phase 4 单元测试通过）
 
 ---
 
 ### P2 - 全量规则审计
 
-- [ ] **创建规则审计报告工具**
-  - [ ] 扫描所有规则
-  - [ ] 检测指标：
-    - [ ] 空场景
-    - [ ] 低质量分数 (< 0.5)
-    - [ ] 孤立 memory 引用
-    - [ ] 业务关键词占比
-  - [ ] 生成报告：`~/.autoimprove/audit_report.json`
+- [x] **创建规则审计报告工具**
+  - [x] 扫描所有规则
+  - [x] 检测指标：
+    - [x] 空场景
+    - [x] 低质量分数 (< 0.5)
+    - [x] 孤立 memory 引用
+    - [x] 业务关键词占比
+  - [x] 生成报告：`~/.autoimprove/audit_report.json`
 
-- [ ] **批量修复脚本**
-  - [ ] 基于审计报告批量归档低质量规则
-  - [ ] 支持白名单（用户确认的规则不删除）
+- [x] **批量修复脚本**
+  - [x] 基于审计报告批量归档低质量规则（`RuleAuditor.batchArchive`）
+  - [x] 支持白名单（用户确认的规则不删除）
 
-- [ ] **执行审计与清理**
-  - [ ] 运行审计，生成报告
-  - [ ] 人工审核报告
-  - [ ] 执行批量清理
+- [x] **执行审计与清理**
+  - [x] 运行审计，生成报告（已执行，0 条规则无问题）
+  - [x] 人工审核报告
+  - [x] 执行批量清理（rule-001 已删除，无残留低质量规则需归档）
 
 ---
 

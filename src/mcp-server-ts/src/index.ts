@@ -23,6 +23,8 @@ import { SessionAnalyzer } from "./core/session-analyzer.js";
 import { RuleGenerator } from "./core/rule-generator.js";
 import { HybridRuleGenerator } from "./core/hybrid-rule-generator.js";
 import { RuleReviewQueue } from "./core/rule-review-queue.js";
+import { OrphanedRuleCleaner } from "./core/orphaned-rule-cleaner.js";
+import { RuleAuditor } from "./core/rule-auditor.js";
 import { TemplateBasedRuleGenerator } from "./core/template-based-rule-generator.js";
 import { RuleMatcher } from "./core/rule-matcher.js";
 import { RuleQualityController, UNIFIED_RULE_MIN_SCORE } from "./core/rule-quality.js";
@@ -1181,6 +1183,40 @@ Returns: Rule metadata + full content (title, description, how_to_apply, when_to
           required: ["rule_id"],
         },
       },
+      {
+        name: "cleanup_orphaned_rules",
+        description: "Phase 4/P1: Scan all rules for orphaned/inactive memory references. Categorizes rules (fully_orphaned / partially_orphaned / no_references / normal) and optionally archive or fix them. Dry-run by default.",
+        inputSchema: {
+          type: "object",
+          properties: {
+            action: {
+              type: "string",
+              enum: ["report", "archive", "fix"],
+              description: "report = audit only; archive = archive fully-orphaned rules; fix = trim partially-orphaned rules to valid references. Default: report",
+            },
+            dry_run: { type: "boolean", description: "When true (default), no storage mutation occurs." },
+            whitelist: {
+              type: "array",
+              items: { type: "string" },
+              description: "Rule ids to never archive/fix (user-confirmed rules).",
+            },
+          },
+          required: [],
+        },
+      },
+      {
+        name: "audit_rules",
+        description: "Phase 4/P2: Full rule-set audit. Detects empty scenes, low-quality scores, orphaned memory references, and business-dominated content. Writes a report to ~/.autoimprove/audit_report.json.",
+        inputSchema: {
+          type: "object",
+          properties: {
+            quality_threshold: { type: "number", description: "Minimum acceptable unified quality score. Default 0.5" },
+            write_report: { type: "boolean", description: "Persist the report to disk. Default true" },
+            report_path: { type: "string", description: "Override report output path" },
+          },
+          required: [],
+        },
+      },
     ],
   };
 });
@@ -1327,6 +1363,12 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
       case "reject_rule":
         return await handleRejectRule(request.params.arguments);
+
+      case "cleanup_orphaned_rules":
+        return await handleCleanupOrphanedRules(request.params.arguments);
+
+      case "audit_rules":
+        return await handleAuditRules(request.params.arguments);
 
       default:
         throw new Error(`Unknown tool: ${request.params.name}`);
@@ -4895,6 +4937,75 @@ async function handleRejectRule(args: any) {
   }
   return {
     content: [{ type: "text", text: JSON.stringify({ success: true, rule_id: ruleId, status: item.status }) }],
+  };
+}
+
+// ============================================================================
+// Phase 4: Orphaned rule cleanup + audit tools
+// ============================================================================
+
+async function handleCleanupOrphanedRules(args: any) {
+  const action = (args?.action as "report" | "archive" | "fix") || "report";
+  const dryRun = args?.dry_run !== false; // default true
+  const whitelist = Array.isArray(args?.whitelist) ? (args.whitelist as string[]) : [];
+
+  const cleaner = new OrphanedRuleCleaner(indexManager, memoryStore);
+  const report = cleaner.clean({ action, dryRun, whitelist });
+  return {
+    content: [
+      {
+        type: "text",
+        text: JSON.stringify(
+          {
+            action,
+            dry_run: report.dry_run,
+            total_rules: report.total_rules,
+            fully_orphaned: report.fully_orphaned,
+            partially_orphaned: report.partially_orphaned,
+            no_references: report.no_references,
+            normal: report.normal,
+            whitelist: report.whitelist,
+            details: report.rules.filter(
+              (r) => r.type === "fully_orphaned" || r.type === "partially_orphaned"
+            ),
+          },
+          null,
+          2
+        ),
+      },
+    ],
+  };
+}
+
+async function handleAuditRules(args: any) {
+  const qualityThreshold = typeof args?.quality_threshold === "number" ? args.quality_threshold : 0.5;
+  const writeReport = args?.write_report !== false; // default true
+  const reportPath = typeof args?.report_path === "string" ? args.report_path : undefined;
+
+  const auditor = new RuleAuditor(indexManager, memoryStore);
+  const report = auditor.generate(qualityThreshold);
+  let reportPathOut: string | undefined;
+  if (writeReport) {
+    reportPathOut = auditor.writeReport(report, reportPath);
+  }
+  return {
+    content: [
+      {
+        type: "text",
+        text: JSON.stringify(
+          {
+            total_rules: report.total_rules,
+            quality_threshold: report.quality_threshold,
+            summary: report.summary,
+            issue_count: report.issues.length,
+            report_path: reportPathOut,
+            issues: report.issues,
+          },
+          null,
+          2
+        ),
+      },
+    ],
   };
 }
 
