@@ -279,31 +279,32 @@
 
 ### P2 - 配置项完善
 
-- [ ] **更新 `~/.autonfig.json` 模板**
-  - [ ] 添加 `pattern_detection` 配置块
-  - [ ] 添加 `memory_extraction` 配置块
-  - [ ] 添加 `rule_generation.review_queue` 配置
+- [x] **更新 `~/.autoimprove/config.json` 模板（`templates/config.json`）**
+  - [x] 添加 `pattern_detection` 配置块
+  - [x] 添加 `memory_extraction` 配置块
+  - [x] 添加 `rule_generation.review_queue` 配置
+  - [x] 同步更新 `Config` 接口与 `DEFAULT_CONFIG`，并将 `memory_extraction.enable_content_filter` 接入 `SessionMemoryExtractor`
 
-- [ ] **配置项文档**
-  - [ ] 在 `docs/CONFIGURATION.md` 中说明每个配置项
-  - [ ] 提供示例配置
+- [x] **配置项文档**
+  - [x] 在 `docs/CONFIGURATION.md` 中说明每个配置项
+  - [x] 提供示例配置
 
 ---
 
 ### P2 - 用户文档更新
 
-- [ ] **更新 README.md**
-  - [ ] 说明新的规则质量控制机制
-  - [ ] 说明审核队列的使用方法
+- [x] **更新 README.md**
+  - [x] 说明新的规则质量控制机制
+  - [x] 说明审核队列的使用方法
 
-- [ ] **创建 `docs/RULE_QUALITY_CONTROL.md`**
-  - [ ] 介绍四层质量控制机制
-  - [ ] 说明各层的拦截标准
-  - [ ] 提供常见问题的排查指南
+- [x] **创建 `docs/RULE_QUALITY_CONTROL.md`**
+  - [x] 介绍四层质量控制机制
+  - [x] 说明各层的拦截标准
+  - [x] 提供常见问题的排查指南
 
-- [ ] **创建 `docs/REVIEW_QUEUE_GUIDE.md`**
-  - [ ] 说明审核队列的工作流程
-  - [ ] 提供审核标准和最佳实践
+- [x] **创建 `docs/REVIEW_QUEUE_GUIDE.md`**
+  - [x] 说明审核队列的工作流程
+  - [x] 提供审核标准和最佳实践
 
 ---
 

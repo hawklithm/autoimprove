@@ -348,6 +348,46 @@ Edit `~/.autoimprove/config.json`:
 }
 ```
 
+#### Rule Quality Control Configuration
+
+To prevent low-quality rules (e.g. business content mis-recognized as coding
+patterns, empty-scene rules, or rules referencing missing memories), AutoImprove
+applies a four-layer quality gate. Configure it in `~/.autoimprove/config.json`:
+
+```json
+{
+  "pattern_detection": {
+    "enable_content_filter": true,
+    "use_llm_classification": false
+  },
+  "memory_extraction": {
+    "enable_content_filter": true,
+    "require_code_context": false
+  },
+  "rule_generation": {
+    "require_manual_review_for": {
+      "empty_scene": true,
+      "low_quality_score": 0.5
+    },
+    "review_queue": {
+      "path": "~/.autoimprove/review_queue.jsonl"
+    }
+  }
+}
+```
+
+- `pattern_detection.enable_content_filter` — drop business-dominant patterns before they reach memory/rule generation.
+- `pattern_detection.use_llm_classification` — (opt-in) use an LLM to disambiguate content the heuristic is unsure about.
+- `memory_extraction.enable_content_filter` — reject non-coding patterns before they become memories.
+- `memory_extraction.require_code_context` — additionally require file-path / tool-call context.
+- `rule_generation.require_manual_review_for` — hold empty-scene / low-quality rules in a review queue instead of auto-persisting.
+- `rule_generation.review_queue.path` — where the review queue JSONL lives.
+
+See [docs/RULE_QUALITY_CONTROL.md](docs/RULE_QUALITY_CONTROL.md) for the full
+mechanism and [docs/REVIEW_QUEUE_GUIDE.md](docs/REVIEW_QUEUE_GUIDE.md) for the
+review workflow. The `cleanup_orphaned_rules` and `audit_rules` MCP tools (and
+their CLI wrappers under `scripts/`) help clean up existing data.
+
 ### Environment Variables
 
 Optional environment variables (`.env` or shell):

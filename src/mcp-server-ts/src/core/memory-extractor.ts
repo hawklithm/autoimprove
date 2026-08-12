@@ -5,6 +5,7 @@ import { LLMConfigManager } from "./llm-config-manager.js";
 import { MemoryEntity, MemoryEvidence, MemoryKind, MemoryNamespace, MemoryRecord, MemoryRelation, createMemoryId, InfoClass } from "./memory-models.js";
 import { InfoClassifier } from "./info-classifier.js";
 import { PatternContentFilter } from "./pattern-content-filter.js";
+import { loadConfig } from "../storage/init.js";
 import { logger } from "./logger.js";
 
 export interface MemoryCandidate {
@@ -27,6 +28,29 @@ export class SessionMemoryExtractor {
   private readonly llm = new LLMConfigManager();
   private readonly classifier = new InfoClassifier();
   private readonly contentFilter = new PatternContentFilter();
+  /** Phase 5: gated by the `memory_extraction` config block (defaults to on). */
+  private readonly enableContentFilter: boolean;
+  private readonly requireCodeContext: boolean;
+
+  constructor() {
+    try {
+      const cfg = loadConfig().memory_extraction;
+      this.enableContentFilter = cfg?.enable_content_filter ?? true;
+      this.requireCodeContext = cfg?.require_code_context ?? false;
+    } catch {
+      this.enableContentFilter = true;
+      this.requireCodeContext = false;
+    }
+  }
+
+  /**
+   * Phase 5: when the content filter is disabled via config, everything passes;
+   * otherwise delegate to the keyword-based code/-business classifier.
+   */
+  private passesContentFilter(text: string): boolean {
+    if (!this.enableContentFilter) return true;
+    return this.contentFilter.isCodeRelated(text).allowed;
+  }
 
   async extract(session: SessionData, patterns: Pattern[], scene: Scene): Promise<MemoryRecord[]> {
     // Phase 2 / P0: drop non-code patterns before any memory generation so that
@@ -57,6 +81,8 @@ export class SessionMemoryExtractor {
    */
   private filterCodePatterns(patterns: Pattern[]): Pattern[] {
     if (patterns.length === 0) return patterns;
+    // Phase 5: if the content filter is disabled via config, keep all patterns.
+    if (!this.enableContentFilter) return patterns;
     const rejected: string[] = [];
     const kept = patterns.filter(pattern => {
       const text = [
@@ -109,7 +135,7 @@ export class SessionMemoryExtractor {
 
     for (const message of messages) {
       // Phase 2 / P0: skip pure business content — it is not a coding preference.
-      if (!this.contentFilter.isCodeRelated(message.content).allowed) continue;
+      if (!this.passesContentFilter(message.content)) continue;
 
       if (/\b(prefer|always|never|must|should|喜欢|偏好|必须|不要|统一)\b/i.test(message.content)) {
         candidates.push(toCandidate(
@@ -125,7 +151,10 @@ export class SessionMemoryExtractor {
       // Require code context so non-technical patterns don't slip through even
       // if the heuristic keyword match let them survive.
       const patternText = pattern.description;
-      if (!this.hasCodeContext(patternText) && !this.contentFilter.isCodeRelated(patternText).allowed) {
+      if (!this.hasCodeContext(patternText) && !this.passesContentFilter(patternText)) {
+        continue;
+      }
+      if (this.requireCodeContext && !this.hasCodeContext(patternText)) {
         continue;
       }
       candidates.push(toCandidate(

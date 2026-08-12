@@ -58,6 +58,13 @@ export interface Config {
     /** Use the optional LLM semantic classifier when the heuristic is uncertain. */
     use_llm_classification?: boolean;
   };
+  /** Phase 2 / P0+P1: Memory Extraction content filtering. */
+  memory_extraction?: {
+    /** Reject non-coding (business-dominant) patterns before they become memories. */
+    enable_content_filter?: boolean;
+    /** Require file-path / tool-call code context in a pattern before extracting memory. */
+    require_code_context?: boolean;
+  };
   rule_generation?: {
     use_template_generation?: boolean; // Enable SOP-style template compiler (Phase 2)
     template_hot_reload?: boolean;      // Watch templates for changes (dev mode)
@@ -123,6 +130,10 @@ const DEFAULT_CONFIG: Config = {
   pattern_detection: {
     enable_content_filter: true,   // P0: block business-dominant patterns by default
     use_llm_classification: false, // P1: opt-in LLM semantic classification
+  },
+  memory_extraction: {
+    enable_content_filter: true,   // P2: block business-dominant memories by default
+    require_code_context: false,  // P2: when true, also require code context (path/tool call)
   },
   rule_generation: {
     use_template_generation: true,  // Enable SOP-style template compiler by default

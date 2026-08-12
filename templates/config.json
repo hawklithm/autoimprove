@@ -18,9 +18,24 @@
     "min_confidence": 0.3
   },
   "business_domain_mappings": {},
+  "pattern_detection": {
+    "enable_content_filter": true,
+    "use_llm_classification": false
+  },
+  "memory_extraction": {
+    "enable_content_filter": true,
+    "require_code_context": false
+  },
   "rule_generation": {
     "use_template_generation": true,
-    "template_hot_reload": true
+    "template_hot_reload": true,
+    "require_manual_review_for": {
+      "empty_scene": true,
+      "low_quality_score": 0.5
+    },
+    "review_queue": {
+      "path": "~/.autoimprove/review_queue.jsonl"
+    }
   },
   "local_ml": {
     "enabled": false,
