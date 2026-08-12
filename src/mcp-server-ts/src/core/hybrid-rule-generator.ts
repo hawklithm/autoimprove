@@ -26,6 +26,7 @@ import { scopeResolver, ScopeResolver } from "./scope-resolver.js";
 import { MemoryRuleInput } from "./memory-rule-adapter.js";
 import { RuleReviewQueue } from "./rule-review-queue.js";
 import { MemoryRepository } from "./memory-models.js";
+import { withLLMRetry, DEFAULT_LLM_TIMEOUT_MS, DEFAULT_LLM_MAX_RETRIES } from "./llm-retry.js";
 
 // Log file path
 const LLM_LOG_FILE = join(homedir(), ".autoimprove", "llm-calls.log");
@@ -101,12 +102,27 @@ export class HybridRuleGenerator {
     }
 
     if (baseURL) {
-      this.openai = new OpenAI({ apiKey, baseURL });
-      logger.debug("hybrid-generator", `LLM initialized: baseURL=${baseURL}, model=${this.model}`);
+      this.openai = new OpenAI({ apiKey, baseURL, timeout: DEFAULT_LLM_TIMEOUT_MS });
+      logger.debug("hybrid-generator", `LLM initialized: baseURL=${baseURL}, model=${this.model}, timeout=${DEFAULT_LLM_TIMEOUT_MS}ms`);
     } else {
-      this.openai = new OpenAI({ apiKey });
-      logger.debug("hybrid-generator", `LLM initialized with standard OpenAI, model=${this.model}`);
+      this.openai = new OpenAI({ apiKey, timeout: DEFAULT_LLM_TIMEOUT_MS });
+      logger.debug("hybrid-generator", `LLM initialized with standard OpenAI, model=${this.model}, timeout=${DEFAULT_LLM_TIMEOUT_MS}ms`);
     }
+  }
+
+  /**
+   * Wrapper around the OpenAI chat completion call that applies the shared
+   * timeout (set on the client) and automatic retry policy (3 retries, exponential
+   * backoff) for transient failures.
+   */
+  private async chatWithRetry(params: any): Promise<any> {
+    if (!this.openai) {
+      throw new Error("OpenAI client not initialized");
+    }
+    return withLLMRetry(() => this.openai!.chat.completions.create(params), {
+      maxRetries: DEFAULT_LLM_MAX_RETRIES,
+      timeoutMs: DEFAULT_LLM_TIMEOUT_MS,
+    });
   }
 
   /**
@@ -466,7 +482,7 @@ export class HybridRuleGenerator {
     ].join("\n");
 
     try {
-      const response = await this.openai.chat.completions.create({
+      const response = await this.chatWithRetry({
         model: this.model,
         max_tokens: 2000,
         messages: [{ role: "user", content: prompt }],
@@ -718,7 +734,7 @@ Keywords: ${pattern.keywords.join(", ")}
 Observed project roots: ${(pattern.project_paths || []).join(", ") || "unknown"}
 Evidence:\n${evidence}`;
     try {
-      const response = await this.openai.chat.completions.create({
+      const response = await this.chatWithRetry({
         model: this.model,
         max_tokens: 300,
         messages: [{ role: "user", content: prompt }]
@@ -767,7 +783,7 @@ Evidence:\n${evidence}`;
     logger.debug("hybrid-generation", "LLM request sent", { rule_id: ruleId, model: this.model, max_tokens: maxTokens, prompt_length: prompt.length });
     appendFileSync(LLM_LOG_FILE, requestLog, "utf8");
 
-    const response = await this.openai.chat.completions.create({
+    const response = await this.chatWithRetry({
       model: this.model,
       max_tokens: maxTokens,
       messages: [{

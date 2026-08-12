@@ -74,7 +74,11 @@ describe("NeighborSignalMatcher", () => {
     expect(matcher.getStats().total_patterns).toBeGreaterThanOrEqual(2);
   });
 
-  it("exposes compatible getStats / rebuild surfaces", () => {
+  it("exposes compatible getStats / rebuild surfaces", async () => {
+    // The constructor kicks off the index build asynchronously (fire-and-forget),
+    // so we must await at least one match to guarantee the index is populated
+    // before reading statistics.
+    await matcher.match("warmup to force index build", "test-session", "warmup");
     const stats = matcher.getStats();
     expect(stats.total_patterns).toBeGreaterThanOrEqual(2);
     expect(stats.mode).toBe("neighbor");

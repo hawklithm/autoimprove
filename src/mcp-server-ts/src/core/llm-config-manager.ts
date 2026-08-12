@@ -22,6 +22,7 @@
 import OpenAI from "openai";
 import { logger } from "./logger.js";
 import { LLMFailureTracker } from "./llm-failure-tracker.js";
+import { withLLMRetry, DEFAULT_LLM_TIMEOUT_MS, DEFAULT_LLM_MAX_RETRIES } from "./llm-retry.js";
 
 export type RuleLanguage = "auto" | "zh" | "en";
 
@@ -179,11 +180,12 @@ export class LLMConfigManager {
   /**
    * Get OpenAI client for current configuration
    */
-  private getClient(config: LLMConfig): OpenAI {
-    const cacheKey = `${config.name}-${config.baseURL || "default"}`;
+  private getClient(config: LLMConfig, timeoutMs: number = DEFAULT_LLM_TIMEOUT_MS): OpenAI {
+    // Cache key includes the timeout so different timeout requests get isolated clients.
+    const cacheKey = `${config.name}-${config.baseURL || "default"}-${timeoutMs}`;
 
     if (!this.clients.has(cacheKey)) {
-      const clientOptions: any = { apiKey: config.apiKey };
+      const clientOptions: any = { apiKey: config.apiKey, timeout: timeoutMs };
       if (config.baseURL) {
         clientOptions.baseURL = config.baseURL;
       }
@@ -281,7 +283,7 @@ export class LLMConfigManager {
     operation: (client: OpenAI, model: string) => Promise<T>,
     options: LLMCallOptions = {}
   ): Promise<T> {
-    const { maxRetries = 1, fallbackOnError = true } = options;
+    const { maxRetries = DEFAULT_LLM_MAX_RETRIES, timeoutMs = DEFAULT_LLM_TIMEOUT_MS, fallbackOnError = true } = options;
 
     if (this.configs.length === 0) {
       throw new Error("No LLM configurations available - set LLM_API_KEY or ANTHROPIC_API_KEY");
@@ -294,7 +296,7 @@ export class LLMConfigManager {
     // Use local index to avoid race conditions in concurrent calls
     let localConfigIndex = this.currentConfigIndex;
 
-    logger.debug("llm-config", `Starting callWithFallback: ${this.configs.length} configs available, starting from index ${localConfigIndex}, fallbackOnError: ${fallbackOnError}`);
+    logger.debug("llm-config", `Starting callWithFallback: ${this.configs.length} configs available, starting from index ${localConfigIndex}, maxRetries: ${maxRetries}, timeoutMs: ${timeoutMs}, fallbackOnError: ${fallbackOnError}`);
 
     // Try all configs starting from current index
     while (attemptCount < this.configs.length) {
@@ -310,14 +312,18 @@ export class LLMConfigManager {
         break;
       }
 
-      const client = this.getClient(config);
+      const client = this.getClient(config, timeoutMs);
 
       try {
         const maskedToken = this.maskApiKey(config.apiKey);
         logger.debug("llm-config", `Attempting LLM call with ${config.name} (attempt ${attemptCount + 1}/${this.configs.length}, index: ${localConfigIndex})`);
         logger.debug("llm-config", `  Config: model=${config.model}, baseURL=${config.baseURL || 'default'}, apiKey=${maskedToken}`);
 
-        const result = await operation(client, config.model);
+        // Retry transient failures (timeouts, 429, 5xx, network) before falling back.
+        const result = await withLLMRetry(
+          () => operation(client, config.model),
+          { maxRetries, timeoutMs }
+        );
 
         // Success - reset failure tracking and log if we recovered from previous failure
         this.failureTracker.recordSuccess(config.name);

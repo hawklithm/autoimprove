@@ -15,6 +15,7 @@ import { readFileSync, readdirSync, watch, FSWatcher } from 'fs';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
 import OpenAI from 'openai';
+import { DEFAULT_LLM_TIMEOUT_MS, DEFAULT_LLM_MAX_RETRIES, withLLMRetry } from './llm-retry.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -65,8 +66,8 @@ export class TemplateBasedRuleGenerator {
       logger.warn('template-generator', 'No API key found - LLM calls will fail');
     } else {
       this.openai = baseURL
-        ? new OpenAI({ apiKey, baseURL })
-        : new OpenAI({ apiKey });
+        ? new OpenAI({ apiKey, baseURL, timeout: DEFAULT_LLM_TIMEOUT_MS })
+        : new OpenAI({ apiKey, timeout: DEFAULT_LLM_TIMEOUT_MS });
 
       this.llmCaller = async (inputs: Record<string, any>) => {
         return this.executeLLMCall(inputs);
@@ -259,14 +260,14 @@ export class TemplateBasedRuleGenerator {
 
     logger.debug('template-generator', `LLM call: ${promptTemplate.substring(0, 100)}...`);
 
-    const response = await this.openai.chat.completions.create({
+    const response = await withLLMRetry(() => this.openai!.chat.completions.create({
       model: this.model,
       max_tokens: maxTokens,
       messages: [{
         role: 'user',
         content: promptTemplate,
       }],
-    });
+    }), { maxRetries: DEFAULT_LLM_MAX_RETRIES, timeoutMs: DEFAULT_LLM_TIMEOUT_MS });
 
     const responseText = response.choices[0]?.message?.content || '';
 

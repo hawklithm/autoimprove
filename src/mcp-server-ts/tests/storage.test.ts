@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { mkdirSync, rmSync, existsSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
@@ -340,8 +340,27 @@ describe("SessionArchiveManager", () => {
 });
 
 describe("Storage Initialization", () => {
+  // `init.ts` resolves STORAGE_ROOT from AUTOIMPROVE_STORAGE_ROOT once at module
+  // load time, so the top-level import already points at the real ~/.autoimprove.
+  // Re-evaluate the module against a throwaway temp root so this test validates
+  // the default config shape instead of whatever lives on the developer's disk.
+  let loadConfigFn: typeof loadConfig;
+
+  beforeEach(async () => {
+    const tempDir = join(tmpdir(), `autoimprove-cfg-test-${Date.now()}-${Math.random()}`);
+    mkdirSync(tempDir, { recursive: true });
+    vi.stubEnv("AUTOIMPROVE_STORAGE_ROOT", tempDir);
+    vi.resetModules();
+    ({ loadConfig: loadConfigFn } = await import("../src/storage/init.js"));
+  });
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    vi.resetModules();
+  });
+
   it("should have valid config structure", () => {
-    const config = loadConfig();
+    const config = loadConfigFn();
 
     expect(config.version).toBe("1.0");
     expect(config.confidence_thresholds).toBeDefined();
