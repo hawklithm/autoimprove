@@ -23,6 +23,7 @@ import { JSONExtractor } from "./json-extractor.js";
 import { LLMConfigManager } from "./llm-config-manager.js";
 import { RuleQualityController } from "./rule-quality.js";
 import { ScopeDetector } from "./scope-detector.js";
+import { SceneExtractor } from "./scene-extractor.js";
 import { MemoryRepository } from "./memory-models.js";
 import { createDefaultMemoryRepository } from "../storage/memory-sqlite-store.js";
 import { resolveMemorySupport, findRelevantMemoryIds } from "./memory-support.js";
@@ -638,6 +639,7 @@ export class BatchLLMRuleGenerator {
           how_to_apply: rule.how_to_apply || [],
           when_to_use: rule.when_to_use || [],
           exceptions: rule.exceptions,
+          scenes: rule.scenes || undefined,
           scope: [RuleScope.GLOBAL, RuleScope.ORGANIZATION, RuleScope.PROJECT].includes(rule.scope)
             ? rule.scope
             : RuleScope.GLOBAL,
@@ -739,6 +741,40 @@ export class BatchLLMRuleGenerator {
     // Use first pattern for metadata
     const firstPattern = cluster.patterns[0];
 
+    // Scenes: prefer the LLM-provided scenes (prompt already asks for them),
+    // then fall back to SceneExtractor from the cluster text — never silently
+    // discard them (empty_scenes holds the rule for manual review).
+    let ruleScenes: Scene = scene || { tech: [], functional: [], business: [] };
+    const llmScenes = parsed.scenes as Scene | undefined;
+    const hasLlmScenes = llmScenes && (
+      (Array.isArray(llmScenes.tech) && llmScenes.tech.length > 0) ||
+      (Array.isArray(llmScenes.functional) && llmScenes.functional.length > 0) ||
+      (Array.isArray(llmScenes.business) && llmScenes.business.length > 0)
+    );
+    if (hasLlmScenes) {
+      ruleScenes = {
+        tech: Array.isArray(llmScenes.tech) ? llmScenes.tech : [],
+        functional: Array.isArray(llmScenes.functional) ? llmScenes.functional : [],
+        business: Array.isArray(llmScenes.business) ? llmScenes.business : [],
+      };
+    } else {
+      const sceneExtractor = SceneExtractor.getInstance();
+      const sourceText = [
+        cluster.representative_description,
+        ...(cluster.common_keywords || []),
+      ].filter(Boolean).join(" ");
+      const reExtracted = sceneExtractor.extractScene({ text: sourceText });
+      const hasReExtracted =
+        reExtracted.tech.length > 0 ||
+        reExtracted.functional.length > 0 ||
+        reExtracted.business.length > 0;
+      if (hasReExtracted) {
+        ruleScenes = reExtracted;
+      }
+      // If both LLM and extractor produced nothing, keep the caller-provided
+      // scene (possibly empty) — finalizeRule decides whether to hold it.
+    }
+
     // Build formatted content
     let formattedContent = `# ${parsed.title}\n\n`;
     formattedContent += `## Description\n\n${parsed.description}\n\n`;
@@ -773,7 +809,7 @@ export class BatchLLMRuleGenerator {
       type: firstPattern.type,
       priority: this.determinePriority(cluster),
       confidence: cluster.avg_confidence,
-      scenes: scene || { tech: [], functional: [], business: [] },
+      scenes: ruleScenes,
       keywords: cluster.common_keywords,
       created_at: new Date().toISOString(),
       updated_at: new Date().toISOString(),
