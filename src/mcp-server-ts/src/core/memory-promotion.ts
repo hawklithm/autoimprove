@@ -9,13 +9,18 @@ export interface PromotionDecision {
   reason: string;
 }
 
+export interface BatchPromotionContext {
+  /** Total sessions being analyzed in this batch (for threshold relaxation). */
+  totalSessions: number;
+}
+
 /** Promotes durable procedural memories without turning every observation into a rule. */
 export class MemoryPromotionService {
   private readonly conflicts = new MemoryConflictResolver();
   private readonly llm = new LLMConfigManager();
   constructor(private readonly store: MemoryRepository) {}
 
-  evaluate(memory: MemoryRecord): PromotionDecision {
+  evaluate(memory: MemoryRecord, batchCtx?: BatchPromotionContext): PromotionDecision {
     // 关卡联动：fact 只作上下文，不成规则；preference/experience 才可能成规则
     if (memory.info_class === "fact") {
       // P3: Check if fact qualifies for upgrade to experience
@@ -41,14 +46,19 @@ export class MemoryPromotionService {
       + validation * 0.2 + Math.min(1, memory.strength / 5) * 0.1 - contradiction * 0.35
     ));
     const explicit = memory.outcome?.user_confirmed === true;
-    const eligible = (explicit || sessions >= 2 || validation > 0) && contradiction === 0 && score >= 0.6;
+    // Optimization 4: in single-batch summarize runs (<5 sessions), relax the
+    // ">=2 sessions" threshold to ">=1 session" — a pattern that appears heavily
+    // in a small batch (>=3 occurrences) is strong enough to promote.
+    const batchRelaxed = batchCtx && batchCtx.totalSessions < 5;
+    const minSessions = batchRelaxed ? 1 : 2;
+    const eligible = (explicit || sessions >= minSessions || validation > 0) && contradiction === 0 && score >= 0.6;
     return { eligible, score, reason: explicit ? "Explicitly confirmed procedural memory" : eligible ? "Repeated and sufficiently supported" : "Insufficient independent support or validation" };
   }
 
-  promoteEligible(): MemoryRecord[] {
+  promoteEligible(batchCtx?: BatchPromotionContext): MemoryRecord[] {
     const promoted: MemoryRecord[] = [];
     for (const memory of this.store.list({ activeOnly: true, kind: "procedural" })) {
-      const decision = this.evaluate(memory);
+      const decision = this.evaluate(memory, batchCtx);
       if (!decision.eligible || memory.state === "promoted") continue;
       const updated: MemoryRecord = { ...memory, state: "promoted", updated_at: new Date().toISOString(), metadata: { ...(memory.metadata || {}), promotion_score: decision.score, promotion_reason: decision.reason } };
       this.store.apply({ decision: "UPDATE", memory: updated, previous_id: memory.id });
@@ -57,11 +67,11 @@ export class MemoryPromotionService {
     return promoted;
   }
 
-  async promoteEligibleWithLLM(): Promise<MemoryRecord[]> {
+  async promoteEligibleWithLLM(batchCtx?: BatchPromotionContext): Promise<MemoryRecord[]> {
     const promoted: MemoryRecord[] = [];
     const candidates = this.store.list({ activeOnly: true, kind: "procedural" });
     for (const memory of candidates) {
-      const heuristic = this.evaluate(memory);
+      const heuristic = this.evaluate(memory, batchCtx);
       if (!heuristic.eligible || memory.state === "promoted") continue;
       if (await this.conflicts.hasConflictWithLLM(memory, candidates)) continue;
       const generalization = await this.evaluateGeneralization(memory, candidates);

@@ -72,7 +72,102 @@ export class PatternSimilarityClusterer {
       clusters.push(...typeClusters);
     }
 
+    // Cross-type merge: patterns assigned different types by the classifier
+    // may describe the same underlying behaviour. If two clusters have very
+    // high description similarity, merge them so the LLM sees them as one.
+    if (clusters.length > 1) {
+      const merged = this.mergeCrossTypeClusters(clusters, minSimilarity, maxClusterSize);
+      return merged;
+    }
+
     return clusters;
+  }
+
+  /**
+   * Second-pass cross-type cluster merging.
+   *
+   * After the type-grouped first pass, clusters (especially singletons) of
+   * different types may represent the same real-world pattern — the
+   * classifier simply assigned them different labels.  We use a higher
+   * similarity bar to avoid over-merging; the threshold is deliberately
+   * stricter than `minSimilarity` because we are merging across the type
+   * barrier that the first pass was unable to cross.
+   */
+  private async mergeCrossTypeClusters(
+    clusters: PatternClusterGroup[],
+    _minSimilarity: number,
+    _maxClusterSize: number
+  ): Promise<PatternClusterGroup[]> {
+    const CROSS_TYPE_SIMILARITY_THRESHOLD = 0.65;
+
+    // Sort so larger clusters (more patterns) are considered first as keepers
+    const sorted = [...clusters].sort((a, b) => b.patterns.length - a.patterns.length);
+    const result: PatternClusterGroup[] = [];
+    const absorbed = new Set<number>();
+
+    for (let i = 0; i < sorted.length; i++) {
+      if (absorbed.has(i)) continue;
+      let keeper = sorted[i];
+
+      for (let j = i + 1; j < sorted.length; j++) {
+        if (absorbed.has(j)) continue;
+        const candidate = sorted[j];
+        // Only attempt cross-type merge
+        if (keeper.pattern_type === candidate.pattern_type) continue;
+
+        const sim = await this.semanticOrTextSimilarity(
+          keeper.representative_description,
+          candidate.representative_description
+        );
+
+        if (sim >= CROSS_TYPE_SIMILARITY_THRESHOLD) {
+          // Absorb the smaller (or equally-sized) cluster into the larger one
+          keeper = this.absorbCluster(keeper, candidate);
+          absorbed.add(j);
+        }
+      }
+
+      result.push(keeper);
+    }
+
+    return result;
+  }
+
+  /**
+   * Semantic similarity when encoder is available, otherwise text overlap.
+   */
+  private async semanticOrTextSimilarity(text1: string, text2: string): Promise<number> {
+    if (this.encoder) {
+      return this.semanticSimilarity(text1, text2);
+    }
+    return this.textSimilarity(text1, text2);
+  }
+
+  /**
+   * Absorb candidate cluster into the keeper. The keeper keeps its
+   * cluster identity; the candidate's patterns are appended.
+   */
+  private absorbCluster(
+    keeper: PatternClusterGroup,
+    candidate: PatternClusterGroup
+  ): PatternClusterGroup {
+    const allPatterns = [...keeper.patterns, ...candidate.patterns];
+    // Re-derive common keywords with the combined set
+    const keywordSets = allPatterns.map(p => new Set(p.keywords));
+    const commonKeywords = this.findCommonKeywords(keywordSets);
+    const avgConfidence =
+      allPatterns.reduce((s, p) => s + p.confidence, 0) / allPatterns.length;
+    const totalOccurrences = allPatterns.reduce((s, p) => s + p.occurrences.length, 0);
+    const sessionIds = new Set(allPatterns.flatMap(p => p.occurrences.map(o => o.session_id)));
+
+    return {
+      ...keeper,
+      patterns: allPatterns,
+      common_keywords: commonKeywords,
+      avg_confidence: avgConfidence,
+      total_occurrences: totalOccurrences,
+      session_count: sessionIds.size,
+    };
   }
 
   /**

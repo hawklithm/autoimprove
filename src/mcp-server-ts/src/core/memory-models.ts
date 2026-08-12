@@ -148,13 +148,32 @@ export function memoryFromPattern(
   kind: MemoryKind = "procedural"
 ): MemoryRecord {
   const now = new Date().toISOString();
-  const content = pattern.description.trim();
+
+  // Build a richer content body that combines the pattern description with
+  // supporting evidence and keywords, so the memory carries more signal for
+  // downstream promotion and rule generation (optimization 3).
+  const description = pattern.description.trim();
+  const evidenceSnippets = evidence
+    .filter(e => e.source_excerpt && e.source_excerpt.length > 20)
+    .slice(0, 2)
+    .map(e => e.source_excerpt!.trim());
+  const keywordSummary = (pattern.keywords || []).slice(0, 10).join(", ");
+
+  const parts: string[] = [description];
+  if (evidenceSnippets.length > 0) {
+    parts.push(...evidenceSnippets.map(s => `Evidence: ${s.slice(0, 300)}`));
+  }
+  if (keywordSummary) {
+    parts.push(`Keywords: ${keywordSummary}`);
+  }
+  const content = parts.join("\n");
+
   return {
     id: createMemoryId(),
     kind,
     info_class: "experience",
     content,
-    summary: content.slice(0, 240),
+    summary: description.slice(0, 240),
     pattern_type: pattern.type,
     scene,
     keywords: pattern.keywords || [],

@@ -28,10 +28,11 @@ import { UNIFIED_RULE_MIN_SCORE } from "./rule-quality.js";
 import { logger } from "./logger.js";
 import { homedir } from "os";
 import { RuleDeduplicator } from "./rule-deduplicator.js";
-import { MemoryRepository } from "./memory-models.js";
+import { MemoryRepository, MemoryRecord } from "./memory-models.js";
 import { createDefaultMemoryRepository } from "../storage/memory-sqlite-store.js";
 import { RuleQualityController } from "./rule-quality.js";
 import { MemoryPromotionService } from "./memory-promotion.js";
+import { MemoryRuleAdapter } from "./memory-rule-adapter.js";
 import { EmbeddingEncoder } from "./embedding-encoder.js";
 import { findRelevantMemoryIds, resolveMemorySupport, FALLBACK_MEMORY_SUPPORT } from "./memory-support.js";
 import { filterNoisePatterns, generalityDiscount } from "./pattern-noise-filter.js";
@@ -368,7 +369,7 @@ export class BatchRebuildEngine {
 
     // Generate from a clean ID range; the old index is cleared only after
     // generation succeeds, so a failed LLM call does not erase the database.
-    const nextId = 1;
+    let nextIdNum = 1;
 
     // Generate rules with batch LLM optimization (if enabled)
     const scene: Scene = { tech: [], functional: [], business: [] };
@@ -376,38 +377,103 @@ export class BatchRebuildEngine {
 
     let rules: Array<{ indexEntry: RuleIndexEntry; content: RuleContent }>;
 
-    const promotedMemories = await this.memoryPromotion.promoteEligibleWithLLM();
-    if (promotedMemories.length > 0) logger.info("batch-rebuild", `Promoted ${promotedMemories.length} procedural memories`);
-
-    if (useBatchLLM) {
-      logger.debug("batch-rebuild", `  Using batch LLM optimization (clustering + intelligent merging)...`);
-
-      const batchRules = await this.batchLLMGenerator.batchGenerateRules(
-        qualifiedPatterns,
-        nextId,
-        scene,
-        options.batchLLMOptions
-      );
-
-      // Convert to standard format
-      rules = batchRules.map(r => ({
-        indexEntry: r.indexEntry,
-        content: r.content
-      }));
-
-      const totalDeduped = batchRules.reduce((sum, r) => sum + r.dedup_count, 0);
-      logger.info("batch-rebuild", `✓ Generated ${rules.length} rules (deduplicated ${totalDeduped} patterns)`);
+    // ---- P2: Memory-driven rule generation (optimization 1) ----
+    // Only promote when we have enough sessions for cross-session evidence to
+    // exist (optimization 2: skip promotion overhead on tiny batches).
+    const shouldPromote = useBatchLLM && toAnalyze.length >= 3;
+    let promotedMemories: MemoryRecord[] = [];
+    if (shouldPromote) {
+      promotedMemories = await this.memoryPromotion.promoteEligibleWithLLM({ totalSessions: toAnalyze.length });
     } else {
-      logger.debug("batch-rebuild", `  Using standard rule generation...`);
+      promotedMemories = this.memoryPromotion.promoteEligible({ totalSessions: toAnalyze.length }); // heuristic only, no LLM
+    }
+    if (promotedMemories.length > 0) {
+      logger.info("batch-rebuild", `Promoted ${promotedMemories.length} procedural memories → memory-driven rules`);
+    }
 
-      rules = await this.ruleGenerator.batchGenerateEnhancedRules(
-        qualifiedPatterns,
-        nextId,
-        scene,
-        enhancedRuleOptions
-      );
+    // ---- Generate rules: memory-driven first, pattern-driven fallback ----
+    const memoryDrivenRules: Array<{ indexEntry: RuleIndexEntry; content: RuleContent }> = [];
+    const coveredPatternIds = new Set<string>();
 
-      logger.info("batch-rebuild", `✓ Generated ${rules.length} rules`);
+    if (promotedMemories.length > 0) {
+      const memoryInputs = promotedMemories.map(m => MemoryRuleAdapter.fromPromotedMemory(m));
+      logger.info("batch-rebuild", `  Memory-driven: generating rules from ${memoryInputs.length} promoted memories`);
+
+      for (const input of memoryInputs) {
+        const ruleId = `rule-${String(nextIdNum).padStart(3, "0")}`;
+        const result = await this.ruleGenerator.generateRuleFromMemory(
+          input,
+          ruleId,
+          scene,
+          {
+            ...enhancedRuleOptions,
+            useLLMEnhancement: true,
+          }
+        );
+
+        if (result) {
+          memoryDrivenRules.push(result);
+          nextIdNum++;
+
+          // Track which qualifiedPatterns are covered by this memory
+          for (const pattern of qualifiedPatterns) {
+            const patternText = pattern.description.toLowerCase();
+            const memoryText = input.content.toLowerCase();
+            if (patternText.includes(memoryText.slice(0, 40)) ||
+                memoryText.includes(patternText.slice(0, 40))) {
+              coveredPatternIds.add(pattern.description);
+            }
+          }
+        }
+      }
+
+      if (memoryDrivenRules.length > 0) {
+        logger.info("batch-rebuild", `✓ Memory-driven: ${memoryDrivenRules.length} rules from promoted memories`);
+      }
+    }
+
+    // ---- Fallback: pattern-driven generation for uncovered patterns ----
+    const uncoveredPatterns = qualifiedPatterns.filter(
+      p => !coveredPatternIds.has(p.description)
+    );
+
+    if (uncoveredPatterns.length > 0) {
+      if (useBatchLLM) {
+        logger.info("batch-rebuild", `  Pattern-driven fallback: ${uncoveredPatterns.length} uncovered patterns → batch LLM`);
+        const batchRules = await this.batchLLMGenerator.batchGenerateRules(
+          uncoveredPatterns,
+          nextIdNum,
+          scene,
+          options.batchLLMOptions
+        );
+
+        const converted = batchRules.map(r => ({
+          indexEntry: r.indexEntry,
+          content: r.content
+        }));
+
+        rules = [...memoryDrivenRules, ...converted];
+
+        const totalDeduped = batchRules.reduce((sum, r) => sum + r.dedup_count, 0);
+        logger.info("batch-rebuild", `✓ Generated ${rules.length} rules (${memoryDrivenRules.length} memory-driven + ${converted.length} pattern-driven, deduplicated ${totalDeduped} patterns)`);
+      } else {
+        logger.info("batch-rebuild", `  Using standard rule generation (non-LLM)...`);
+        const enhanced = await this.ruleGenerator.batchGenerateEnhancedRules(
+          uncoveredPatterns,
+          nextIdNum,
+          scene,
+          enhancedRuleOptions
+        );
+        rules = [...memoryDrivenRules, ...enhanced];
+        logger.info("batch-rebuild", `✓ Generated ${rules.length} rules`);
+      }
+    } else if (memoryDrivenRules.length > 0) {
+      rules = memoryDrivenRules;
+      logger.info("batch-rebuild", `✓ Generated ${rules.length} rules (all memory-driven)`);
+    } else {
+      // Nothing generated — no promoted memories AND no qualified patterns
+      rules = [];
+      logger.warn("batch-rebuild", `⚠  No rules generated (0 promoted memories, 0 qualified patterns)`);
     }
 
     // Attach consolidated memory support before the final quality gate.
@@ -650,17 +716,19 @@ export class BatchRebuildEngine {
 
         try {
           const stat = statSync(projectPath);
-          if (!stat.isDirectory()) continue;
-
-          const files = readdirSync(projectPath);
-
-          for (const file of files) {
-            if (file.endsWith(".jsonl") || file.endsWith(".json")) {
-              sessionFiles.push(join(projectPath, file));
+          if (stat.isDirectory()) {
+            const files = readdirSync(projectPath);
+            for (const file of files) {
+              if (file.endsWith(".jsonl") || file.endsWith(".json")) {
+                sessionFiles.push(join(projectPath, file));
+              }
             }
+          } else if (projectDir.endsWith(".jsonl") || projectDir.endsWith(".json")) {
+            // Sessions may also live directly at the base directory level.
+            sessionFiles.push(projectPath);
           }
         } catch (error) {
-          // Skip inaccessible directories
+          // Skip inaccessible entries
           continue;
         }
       }

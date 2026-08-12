@@ -102,11 +102,13 @@ export class BatchLLMRuleGenerator {
     options: BatchLLMOptions = {}
   ): Promise<BatchGeneratedRule[]> {
     const {
-      minSimilarity = 0.4,
+      minSimilarity = 0.35,
       maxPatternsPerBatch = 8,
       minClusterSize = 2,
       enableParallel = true,
-      maxConcurrent = 3
+      // Tunable via BATCH_MAX_CONCURRENT; default lowered to 2 to reduce
+      // gateway contention during the endpoint's intermittent instability windows.
+      maxConcurrent = Number(process.env.BATCH_MAX_CONCURRENT) || 2
     } = options;
 
     logger.info("batch-llm", `\n=== Batch LLM Rule Generation ===`);
@@ -423,7 +425,7 @@ export class BatchLLMRuleGenerator {
           content: prompt
         }]
       });
-    }, { fallbackOnError: true });
+    }, { fallbackOnError: true, maxRetries: 2 });
 
     const responseText = response.choices[0]?.message?.content || "";
     const finishReason = response.choices[0]?.finish_reason;
@@ -534,8 +536,12 @@ export class BatchLLMRuleGenerator {
         throw new Error("LLM declined to generate rule due to insufficient information");
       }
 
+      // Strip Markdown code fences (```json ... ```) that LLMs wrap around the
+      // payload — a common cause of batch parse failures.
+      const cleanedResponse = stripCodeFences(response);
+
       // Check for truncation first
-      if (JSONExtractor.isTruncated(response)) {
+      if (JSONExtractor.isTruncated(cleanedResponse)) {
         logger.warn("batch-llm", "Potentially truncated LLM response detected", {
           lastChars: response.slice(-100),
           length: response.length
@@ -543,7 +549,7 @@ export class BatchLLMRuleGenerator {
       }
 
       // Use robust JSON extraction
-      const extraction = JSONExtractor.extract(response);
+      const extraction = JSONExtractor.extract(cleanedResponse);
 
       if (!extraction.success) {
         logger.warn("batch-llm", "Initial JSON extraction failed, will attempt repair", {
@@ -568,7 +574,7 @@ export class BatchLLMRuleGenerator {
           error: extraction.error
         });
 
-        const rawJson = JSONExtractor.extractRaw(response);
+        const rawJson = JSONExtractor.extractRaw(cleanedResponse);
         if (rawJson) {
           const repaired = JSONExtractor.repairAndParse(rawJson);
           if (repaired.success && repaired.parsed) {
@@ -867,4 +873,30 @@ export class BatchLLMRuleGenerator {
     // Higher ceiling to accommodate code examples
     return Math.min(3000, baseTokens + complexity + typeBonus);
   }
+}
+
+/**
+ * Remove Markdown code fences (```json ... ``` or ``` ... ```) and surrounding
+ * prose so the enclosed JSON becomes the sole content. Falls back to the
+ * original string when no fence is present. This guards against LLM responses
+ * that wrap the JSON payload in a fenced block, which historically caused the
+ * batch rule generator to fail parsing and abort the whole batch.
+ */
+function stripCodeFences(text: string): string {
+  if (!text) return text;
+  let result = text.trim();
+
+  // Fully fenced block: ```lang\n ... \n```
+  const fenced = result.match(/^```[a-zA-Z]*\s*\n([\s\S]*?)\n?```$/);
+  if (fenced) {
+    return fenced[1].trim();
+  }
+
+  // Opening fence without a closing fence (truncated response)
+  const openFence = result.match(/^```[a-zA-Z]*\s*\n([\s\S]*)$/);
+  if (openFence) {
+    return openFence[1].trim();
+  }
+
+  return result;
 }
