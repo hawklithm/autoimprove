@@ -141,19 +141,29 @@ mkdir -p "$AUTOIMPROVE_DIR/versions"
 
 echo -e "${GREEN}✓${NC} 存储目录已创建: $AUTOIMPROVE_DIR"
 
-# 检测存储后端
-DB_PATH="$AUTOIMPROVE_DIR/rules.db"
+# 检测存储后端（SQLite 位于 ~/.autoimprove/rules/rules.db）
+DB_PATH="$AUTOIMPROVE_DIR/rules/rules.db"
 INDEX_PATH="$AUTOIMPROVE_DIR/rules/index.json"
+
+# 判断 index.json 是否包含真实规则（安装脚本写入的空 rules:[] 不算 legacy JSON）
+json_has_rules=false
+if [ -f "$INDEX_PATH" ]; then
+  if node -e "const d=require('$INDEX_PATH'); process.exit(Array.isArray(d.rules)&&d.rules.length>0?0:1)" 2>/dev/null; then
+    json_has_rules=true
+  fi
+fi
 
 if [ -f "$DB_PATH" ]; then
   echo -e "${GREEN}✓${NC} 检测到 SQLite 存储后端"
   STORAGE_BACKEND="sqlite"
-elif [ -f "$INDEX_PATH" ]; then
+elif [ "$json_has_rules" = true ]; then
   echo -e "${YELLOW}⚠${NC} 检测到 JSON 存储后端（建议迁移到 SQLite）"
   STORAGE_BACKEND="json"
 else
   echo -e "${GREEN}✓${NC} 初始化新 SQLite 存储后端"
   STORAGE_BACKEND="sqlite"
+  # 清掉可能由安装脚本留下的空 index.json，避免后续被误判为 legacy JSON 后端
+  rm -f "$INDEX_PATH"
   echo '{"version":"1.0","rules":[]}' > "$INDEX_PATH"
 fi
 

@@ -2505,11 +2505,16 @@ async function handleSearchKnowledge(args: any) {
 
       // Format results as markdown with the stored rule content.
       if (matches.length === 0) {
+        const totalRules = indexManager.listRules().length;
+        // Honest "closest available rules" hint: keyword-relevant rules even if
+        // they are scoped to another project / below threshold, instead of
+        // listing arbitrary rules from the index.
+        const closest = totalRules === 0 ? [] : matcher.findClosestRules(createScene(), kwList, 2);
         return {
           content: [
             {
               type: "text",
-              text: indexManager.listRules().length === 0 ? emptyKnowledgeBaseMessage() : noMatchMessage(indexManager.listRules().slice(0, 2).map((rule) => rule.id)),
+              text: totalRules === 0 ? emptyKnowledgeBaseMessage() : noMatchMessage(closest.map((m) => m.rule.id)),
             },
           ],
         };
@@ -2699,7 +2704,7 @@ async function handleSearchKnowledge(args: any) {
         content: [
           {
             type: "text",
-            text: indexManager.listRules().length === 0 ? emptyKnowledgeBaseMessage() : noMatchMessage(indexManager.listRules().slice(0, 2).map((rule) => rule.id)),
+            text: indexManager.listRules().length === 0 ? emptyKnowledgeBaseMessage() : noMatchMessage(matcher.findClosestRules(scene, kwList, 2).map((m) => m.rule.id)),
           },
         ],
       };

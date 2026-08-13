@@ -68,14 +68,34 @@ export class RuleIndexManager {
       this.useSQLite = true;
       this.sqliteStorage = new RuleStorageSQLite();
       logger.info("rule-index", "Using SQLite storage backend");
-    } else if (jsonExists) {
+    } else if (jsonExists && this.hasRealJsonRules()) {
       this.useSQLite = false;
       this.needsMigration = true;
       logger.info("rule-index", "Using JSON storage (legacy). Call triggerMigration() to migrate to SQLite");
     } else {
+      // No DB, and either no index.json or only a stale EMPTY index.json
+      // (e.g. written by an installer). Treat as a fresh install: initialize
+      // SQLite directly and remove the empty legacy file so it never flips the
+      // backend to JSON on a later run.
+      if (jsonExists) {
+        try { renameSync(this.getIndexPath(), `${this.getIndexPath()}.legacy-empty`); } catch { /* non-fatal */ }
+      }
       this.useSQLite = true;
       this.sqliteStorage = new RuleStorageSQLite();
       logger.info("rule-index", "Initializing new SQLite storage");
+    }
+  }
+
+  /**
+   * True only when index.json contains actual rules; an empty rules:[] file
+   * produced by installers must not be treated as a legacy JSON database.
+   */
+  private hasRealJsonRules(): boolean {
+    try {
+      const data = JSON.parse(readFileSync(this.getIndexPath(), "utf-8")) as { rules?: unknown[] };
+      return Array.isArray(data.rules) && data.rules.length > 0;
+    } catch {
+      return false;
     }
   }
 

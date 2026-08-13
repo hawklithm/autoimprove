@@ -336,7 +336,12 @@ export class RuleMatcher {
         return aPriority - bPriority;
       }
 
-      return b.relevance_score - a.relevance_score;
+      if (b.relevance_score !== a.relevance_score) {
+        return b.relevance_score - a.relevance_score;
+      }
+
+      // Same priority & relevance: prefer the higher-confidence rule.
+      return b.rule.confidence - a.rule.confidence;
     });
   }
 
@@ -368,6 +373,38 @@ export class RuleMatcher {
 
     // Rebuild indexes on next search
     logger.info("rule-matcher", "Cache invalidated, indexes will be rebuilt on next search");
+  }
+
+  /**
+   * Return the rules most relevant to the query WITHOUT requiring them to pass
+   * the relevance>0 threshold or the scope filter. Used to render honest
+   * "closest available rules" hints when a search finds no match: the caller
+   * can surface these as "exists, but scoped elsewhere / below threshold"
+   * instead of listing arbitrary rules from the index.
+   */
+  findClosestRules(
+    scene: Scene,
+    keywords?: string[],
+    limit: number = 3,
+    minConfidence?: number
+  ): RuleMatch[] {
+    this.ensureInitialized();
+
+    const expandedScene = this.sceneThesaurus.expandScene(scene);
+    const effectiveMinConfidence = minConfidence ?? 0; // ignore confidence gate for hints
+
+    const sqliteStorage = this.indexManager.getSQLiteStorage();
+    const candidates = sqliteStorage
+      ? this.querySQLiteCandidates(sqliteStorage, expandedScene, keywords, limit * 3, effectiveMinConfidence)
+      : this.queryMemoryCandidates(expandedScene, keywords, effectiveMinConfidence);
+
+    return candidates
+      .map(rule => {
+        const { relevance, reason } = this.calculateRelevance(rule, expandedScene, keywords);
+        return { rule, relevance_score: relevance, match_reason: reason };
+      })
+      .sort((a, b) => b.relevance_score - a.relevance_score || b.rule.confidence - a.rule.confidence)
+      .slice(0, limit);
   }
 
   getRulesByPriority(priority: string): RuleIndexEntry[] {

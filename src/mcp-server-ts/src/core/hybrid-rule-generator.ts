@@ -525,7 +525,10 @@ export class HybridRuleGenerator {
         related_rules: [],
         metadata: {
           type: this.inferTypeFromContent(parsed.description || memoryInput.content),
-          priority: memoryInput.promotion.score >= 0.85 ? "high" : "medium",
+          // Three tiers instead of high/medium only: freshly promoted rules
+          // cluster around the 0.65 gate, so a single 0.85 threshold collapses
+          // every rule into "medium" and destroys priority discrimination.
+          priority: memoryInput.promotion.score >= 0.8 ? "high" : memoryInput.promotion.score >= 0.7 ? "medium" : "low",
           confidence: memoryInput.promotion.score,
           source: "memory-driven",
           source_memory_ids: [memoryInput.memory_id],
@@ -576,8 +579,8 @@ export class HybridRuleGenerator {
 
       const indexEntry: RuleIndexEntry = {
         id: ruleId,
-        type: memoryInput.pattern_type,
-        priority: memoryInput.promotion.score >= 0.85 ? "high" as any : "medium" as any,
+        type: this.inferTypeFromContent(parsed.description || memoryInput.content) as any,
+        priority: memoryInput.promotion.score >= 0.8 ? "high" as any : memoryInput.promotion.score >= 0.7 ? "medium" as any : "low" as any,
         confidence: memoryInput.promotion.score,
         scenes: ruleScenes,
         keywords: enrichedKeywords,
@@ -643,6 +646,14 @@ export class HybridRuleGenerator {
       ...(memoryInput?.evidence_excerpts || []).slice(0, 2),
     ].filter(Boolean).join(" ");
 
+    // Split camelCase / snake_case BEFORE tokenization so compound API names
+    // like `paperclipCreateIssue` / `paperclip_create_issue` become searchable
+    // sub-tokens ("paperclip create issue") instead of one opaque token.
+    const normalizedText = contentText
+      .replace(/([a-z\d])([A-Z])/g, "$1 $2")
+      .replace(/([A-Z]+)([A-Z][a-z])/g, "$1 $2")
+      .replace(/[_]+/g, " ");
+
     const stopWords = new Set([
       "the", "a", "an", "and", "or", "but", "in", "on", "at", "to", "for",
       "of", "with", "by", "from", "up", "about", "into", "through", "is", "are",
@@ -660,7 +671,7 @@ export class HybridRuleGenerator {
 
     // Collect raw candidates: jieba tokens from the content, plus any base
     // keywords (which may arrive as a single comma-joined string).
-    const rawTokens: string[] = tokenizeWithJieba(contentText, 2);
+    const rawTokens: string[] = tokenizeWithJieba(normalizedText, 2);
     const baseKeywords: string[] = Array.isArray(memoryInput?.keywords)
       ? memoryInput.keywords
       : (typeof memoryInput?.keywords === "string" ? [memoryInput.keywords] : []);
