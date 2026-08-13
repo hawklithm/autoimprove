@@ -2,6 +2,7 @@ import { MemoryRecord, MemoryRepository } from "./memory-models.js";
 import { MemoryConflictResolver } from "./memory-conflict-resolver.js";
 import { LLMConfigManager } from "./llm-config-manager.js";
 import { factUpgrader } from "./fact-upgrader.js";
+import { MemorySemanticClusterer } from "./memory-semantic-clusterer.js";
 
 export interface PromotionDecision {
   eligible: boolean;
@@ -61,39 +62,55 @@ export class MemoryPromotionService {
 
   promoteEligible(batchCtx?: BatchPromotionContext): MemoryRecord[] {
     const promoted: MemoryRecord[] = [];
-    for (const memory of this.store.list({ activeOnly: true, kind: "procedural" })) {
-      const decision = this.evaluate(memory, batchCtx);
-      if (!decision.eligible || memory.state === "promoted") continue;
-      const updated: MemoryRecord = { ...memory, state: "promoted", updated_at: new Date().toISOString(), metadata: { ...(memory.metadata || {}), promotion_score: decision.score, promotion_reason: decision.reason } };
-      this.store.apply({ decision: "UPDATE", memory: updated, previous_id: memory.id });
-      promoted.push(updated);
+    // P3: semantic clustering first — merges scattered single-session memories
+    // that describe the same practice into one candidate with aggregated
+    // session/project counts, so cross-session patterns become promotable.
+    const clusterer = new MemorySemanticClusterer();
+    const clusters = clusterer.clusterSync(this.store.list({ activeOnly: true, kind: "procedural" }));
+    for (const cluster of clusters) {
+      const decision = this.evaluate(cluster.merged, batchCtx);
+      if (!decision.eligible || cluster.members.every(m => m.state === "promoted")) continue;
+      for (const memory of cluster.members) {
+        if (memory.state === "promoted") continue;
+        const updated: MemoryRecord = { ...memory, state: "promoted", updated_at: new Date().toISOString(), metadata: { ...(memory.metadata || {}), promotion_score: decision.score, promotion_reason: decision.reason } };
+        this.store.apply({ decision: "UPDATE", memory: updated, previous_id: memory.id });
+        promoted.push(updated);
+      }
     }
     return promoted;
   }
 
   async promoteEligibleWithLLM(batchCtx?: BatchPromotionContext): Promise<MemoryRecord[]> {
     const promoted: MemoryRecord[] = [];
-    const candidates = this.store.list({ activeOnly: true, kind: "procedural" });
-    for (const memory of candidates) {
+    // P3: semantic clustering before evaluation (same rationale as promoteEligible).
+    const clusterer = new MemorySemanticClusterer();
+    const clusters = await clusterer.cluster(this.store.list({ activeOnly: true, kind: "procedural" }));
+    const candidates = clusters.map(cluster => cluster.merged);
+    for (const cluster of clusters) {
+      const memory = cluster.merged;
       const heuristic = this.evaluate(memory, batchCtx);
-      if (!heuristic.eligible || memory.state === "promoted") continue;
+      if (!heuristic.eligible || cluster.members.every(m => m.state === "promoted")) continue;
       if (await this.conflicts.hasConflictWithLLM(memory, candidates)) continue;
       const generalization = await this.evaluateGeneralization(memory, candidates);
       if (!generalization.eligible) continue;
-      const updated: MemoryRecord = {
-        ...memory,
-        state: "promoted",
-        updated_at: new Date().toISOString(),
-        metadata: {
-          ...(memory.metadata || {}),
-          promotion_score: Math.min(1, heuristic.score * 0.7 + generalization.confidence * 0.3),
-          promotion_scope: generalization.scope,
-          promotion_reason: generalization.reason,
-          generalization_confidence: generalization.confidence
-        }
-      };
-      this.store.apply({ decision: "UPDATE", memory: updated, previous_id: memory.id });
-      promoted.push(updated);
+      const promotionScore = Math.min(1, heuristic.score * 0.7 + generalization.confidence * 0.3);
+      for (const member of cluster.members) {
+        if (member.state === "promoted") continue;
+        const updated: MemoryRecord = {
+          ...member,
+          state: "promoted",
+          updated_at: new Date().toISOString(),
+          metadata: {
+            ...(member.metadata || {}),
+            promotion_score: promotionScore,
+            promotion_scope: generalization.scope,
+            promotion_reason: generalization.reason,
+            generalization_confidence: generalization.confidence
+          }
+        };
+        this.store.apply({ decision: "UPDATE", memory: updated, previous_id: member.id });
+        promoted.push(updated);
+      }
     }
     return promoted;
   }
