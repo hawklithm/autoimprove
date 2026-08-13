@@ -507,6 +507,11 @@ export class HybridRuleGenerator {
 
       const now = new Date().toISOString();
 
+      // Keywords: derive from the memory content + summary + evidence excerpts
+      // (jieba tokenization, same approach as the batch-LLM path) so memory-
+      // driven rules get a searchable keyword set instead of an empty array.
+      const enrichedKeywords = this.extractKeywordsFromMemory(memoryInput, parsed);
+
       const ruleContent: RuleContent = {
         id: ruleId,
         content: parsed.description || memoryInput.content,
@@ -527,6 +532,7 @@ export class HybridRuleGenerator {
           memory_support_score: memoryInput.promotion.score,
           scope_confidence: memoryInput.promotion.confidence,
           scope_reason: memoryInput.promotion.reason,
+          keywords: enrichedKeywords,
         },
       };
 
@@ -574,7 +580,7 @@ export class HybridRuleGenerator {
         priority: memoryInput.promotion.score >= 0.85 ? "high" as any : "medium" as any,
         confidence: memoryInput.promotion.score,
         scenes: ruleScenes,
-        keywords: [],
+        keywords: enrichedKeywords,
         created_at: now,
         updated_at: now,
         scope: memoryInput.promotion.scope as RuleScope,
@@ -614,6 +620,53 @@ export class HybridRuleGenerator {
       logger.warn("memory-driven", `LLM generation failed for memory rule ${ruleId}: ${error instanceof Error ? error.message : String(error)}`);
       return null;
     }
+  }
+
+  /**
+   * Enrich memory-driven rule keywords: tokenize the memory content + summary +
+   * evidence excerpts (jieba), merge with the LLM-provided title/description
+   * terms, and deduplicate — mirroring the batch-LLM path so memory-driven
+   * rules get a searchable keyword set instead of an empty array.
+   */
+  private extractKeywordsFromMemory(memoryInput: any, parsed: any): string[] {
+    const sourceText = [
+      memoryInput.content,
+      memoryInput.summary,
+      ...(memoryInput.evidence_excerpts || []).slice(0, 3),
+      parsed.title,
+      parsed.description,
+    ].filter(Boolean).join(" ");
+
+    const stopWords = new Set([
+      "the", "a", "an", "and", "or", "but", "in", "on", "at", "to", "for",
+      "of", "with", "by", "from", "up", "about", "into", "through", "is", "are",
+      "was", "were", "be", "been", "being", "have", "has", "had", "do", "does",
+      "did", "will", "would", "should", "could", "can", "may", "might", "must",
+      "this", "that", "these", "those", "it", "its", "use", "using", "used",
+      "when", "how", "what", "why", "the", "your", "you", "we", "our", "they",
+      "的", "了", "在", "是", "我", "有", "和", "就", "不", "人", "都", "一",
+      "这", "个", "上", "来", "说", "到", "要", "可以", "里", "着", "我们",
+      "他们", "它", "那", "什么", "怎么", "为什么", "这个", "那个", "一个",
+      "没有", "不是", "但是", "如果", "因为", "所以", "而且", "或者", "虽然",
+      "已经", "应该", "需要", "可能", "然后", "之后", "时候", "问题",
+      "方法", "方式", "情况", "结果", "信息", "内容", "东西", "事情",
+    ]);
+
+    const tokens = tokenizeWithJieba(sourceText, 2)
+      .filter(w => w.length >= 2)
+      .filter(w => !stopWords.has(w))
+      .filter(w => !/^\d+$/.test(w))
+      .filter(w => /[a-zA-Z0-9一-鿿㐀-䶿]/.test(w));
+
+    // Deduplicate, keeping memory keywords first.
+    const baseKeywords: string[] = Array.isArray(memoryInput.keywords)
+      ? memoryInput.keywords
+      : (memoryInput.source_pattern?.keywords || []);
+    const merged: string[] = [];
+    for (const kw of [...baseKeywords, ...tokens]) {
+      if (kw && kw.trim() && !merged.includes(kw)) merged.push(kw);
+    }
+    return merged.slice(0, 20);
   }
 
   /**
