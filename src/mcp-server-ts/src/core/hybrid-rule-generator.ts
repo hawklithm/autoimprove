@@ -524,7 +524,7 @@ export class HybridRuleGenerator {
         exceptions: Array.isArray(parsed.exceptions) ? parsed.exceptions : [],
         related_rules: [],
         metadata: {
-          type: memoryInput.pattern_type,
+          type: this.inferTypeFromContent(parsed.description || memoryInput.content),
           priority: memoryInput.promotion.score >= 0.85 ? "high" : "medium",
           confidence: memoryInput.promotion.score,
           source: "memory-driven",
@@ -629,12 +629,18 @@ export class HybridRuleGenerator {
    * rules get a searchable keyword set instead of an empty array.
    */
   private extractKeywordsFromMemory(memoryInput: any, parsed: any): string[] {
-    const sourceText = [
-      memoryInput.content,
-      memoryInput.summary,
-      ...(memoryInput.evidence_excerpts || []).slice(0, 3),
-      parsed.title,
-      parsed.description,
+    // Derive keywords primarily from the ACTUAL rule content (parsed.*), so they
+    // stay coherent with what the rule says. The raw memory text may contain
+    // unrelated fragments (e.g. a security checklist alongside a hiring workflow)
+    // that would otherwise pollute the keywords and break search recall.
+    const contentText = [
+      parsed?.title,
+      parsed?.description,
+      parsed?.reason,
+      ...(Array.isArray(parsed?.how_to_apply) ? parsed.how_to_apply : []),
+      memoryInput?.summary,
+      memoryInput?.content,
+      ...(memoryInput?.evidence_excerpts || []).slice(0, 2),
     ].filter(Boolean).join(" ");
 
     const stopWords = new Set([
@@ -652,21 +658,51 @@ export class HybridRuleGenerator {
       "方法", "方式", "情况", "结果", "信息", "内容", "东西", "事情",
     ]);
 
-    const tokens = tokenizeWithJieba(sourceText, 2)
-      .filter(w => w.length >= 2)
-      .filter(w => !stopWords.has(w))
-      .filter(w => !/^\d+$/.test(w))
-      .filter(w => /[a-zA-Z0-9一-鿿㐀-䶿]/.test(w));
-
-    // Deduplicate, keeping memory keywords first.
-    const baseKeywords: string[] = Array.isArray(memoryInput.keywords)
+    // Collect raw candidates: jieba tokens from the content, plus any base
+    // keywords (which may arrive as a single comma-joined string).
+    const rawTokens: string[] = tokenizeWithJieba(contentText, 2);
+    const baseKeywords: string[] = Array.isArray(memoryInput?.keywords)
       ? memoryInput.keywords
-      : (memoryInput.source_pattern?.keywords || []);
+      : (typeof memoryInput?.keywords === "string" ? [memoryInput.keywords] : []);
+    for (const kw of baseKeywords) {
+      if (typeof kw === "string" && /[,，]/.test(kw)) {
+        rawTokens.push(...kw.split(/[,，]/));
+      } else {
+        rawTokens.push(kw);
+      }
+    }
+
+    // Sanitize: split each token on any run of non-alphanumeric / non-CJK chars
+    // (strips quotes, commas, parentheses, `=`, etc.), drop stopwords, empties,
+    // pure numbers, and single chars. Lowercase for consistent matching.
+    const sanitize = (w: string): string[] =>
+      String(w)
+        .split(/[^a-zA-Z0-9一-鿿㐀-䶿]+/)
+        .map((t) => t.trim().toLowerCase())
+        .filter((t) => t.length >= 2 && !stopWords.has(t) && !/^\d+$/.test(t));
+
     const merged: string[] = [];
-    for (const kw of [...baseKeywords, ...tokens]) {
-      if (kw && kw.trim() && !merged.includes(kw)) merged.push(kw);
+    for (const raw of rawTokens) {
+      if (typeof raw !== "string" || !raw.trim()) continue;
+      for (const w of sanitize(raw)) {
+        if (!merged.includes(w)) merged.push(w);
+      }
     }
     return merged.slice(0, 20);
+  }
+
+  /**
+   * Infer a rule's type from its actual content rather than the raw memory text,
+   * so the type stays coherent with what the rule says. Returns a PatternType
+   * string; falls back to "repeated-correction" for generic experience rules.
+   */
+  private inferTypeFromContent(content: string): string {
+    const c = (content || "").toLowerCase();
+    if (/security|注入|injection|vulnerability|exploit|cve|xss|csrf|密码|哈希|认证|授权|权限|token|auth|安全|泄露|敏感/.test(c)) return "security";
+    if (/performance|性能|slow|optimize|优化|缓存|cache|瓶颈|耗时|延迟|内存泄露/.test(c)) return "performance";
+    if (/bug|error|wrong|broken|fail|错误|失败|异常|崩溃|修复|死循环|空指针|race condition/.test(c)) return "anti-pattern";
+    if (/^(always|never|must|should|prefer|recommend|避免|不要|必须|总是|统一|约定|建议)/i.test(c.trim())) return "preference";
+    return "repeated-correction";
   }
 
   /**
