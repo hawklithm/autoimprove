@@ -1,6 +1,7 @@
 import { spawn } from 'child_process';
 import { existsSync, readFileSync, writeFileSync, rmSync, readdirSync, statSync } from 'fs';
-import { join } from 'path';
+import { join, dirname } from 'path';
+import { fileURLToPath } from 'url';
 import { homedir } from 'os';
 import { createInterface } from 'readline';
 import { cliLogger } from '../utils/logger.js';
@@ -49,6 +50,8 @@ export async function uninstall() {
       'autoimprove-status',
       'autoimprove-rules',
       'autoimprove-lessons',
+      'autoimprove-check',
+      'autoimprove-summarize',
     ];
 
     for (const skill of skillNames) {
@@ -248,7 +251,8 @@ export async function uninstall() {
 
   } catch (error: any) {
     cliLogger.error('');
-    cliLogger.error('❌ Uninstall failed:', error.message);
+    // 直接拼进 message：cliLogger.error 的第二参数按 Error 处理，传字符串会丢失信息
+    cliLogger.error(`❌ Uninstall failed: ${error?.message ?? error}`);
     cliLogger.error('');
     process.exit(1);
   }
@@ -260,9 +264,11 @@ export async function uninstall() {
 async function removeMCPConfig(scope: string, removedFiles: string[], failedFiles: string[]): Promise<void> {
   try {
     const checkResult = await runCommand('claude', ['mcp', 'get', 'autoimprove-core'], true);
+    // claude CLI 输出 "Scope: User config ..."（大写），统一小写比较
     const scopeKey = `${scope} config`;
+    const checkResultLower = checkResult.toLowerCase();
 
-    if (checkResult.includes(scopeKey)) {
+    if (checkResultLower.includes(scopeKey)) {
       await runCommand('claude', ['mcp', 'remove', 'autoimprove-core', '-s', scope], true);
       removedFiles.push(`claude mcp config (${scope}-scope): autoimprove-core`);
       cliLogger.print(`  ✓ Removed MCP configuration (${scope}-scope)`);
@@ -510,6 +516,8 @@ async function removeOnnxDependency(packageJsonPath: string): Promise<void> {
 // Helper: Get package root by looking for package.json
 // -----------------------------------------------------------
 function getPackageRoot(): string {
+  // ESM 下没有 __dirname，用 import.meta.url 推导（与 summarize.ts 一致）
+  const __dirname = dirname(fileURLToPath(import.meta.url));
   let current = __dirname;
   while (current !== '/') {
     if (existsSync(join(current, 'package.json'))) {
