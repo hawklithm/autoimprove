@@ -252,16 +252,29 @@ export class RuleStorageSQLite {
   }
 
   /**
-   * Split token into segments (camelCase, snake_case, kebab-case)
+   * Split token into segments (camelCase, snake_case, kebab-case).
+   * Non-alphanumeric chars (incl. CJK punctuation) become separators so we
+   * never produce garbage segments like "i实现规范：密码加密". CJK↔Latin
+   * boundaries are also split, so "实现注册API时应使用bcrypt" yields a
+   * standalone "bcrypt" segment instead of one long mixed token.
    */
   private splitToken(text: string): string[] {
     const segments: string[] = [];
-    const words = text.split(/[_\-\s]+/);
+    // Punctuation/CJK punctuation as separators.
+    const words = text.replace(/[^\p{L}\p{N}]+/gu, " ").split(/\s+/).filter(Boolean);
 
     for (const word of words) {
-      // Split camelCase
-      const camelSegments = word.split(/(?=[A-Z])/).filter(s => s.length > 0);
-      segments.push(...camelSegments);
+      // Split CJK↔Latin boundaries (e.g. "使用bcrypt" → "使用" + "bcrypt").
+      const mixed = word.split(/(?<=[\u4e00-\u9fff])(?=[a-zA-Z0-9])|(?<=[a-zA-Z0-9])(?=[\u4e00-\u9fff])/).filter(Boolean);
+      for (const part of mixed) {
+        // Split camelCase on Latin words — CJK runs stay whole.
+        if (/[\p{L}]/u.test(part) && /[A-Z]/.test(part) && !/[\u4e00-\u9fff]/.test(part)) {
+          const camelSegments = part.split(/(?=[A-Z])/).filter(s => s.length > 0);
+          segments.push(...camelSegments);
+        } else {
+          segments.push(part);
+        }
+      }
     }
 
     return segments.filter(s => s.length > 1);
@@ -462,9 +475,12 @@ export class RuleStorageSQLite {
         this.insertSceneIndex(ruleId, updates.scenes);
       }
 
-      // Update keyword segments if keywords changed
+      // Update keyword segments if keywords changed.
+      // Only delete the keyword-source segments: deleting every segment here
+      // would drop the title/description/id segments too (and this method only
+      // re-inserts keyword segments), silently breaking search by those terms.
       if (updates.keywords !== undefined) {
-        this.db.prepare('DELETE FROM keyword_segments WHERE rule_id = ?').run(ruleId);
+        this.db.prepare("DELETE FROM keyword_segments WHERE rule_id = ? AND source = 'keyword'").run(ruleId);
         // Re-insert segments for new keywords
         const stmt = this.db.prepare('INSERT OR IGNORE INTO keyword_segments (segment, rule_id, source) VALUES (?, ?, ?)');
         for (const keyword of updates.keywords) {

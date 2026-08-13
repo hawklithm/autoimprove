@@ -162,12 +162,19 @@ export class ImprovedScorer {
     // Position 4: In rule content (title, description)
     // Note: This is expensive, only do if no other matches
     if (positions.length === 0) {
-      const content = this.contentManager.loadContent(rule.id);
-      if (content) {
-        if (content.title?.toLowerCase().includes(keyword)) {
-          positions.push(weights.title);
-        } else if (content.description?.toLowerCase().includes(keyword)) {
-          positions.push(weights.description);
+      // Rule description (on the index entry) is the cheapest reliable source —
+      // content files for some rules only store `## Content` without a
+      // `## Description` section, so content-based lookup would miss them.
+      if (rule.description?.toLowerCase().includes(keyword)) {
+        positions.push(weights.description);
+      } else {
+        const content = this.contentManager.loadContent(rule.id);
+        if (content) {
+          if (content.title?.toLowerCase().includes(keyword)) {
+            positions.push(weights.title);
+          } else if (content.description?.toLowerCase().includes(keyword)) {
+            positions.push(weights.description);
+          }
         }
       }
     }

@@ -194,7 +194,11 @@ export class RuleMatcher {
     // If no scope specified, default to GLOBAL
     const ruleScope = rule.scope || RuleScope.GLOBAL;
 
-    if (rule.status && rule.status !== "active") {
+    // Candidate rules are searchable: they are newly generated rules awaiting
+    // usage feedback, and excluding them makes them invisible to search (and
+    // thus never able to accumulate acceptance → never promoted to active).
+    // Only deprecated/disabled/archived rules are hidden from search.
+    if (rule.status && (rule.status === "deprecated" || rule.status === "disabled" || rule.status === "archived")) {
       return false;
     }
 

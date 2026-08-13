@@ -636,6 +636,20 @@ export class BatchRebuildEngine {
   }
 
   private findSupportingMemories(rule: { indexEntry: RuleIndexEntry; content: RuleContent }): { ids: string[]; score: number } {
+    // Prefer the rule's explicit memory references. Memory-driven rules get
+    // [memoryInput.memory_id] set by generateRuleFromMemory, and batch-LLM
+    // rules get cluster.source_memory_ids — these are the true provenance.
+    // Fuzzy-search only when no explicit references exist, so we never
+    // overwrite the real provenance with unrelated search hits.
+    const explicitIds = rule.indexEntry.source_memory_ids?.length
+      ? rule.indexEntry.source_memory_ids
+      : (rule.content.metadata?.source_memory_ids as string[] | undefined)?.length
+        ? (rule.content.metadata?.source_memory_ids as string[])
+        : [];
+    if (explicitIds.length > 0) {
+      return resolveMemorySupport(this.memoryStore, explicitIds);
+    }
+
     const query = rule.content.description || rule.content.content || rule.indexEntry.description || "";
     if (!query.trim()) return { ids: [], score: FALLBACK_MEMORY_SUPPORT };
     const filters = {

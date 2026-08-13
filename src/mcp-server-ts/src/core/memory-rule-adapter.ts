@@ -106,16 +106,18 @@ export class MemoryRuleAdapter {
 /** 将 info_class + kind 映射到 PatternType */
 function memoryToPatternType(memory: MemoryRecord): PatternType {
   if (memory.info_class === "preference") return PatternType.PREFERENCE;
-  if (memory.info_class === "experience") {
-    // 根据关键词推断具体类型
-    const content = (memory.content + " " + (memory.summary || "")).toLowerCase();
-    if (/security|注入|injection|vulnerability|exploit|cve|xss|csrf/i.test(content))
-      return PatternType.SECURITY;
-    if (/performance|性能|slow|optimize|优化|useMemo|useCallback/i.test(content))
-      return PatternType.PERFORMANCE;
-    if (/bug|error|wrong|broken|fail|错误|问题/i.test(content))
-      return PatternType.ANTI_PATTERN;
-    return PatternType.REPEATED_CORRECTION;
-  }
+  // info_class 可能缺失（历史数据 / 未分类），此时也按内容关键词推断，
+  // 避免所有规则都退化为 repeated-correction 导致 type 无区分度。
+  const content = (memory.content + " " + (memory.summary || "") + " " + (memory.keywords || []).join(" ")).toLowerCase();
+  if (/security|注入|injection|vulnerability|exploit|cve|xss|csrf|密码|哈希|认证|授权|权限|token|auth|安全|泄露|敏感/i.test(content))
+    return PatternType.SECURITY;
+  if (/performance|性能|slow|optimize|优化|useMemo|useCallback|缓存|cache|瓶颈|耗时|延迟|加速|memory leak|内存泄露/i.test(content))
+    return PatternType.PERFORMANCE;
+  if (/bug|error|wrong|broken|fail|错误|问题|失败|异常|崩溃|报错|修复|死循环|空指针|race condition/i.test(content))
+    return PatternType.ANTI_PATTERN;
+  if (memory.info_class === "experience") return PatternType.REPEATED_CORRECTION;
+  // info_class 缺失：若内容含明确偏好/约定信号则视为 preference，否则经验默认
+  if (/^(always|never|must|should|prefer|recommend|避免|不要|必须|总是|统一|约定|建议)/i.test(content.trim()))
+    return PatternType.PREFERENCE;
   return PatternType.REPEATED_CORRECTION;
 }
